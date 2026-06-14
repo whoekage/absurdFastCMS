@@ -48,13 +48,13 @@ export interface CoreResponse {
   body: Buffer;
 }
 
-const JSON_CT = 'application/json; charset=utf-8';
+export const JSON_CT = 'application/json; charset=utf-8';
 
 /** A canonical non-negative integer literal: "0" or a no-leading-zero digit run. */
-const CANONICAL_INT = /^(0|[1-9]\d*)$/;
+export const CANONICAL_INT = /^(0|[1-9]\d*)$/;
 
 /** Build a small JSON error response (not the hot path). */
-function errorResponse(status: number, message: string): CoreResponse {
+export function errorResponse(status: number, message: string): CoreResponse {
   return { status, contentType: JSON_CT, body: Buffer.from(JSON.stringify({ error: message }), 'utf8') };
 }
 

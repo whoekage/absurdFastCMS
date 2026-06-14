@@ -17,7 +17,8 @@ const LOAD_BATCH = 5000;
  * `Sql` handle (e.g. a test sharing one connection) and the caller keeps ownership.
  */
 export class PostgresStore implements Store {
-  private readonly sql: Sql;
+  /** The live postgres.js handle — also used by the write repo for INSERT/UPDATE/DELETE. */
+  readonly sql: Sql;
   private readonly ownsSql: boolean;
 
   constructor(source?: string | Sql) {

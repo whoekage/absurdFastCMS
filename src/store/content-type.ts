@@ -35,3 +35,45 @@ export function defineArticle(engine: Engine): Table {
   t.createSortedIndex('publishedAt');
   return t;
 }
+
+// --- write-path metadata -----------------------------------------------------
+
+/** Fields a client may write — everything except the server-assigned primary key. */
+export const ARTICLE_WRITABLE = ARTICLE_FIELDS.filter((f) => f.name !== 'id');
+
+/** Writable fields that accept `null` (the rest are NOT NULL in Postgres). */
+export const ARTICLE_NULLABLE: ReadonlySet<string> = new Set(['title', 'views', 'rating']);
+
+/** Fields that MUST be present on create (NOT NULL, no DB default). */
+export const ARTICLE_REQUIRED_ON_CREATE: readonly string[] = ['body', 'status', 'active', 'publishedAt'];
+
+/** Engine field name -> Postgres column name (only `publishedAt` differs from its column). */
+export const ARTICLE_COLUMN: Readonly<Record<string, string>> = {
+  id: 'id',
+  title: 'title',
+  body: 'body',
+  status: 'status',
+  views: 'views',
+  rating: 'rating',
+  active: 'active',
+  publishedAt: 'published_at',
+};
+
+/**
+ * Render a plain `article` row (keyed by engine field names, values being JS `Date`/string/number/
+ * boolean/null) into the SAME JSON object the read engine's `materialize` produces: fields in schema
+ * order, a `date` as an ISO-8601 UTC string, missing/null as `null`. Used to shape write responses so
+ * they match GET byte-for-byte.
+ */
+export function materializeRow(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const f of ARTICLE_FIELDS) {
+    const v = row[f.name];
+    if (v === null || v === undefined) {
+      out[f.name] = null;
+      continue;
+    }
+    out[f.name] = f.type === 'date' ? new Date(v as string | number | Date).toISOString() : v;
+  }
+  return out;
+}

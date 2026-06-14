@@ -56,7 +56,7 @@ export function seed(n: number, seedNum = 1): Engine {
 export async function start(port: number): Promise<void> {
   const store = new PostgresStore();
   const engine = await store.load();
-  const server = createServer(engine);
+  const server = createServer(engine, store); // store enables POST/PUT/DELETE
   await server.listen(port);
   console.log(`ready on ${port} (${engine.rowCount('article')} rows from postgres)`);
 }

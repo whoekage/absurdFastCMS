@@ -46,7 +46,15 @@ GET /articles?filters[title][$contains]=intro&filters[views][$gte]=100&sort=view
 - Both pagination styles (`pagination[page]` / `pagination[pageSize]` and `start` / `limit`).
 - Relation populate via a `populate` plan (Payload-style `depth` reserved for nested populate).
 
-Everything is validated against the content-type schema: an unknown field, unknown operator, type-mismatched value, or malformed bracket syntax throws a clear `QueryParseError` — never a silent wrong query.
+Writes go to Postgres (the source of truth) and then rebuild the in-memory engine:
+
+```
+POST   /articles       # create        -> 201 { data }
+PUT    /articles/:id   # partial update -> 200 { data }   (Strapi semantics)
+DELETE /articles/:id   # delete         -> 200 { data }
+```
+
+Everything is validated against the content-type schema: on reads an unknown field / operator / type-mismatched value / malformed bracket syntax throws a clear `QueryParseError`; on writes an unknown field, a client-set `id`, a missing required field, a wrong type, or a `null` on a NOT-NULL field throws a `BodyParseError` (→ 400) — never a silent wrong query or write.
 
 ## Performance notes
 
@@ -66,13 +74,16 @@ src/
     eq-index.ts      sorted-index.ts  substring-index.ts
     relation.ts      response-cache.ts
     store.ts         # the durable-source seam (Store interface)
-    content-type.ts  # shared `article` schema + index plan
+    content-type.ts  # shared `article` schema, index plan, write metadata
+    body-parser.ts   # strict write-body validation/coercion
   db/             # Postgres source of truth (Drizzle + postgres.js)
     schema.ts        client.ts        migrate.ts
     postgres-store.ts  # boot load: cursor-stream Postgres -> Engine
+    article-repo.ts    # write repo: INSERT/UPDATE/DELETE ... RETURNING
   http/
-    router.ts        # pure, framework-agnostic request core
-    app.ts           # uWebSockets.js adapter
+    router.ts        # pure, framework-agnostic read core
+    write.ts         # async write core (validate -> Postgres -> rebuild)
+    app.ts           # uWebSockets.js adapter (sync reads + async writes)
     server.ts        # single-process entrypoint (load from Postgres + listen)
 drizzle/        # generated SQL migrations (drizzle-kit)
 test/           # node:test suites (slices, fuzz oracles, http, postgres) — no mocks
@@ -111,7 +122,8 @@ Database workflow:
 - [x] Late-materialization output arena + assembled-buffer response cache
 - [x] uWebSockets.js HTTP layer (single-process)
 - [x] Postgres `Store` seam — boot load from Postgres (Drizzle schema + migrations, PK-addressed `id`)
-- [ ] Write path (POST/PUT/DELETE → Postgres → RAM update + cache invalidation) + change capture
+- [x] Write path — POST/PUT/DELETE → Postgres (source of truth) → full engine rebuild (strict body validation)
+- [ ] Surgical writes — incremental in-engine update/delete + targeted cache invalidation (replace the full rebuild)
 - [ ] Redis pub/sub `ChangeBus` for multi-instance invalidation
 - [ ] Keyset/cursor pagination; selectivity-based predicate ordering
 - [ ] String collation for sorted indexes; relation populate from Postgres
