@@ -31,6 +31,7 @@ function lcg(seedNum: number): () => number {
 }
 
 const FIELDS: FieldDef[] = [
+  { name: 'id', type: 'i32' },
   { name: 'title', type: 'string' },
   { name: 'status', type: 'string' },
   { name: 'views', type: 'i32' },
@@ -41,6 +42,7 @@ const FIELDS: FieldDef[] = [
 const STATUSES = ['draft', 'published', 'archived'];
 
 interface Row {
+  id: number;
   title: string | null;
   status: string;
   views: number | null;
@@ -55,6 +57,7 @@ function buildRows(n: number, seedNum: number): Row[] {
   const rows: Row[] = [];
   for (let i = 0; i < n; i++) {
     rows.push({
+      id: i + 1, // 1-based serial PK, like a freshly-seeded Postgres table
       // Unicode + surrogate pair (emoji) + quote in the serialized text path — the offset-safe-bytes proof.
       title: rng() < 0.1 ? null : `Title "${i}" e zh \u{1F600}\u{1F4A9}`,
       status: STATUSES[(rng() * STATUSES.length) | 0]!,
@@ -70,6 +73,7 @@ function buildRows(n: number, seedNum: number): Row[] {
 function seedEngine(rows: Row[]): Engine {
   const engine = new Engine();
   const t = engine.define('article', FIELDS);
+  t.createEqIndex('id');
   t.createEqIndex('status');
   t.createSortedIndex('views');
   t.createSortedIndex('publishedAt');
@@ -81,6 +85,7 @@ function seedEngine(rows: Row[]): Engine {
 /** The oracle's view of a materialized row (matches Table.materialize exactly). */
 function materialize(r: Row): Record<string, unknown> {
   return {
+    id: r.id,
     title: r.title,
     status: r.status,
     views: r.views,
@@ -177,17 +182,19 @@ test('GET /:type list with filter + sort matches a brute oracle', async () => {
 
 // --- 3. SINGLE: byte-identical to respondOne + Unicode/surrogate bytes proof -
 
-test('GET /:type/:id -> 200, byte-identical to engine.respondOne (surrogate-pair safe)', async () => {
-  for (const id of [0, 1, 63, 64, 200, 249]) {
+test('GET /:type/:id -> 200, byte-identical to engine.respondById (surrogate-pair safe)', async () => {
+  // Address by the PUBLIC primary key (ROWS[idx].id), not the dense array position.
+  for (const idx of [0, 1, 63, 64, 200, 249]) {
+    const id = ROWS[idx]!.id;
     const res = await fetch(`${base}/article/${id}`);
     assert.equal(res.status, 200, `id ${id} -> 200`);
     assert.match(res.headers.get('content-type') ?? '', /application\/json/);
     const httpBytes = Buffer.from(await res.arrayBuffer());
     // Byte-identity proves the offset-safe res.end sent EXACTLY this row's arena bytes (no pooled
     // Buffer offset bug) — including the surrogate-pair emoji in `title`.
-    assert.ok(httpBytes.equals(engine.respondOne('article', id)), `bytes == respondOne for ${id}`);
+    assert.ok(httpBytes.equals(engine.respondById('article', id)!), `bytes == respondById for ${id}`);
     const body = JSON.parse(httpBytes.toString('utf8'));
-    assert.deepEqual(body, { data: materialize(ROWS[id]!), meta: {} });
+    assert.deepEqual(body, { data: materialize(ROWS[idx]!), meta: {} });
   }
 });
 
@@ -219,13 +226,14 @@ test('unknown content-type -> 404 with an error body', async () => {
   assert.ok(typeof (await single.json()).error === 'string');
 });
 
-test('out-of-range and non-integer id -> 404', async () => {
-  for (const bad of ['250', '999', '-1', '1.5', 'abc', '01']) {
+test('unknown PK and non-canonical id -> 404; existing PK -> 200', async () => {
+  // PKs are 1..250; 0 and 251 match no row, plus non-canonical forms.
+  for (const bad of ['0', '251', '999', '-1', '1.5', 'abc', '01']) {
     const res = await fetch(`${base}/article/${bad}`);
     assert.equal(res.status, 404, `id "${bad}" -> 404`);
   }
-  assert.equal((await fetch(`${base}/article/249`)).status, 200);
-  assert.equal((await fetch(`${base}/article/250`)).status, 404);
+  assert.equal((await fetch(`${base}/article/1`)).status, 200);
+  assert.equal((await fetch(`${base}/article/250`)).status, 200);
 });
 
 // --- 6. 400 on a bad query ---------------------------------------------------

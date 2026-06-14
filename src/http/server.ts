@@ -1,8 +1,9 @@
 import cluster from 'node:cluster';
 import os from 'node:os';
 import { Engine } from '../store/engine.ts';
+import { defineArticle } from '../store/content-type.ts';
+import { PostgresStore } from '../db/postgres-store.ts';
 import { createServer } from './app.ts';
-import type { FieldDef } from '../store/table.ts';
 
 /**
  * uWS-MIGRATION SLICE 1 — the PRODUCTION entrypoint: a Node cluster of N workers, each serving the
@@ -14,25 +15,15 @@ import type { FieldDef } from '../store/table.ts';
  * primary. The primary only forks/reforks; it does not bind a port.
  *
  * SHARED-NOTHING per worker: each worker builds its OWN Engine (its own columns, indexes, response
- * cache) via {@link seed}. There is no cross-worker shared memory in this slice — a worker is a
- * self-contained read replica. FUTURE: instead of the in-code {@link seed}, each worker loads its
- * rows from Postgres at boot (and the ChangeBus becomes a Redis pub/sub bus so a write fanned out to
- * every worker invalidates each worker's response cache). For now the seed is a deterministic
- * in-code data set so the server is runnable end-to-end.
+ * cache) by loading from Postgres ({@link PostgresStore}) at boot. There is no cross-worker shared
+ * memory in this slice — a worker is a self-contained read replica. FUTURE: the ChangeBus becomes a
+ * Redis pub/sub bus so a write fanned out to every worker invalidates each worker's response cache.
+ * {@link seed} remains an in-code data generator for benchmarks/fixtures (NOT the boot path).
  *
  * Server construction ({@link createServer}) is intentionally SEPARATE from listening so tests drive
  * a real uWS server on a free port and never go through this cluster bootstrap.
  */
 
-const FIELDS: FieldDef[] = [
-  { name: 'title', type: 'string' },
-  { name: 'body', type: 'text' },
-  { name: 'status', type: 'string' },
-  { name: 'views', type: 'i32' },
-  { name: 'rating', type: 'f64' },
-  { name: 'active', type: 'bool' },
-  { name: 'publishedAt', type: 'date' },
-];
 const STATUSES = ['draft', 'published', 'archived'];
 
 function lcg(seedNum: number): () => number {
@@ -44,19 +35,18 @@ function lcg(seedNum: number): () => number {
 }
 
 /**
- * Build a worker's Engine and fill the `article` content-type with `n` deterministic rows. FUTURE:
- * replace the body with a Postgres `SELECT` at boot; the signature stays the same.
+ * Build an Engine and fill the `article` content-type with `n` deterministic rows — a benchmark /
+ * fixture generator, NOT the production boot path (workers load from {@link PostgresStore}). `id` is
+ * a dense 1-based serial so it matches a freshly-seeded Postgres table.
  */
 export function seed(n: number, seedNum = 1): Engine {
   const engine = new Engine();
-  const t = engine.define('article', FIELDS);
-  t.createEqIndex('status');
-  t.createSortedIndex('views');
-  t.createSortedIndex('publishedAt');
+  const t = defineArticle(engine);
   const rng = lcg(seedNum);
   const base = Date.UTC(2021, 0, 1);
   for (let i = 0; i < n; i++) {
     engine.insert('article', {
+      id: i + 1,
       title: rng() < 0.1 ? null : `Title "${i}" e zh`,
       body: `Body text for row ${i}, lorem ipsum dolor sit amet.`,
       status: STATUSES[(rng() * STATUSES.length) | 0]!,
@@ -70,19 +60,19 @@ export function seed(n: number, seedNum = 1): Engine {
   return engine;
 }
 
-/** Start one worker: build its own Engine, build the uWS server, listen on `port` (SO_REUSEPORT). */
-async function startWorker(port: number, rows: number): Promise<void> {
-  const engine = seed(rows);
+/** Start one worker: load its Engine from Postgres, build the uWS server, listen (SO_REUSEPORT). */
+async function startWorker(port: number): Promise<void> {
+  const store = new PostgresStore();
+  const engine = await store.load();
   const server = createServer(engine);
   await server.listen(port);
-  console.log(`worker ${process.pid} ready on ${port} (${rows} rows)`);
+  console.log(`worker ${process.pid} ready on ${port} (${engine.rowCount('article')} rows from postgres)`);
 }
 
-/** The cluster entrypoint. Run directly: `node src/http/server.ts [port] [workers] [rows]`. */
+/** The cluster entrypoint. Run directly: `node --env-file=.env src/http/server.ts [port] [workers]`. */
 export function main(): void {
   const port = Number(process.env.PORT ?? process.argv[2] ?? 3000);
   const workers = Number(process.argv[3] ?? Math.max(1, os.availableParallelism()));
-  const rows = Number(process.argv[4] ?? 10000);
 
   if (cluster.isPrimary) {
     console.log(`cluster primary ${process.pid}: forking ${workers} workers on :${port}`);
@@ -92,7 +82,7 @@ export function main(): void {
       cluster.fork();
     });
   } else {
-    void startWorker(port, rows);
+    void startWorker(port);
   }
 }
 

@@ -65,25 +65,45 @@ src/
     engine.ts        query-parser.ts  (Strapi v5 parser)
     eq-index.ts      sorted-index.ts  substring-index.ts
     relation.ts      response-cache.ts
+    store.ts         # the durable-source seam (Store interface)
+    content-type.ts  # shared `article` schema + index plan
+  db/             # Postgres source of truth (Drizzle + postgres.js)
+    schema.ts        client.ts        migrate.ts
+    postgres-store.ts  # boot load: cursor-stream Postgres -> Engine
   http/
     router.ts        # pure, framework-agnostic request core
     app.ts           # uWebSockets.js adapter
     server.ts        # cluster bootstrap (N workers, SO_REUSEPORT)
-test/           # node:test suites (slices, fuzz oracles, http) — no mocks
+drizzle/        # generated SQL migrations (drizzle-kit)
+test/           # node:test suites (slices, fuzz oracles, http, postgres) — no mocks
 bench/          # engine microbenchmarks
 experiments/    # HTTP serialization / framework benchmarks
 docs/research/  # filter data-structure research
+docker-compose.yml  # Postgres 18 (host port 5673)
 ```
 
 ## Getting started
 
-Requires **Node.js ≥ 24** (for native TypeScript type-stripping).
+Requires **Node.js ≥ 24** (for native TypeScript type-stripping) and **Docker** (for Postgres 18).
 
 ```bash
 npm install
-npm test          # node --test, mock-free
-npm run bench     # engine scan benchmark
+npm run db:up           # start Postgres 18 (host port 5673; creates absurd_dev + absurd_test)
+npm run db:migrate      # apply migrations to the dev database (.env)
+npm run db:migrate:test # apply migrations to the test database (.env.test)
+npm test                # node --test, mock-free (runs against absurd_test)
+npm run bench           # engine scan benchmark (in-memory seed, no DB)
 ```
+
+Environment is split by file: dev reads `.env`, tests read `.env.test` (both gitignored). Each cluster
+worker loads its own in-memory Engine from Postgres at boot via `PostgresStore`, then serves reads
+entirely from RAM.
+
+Database workflow:
+
+- `npm run db:generate` — generate a SQL migration from `src/db/schema.ts` (never hand-write migrations)
+- `npm run db:migrate` / `db:migrate:test` — apply migrations programmatically to dev / test
+- `npm run db:down` — stop the Postgres container
 
 ## Roadmap
 
@@ -91,10 +111,11 @@ npm run bench     # engine scan benchmark
 - [x] Strapi v5 filter/sort/pagination parser with schema validation
 - [x] Late-materialization output arena + assembled-buffer response cache
 - [x] uWebSockets.js HTTP layer + cluster bootstrap
-- [ ] Postgres load/persist (`Store` seam) + change capture
+- [x] Postgres `Store` seam — boot load from Postgres (Drizzle schema + migrations, PK-addressed `id`)
+- [ ] Write path (POST/PUT/DELETE → Postgres → RAM update + cache invalidation) + change capture
 - [ ] Redis pub/sub `ChangeBus` for clustered invalidation
 - [ ] Keyset/cursor pagination; selectivity-based predicate ordering
-- [ ] String collation for sorted indexes
+- [ ] String collation for sorted indexes; relation populate from Postgres
 
 ## License
 

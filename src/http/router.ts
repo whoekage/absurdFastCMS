@@ -101,11 +101,11 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
     if (!engine.has(name)) return errorResponse(404, `unknown content-type "${name}"`);
     if (!isGet) return errorResponse(405, `method ${req.method} not allowed`);
     if (!CANONICAL_INT.test(idRaw)) return errorResponse(404, `not found`);
-    const id = Number(idRaw);
-    if (!Number.isInteger(id) || id < 0 || id >= engine.rowCount(name)) {
-      return errorResponse(404, `not found`);
-    }
-    return { status: 200, contentType: JSON_CT, body: engine.respondOne(name, id) };
+    // `id` is the PUBLIC primary key (the Postgres PK), resolved through the eq index — NOT a dense
+    // row position. An id with no matching row is a 404.
+    const body = engine.respondById(name, Number(idRaw));
+    if (body === null) return errorResponse(404, `not found`);
+    return { status: 200, contentType: JSON_CT, body };
   }
 
   // No route match (root, or deeper than /:type/:id).

@@ -142,6 +142,18 @@ export class Table {
   }
 
   /**
+   * Resolve the dense row id holding `value` in an eq-indexed field, or `undefined` if no row does.
+   * Built for a UNIQUE key (the `id` primary key): the first posting is returned, so a non-unique
+   * field would silently pick its lowest row id. Requires an eq index on `field`.
+   */
+  rowIdByEq(field: string, value: unknown): number | undefined {
+    const idx = this.eqIndexes.get(field);
+    if (idx === undefined) throw new Error(`no eq index on field "${field}"`);
+    const rows = idx.rows(value);
+    return rows === undefined || rows.length === 0 ? undefined : rows[0];
+  }
+
+  /**
    * Opt a string field into the trigram substring accelerator (report §2.5 / Slice 8). Gated and
    * opt-in: only flag columns that are contains-heavy / large distinct count; unflagged string
    * columns keep the deduped-dictionary brute scan as the default. The trigram index builds on the

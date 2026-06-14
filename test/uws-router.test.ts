@@ -25,6 +25,7 @@ function lcg(seedNum: number): () => number {
 }
 
 const FIELDS: FieldDef[] = [
+  { name: 'id', type: 'i32' },
   { name: 'title', type: 'string' },
   { name: 'status', type: 'string' },
   { name: 'views', type: 'i32' },
@@ -35,6 +36,7 @@ const FIELDS: FieldDef[] = [
 const STATUSES = ['draft', 'published', 'archived'];
 
 interface Row {
+  id: number;
   title: string | null;
   status: string;
   views: number | null;
@@ -49,6 +51,7 @@ function buildRows(n: number, seedNum: number): Row[] {
   const rows: Row[] = [];
   for (let i = 0; i < n; i++) {
     rows.push({
+      id: i + 1, // 1-based serial PK, like a freshly-seeded Postgres table
       // Unicode + surrogate pair coverage in the serialized text path.
       title: rng() < 0.1 ? null : `Title "${i}" e zh \u{1F600}`,
       status: STATUSES[(rng() * STATUSES.length) | 0]!,
@@ -64,6 +67,7 @@ function buildRows(n: number, seedNum: number): Row[] {
 function seedEngine(rows: Row[]): Engine {
   const engine = new Engine();
   const t = engine.define('article', FIELDS);
+  t.createEqIndex('id');
   t.createEqIndex('status');
   t.createSortedIndex('views');
   t.createSortedIndex('publishedAt');
@@ -75,6 +79,7 @@ function seedEngine(rows: Row[]): Engine {
 /** The oracle's view of a materialized row (matches Table.materialize exactly). */
 function materialize(r: Row): Record<string, unknown> {
   return {
+    id: r.id,
     title: r.title,
     status: r.status,
     views: r.views,
@@ -193,13 +198,15 @@ test('GET /:type/:id -> 200 single-item envelope deep-equal to the oracle + byte
   const rows = buildRows(120, 5);
   const engine = seedEngine(rows);
 
-  for (const id of [0, 1, 63, 64, 119]) {
+  // Address by the PUBLIC primary key (rows[idx].id), not the dense array position.
+  for (const idx of [0, 1, 63, 64, 119]) {
+    const id = rows[idx]!.id;
     const res = handleRequest(engine, { method: 'GET', path: `/article/${id}`, query: '' });
     assert.equal(res.status, 200, `id ${id} -> 200`);
     assert.equal(res.contentType, JSON_CT);
     const body = JSON.parse(res.body.toString('utf8'));
-    assert.deepEqual(body, { data: materialize(rows[id]!), meta: {} });
-    assert.ok(res.body.equals(engine.respondOne('article', id)), `id ${id} byte-identical`);
+    assert.deepEqual(body, { data: materialize(rows[idx]!), meta: {} });
+    assert.ok(res.body.equals(engine.respondById('article', id)!), `id ${id} byte-identical`);
   }
 });
 
@@ -218,21 +225,23 @@ test('unknown content-type -> 404 with { error }', () => {
   assert.equal(typeof JSON.parse(single.body.toString('utf8')).error, 'string');
 });
 
-// --- 6. id validation: non-int / out-of-range / leading-zero -> 404 ---------
+// --- 6. id validation: non-canonical -> 404; unknown PK -> 404; existing PK -> 200 ---
 
-test('non-integer / out-of-range / leading-zero id -> 404; boundary 200/404', () => {
-  const rows = buildRows(50, 2);
+test('non-canonical id -> 404; unknown PK -> 404; existing PK -> 200', () => {
+  const rows = buildRows(50, 2); // PKs 1..50
   const engine = seedEngine(rows);
 
-  for (const bad of ['50', '999', '-1', '1.5', 'abc', '01', '00', '+1', ' 1', '0x1', '1e1']) {
+  for (const bad of ['1.5', 'abc', '01', '00', '+1', ' 1', '0x1', '1e1', '-1']) {
     const res = handleRequest(engine, { method: 'GET', path: `/article/${bad}`, query: '' });
     assert.equal(res.status, 404, `id "${bad}" -> 404`);
   }
-  // id 0 is valid (canonical zero).
-  assert.equal(handleRequest(engine, { method: 'GET', path: '/article/0', query: '' }).status, 200);
-  // boundary: last valid id (rowCount-1) -> 200, rowCount -> 404
-  assert.equal(handleRequest(engine, { method: 'GET', path: '/article/49', query: '' }).status, 200);
-  assert.equal(handleRequest(engine, { method: 'GET', path: '/article/50', query: '' }).status, 404);
+  // canonical integers that match no row (incl. 0, since the PK is 1-based) -> 404.
+  for (const missing of ['0', '51', '999']) {
+    assert.equal(handleRequest(engine, { method: 'GET', path: `/article/${missing}`, query: '' }).status, 404, `PK ${missing} -> 404`);
+  }
+  // existing PKs -> 200.
+  assert.equal(handleRequest(engine, { method: 'GET', path: '/article/1', query: '' }).status, 200);
+  assert.equal(handleRequest(engine, { method: 'GET', path: '/article/50', query: '' }).status, 200);
 });
 
 // --- 7. non-GET on a known route -> 405 -------------------------------------
@@ -241,7 +250,7 @@ test('non-GET on a known route -> 405', () => {
   const engine = seedEngine(buildRows(10, 1));
   for (const method of ['POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'get' /* lowercase still GET */]) {
     const list = handleRequest(engine, { method, path: '/article', query: '' });
-    const single = handleRequest(engine, { method, path: '/article/0', query: '' });
+    const single = handleRequest(engine, { method, path: '/article/1', query: '' });
     if (method === 'get') {
       assert.equal(list.status, 200, 'lowercase get is GET');
       assert.equal(single.status, 200, 'lowercase get is GET');

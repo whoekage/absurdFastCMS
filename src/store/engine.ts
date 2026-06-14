@@ -227,4 +227,15 @@ export class Engine {
       Buffer.from(',"meta":{}}', 'utf8'),
     ]);
   }
+
+  /**
+   * Assemble a SINGLE-item response addressed by the PUBLIC primary key `id` (the real Postgres PK,
+   * not the dense row position). Resolves `id` -> dense row via the eq index on the `id` field, then
+   * reuses {@link respondOne}. Returns `null` when no row carries that id (the 404 gate). Requires the
+   * content-type to have an eq index on `id`.
+   */
+  respondById(name: string, id: number): Buffer | null {
+    const rowId = this.table(name).rowIdByEq('id', id);
+    return rowId === undefined ? null : this.respondOne(name, rowId);
+  }
 }
