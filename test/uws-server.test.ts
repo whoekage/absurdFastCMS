@@ -11,8 +11,8 @@ import { type FieldDef } from '../src/store/table.ts';
  *
  * Doctrine: NO mocks. A REAL Engine (real columns + indexes + response cache) is served by a REAL
  * uWS server bound to a FREE port (allocated by listening on :0 with node:net, reading the port,
- * closing, then handing that port to uWS — uWS binds with SO_REUSEPORT so the just-freed port is
- * immediately re-bindable). Requests go over the wire via global fetch(). Correctness is proven by:
+ * closing, then handing that port to uWS — the just-freed port is immediately re-bindable).
+ * Requests go over the wire via global fetch(). Correctness is proven by:
  *  - a brute-force ORACLE recomputed with a trivial O(n) loop (filters/sort/pagination honored);
  *  - BYTE-IDENTITY: the 200 body bytes == handleRequest(engine,...).body == engine.respond(...);
  *  - JSON.parse deep-equality to the oracle.

@@ -2,8 +2,7 @@
  * uWS-MIGRATION SLICE 2 bench — the READ path through the REAL uWS stack on a seeded Engine, with
  * the response cache ON. Confirms end-to-end throughput of the bench-validated send-the-buffer path
  * (no per-request JSON.stringify). Drives a REAL uWS server (the production adapter, createServer)
- * bound to a free port with autocannon — the same stack the cluster entrypoint serves, minus the
- * fork/SO_REUSEPORT fan-out.
+ * bound to a free port with autocannon — the same single-process stack the entrypoint serves.
  *
  * Run: node experiments/http-serialization/run-bench-slice3.ts
  */

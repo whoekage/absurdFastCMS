@@ -1,27 +1,19 @@
-import cluster from 'node:cluster';
-import os from 'node:os';
 import { Engine } from '../store/engine.ts';
 import { defineArticle } from '../store/content-type.ts';
 import { PostgresStore } from '../db/postgres-store.ts';
 import { createServer } from './app.ts';
 
 /**
- * uWS-MIGRATION SLICE 1 — the PRODUCTION entrypoint: a Node cluster of N workers, each serving the
- * uWebSockets.js app over its OWN {@link Engine}.
+ * The PRODUCTION entrypoint: a SINGLE process that loads its in-memory {@link Engine} from Postgres
+ * ({@link PostgresStore}) at boot and serves the uWebSockets.js app over it.
  *
- * CLUSTERING uWS (NOT node's socket-sharing cluster): we fork N workers; each worker builds its own
- * Engine + uWS.App + app.listen(PORT). uWS binds with SO_REUSEPORT, so the KERNEL load-balances
- * incoming connections across the workers — there is no shared listen socket handed down from the
- * primary. The primary only forks/reforks; it does not bind a port.
- *
- * SHARED-NOTHING per worker: each worker builds its OWN Engine (its own columns, indexes, response
- * cache) by loading from Postgres ({@link PostgresStore}) at boot. There is no cross-worker shared
- * memory in this slice — a worker is a self-contained read replica. FUTURE: the ChangeBus becomes a
- * Redis pub/sub bus so a write fanned out to every worker invalidates each worker's response cache.
- * {@link seed} remains an in-code data generator for benchmarks/fixtures (NOT the boot path).
+ * SHARED-NOTHING, single-instance: the process builds its OWN Engine (columns, indexes, response
+ * cache) — a self-contained read replica. FUTURE: the ChangeBus becomes a Redis pub/sub bus so a
+ * write in a multi-instance deployment invalidates every instance's response cache. {@link seed}
+ * remains an in-code data generator for benchmarks/fixtures (NOT the boot path).
  *
  * Server construction ({@link createServer}) is intentionally SEPARATE from listening so tests drive
- * a real uWS server on a free port and never go through this cluster bootstrap.
+ * a real uWS server on a free port and never go through this entrypoint.
  */
 
 const STATUSES = ['draft', 'published', 'archived'];
@@ -36,8 +28,8 @@ function lcg(seedNum: number): () => number {
 
 /**
  * Build an Engine and fill the `article` content-type with `n` deterministic rows — a benchmark /
- * fixture generator, NOT the production boot path (workers load from {@link PostgresStore}). `id` is
- * a dense 1-based serial so it matches a freshly-seeded Postgres table.
+ * fixture generator, NOT the production boot path (the process loads from {@link PostgresStore}). `id`
+ * is a dense 1-based serial so it matches a freshly-seeded Postgres table.
  */
 export function seed(n: number, seedNum = 1): Engine {
   const engine = new Engine();
@@ -60,30 +52,19 @@ export function seed(n: number, seedNum = 1): Engine {
   return engine;
 }
 
-/** Start one worker: load its Engine from Postgres, build the uWS server, listen (SO_REUSEPORT). */
-async function startWorker(port: number): Promise<void> {
+/** Boot the server: load the Engine from Postgres, build the uWS server, and listen on `port`. */
+export async function start(port: number): Promise<void> {
   const store = new PostgresStore();
   const engine = await store.load();
   const server = createServer(engine);
   await server.listen(port);
-  console.log(`worker ${process.pid} ready on ${port} (${engine.rowCount('article')} rows from postgres)`);
+  console.log(`ready on ${port} (${engine.rowCount('article')} rows from postgres)`);
 }
 
-/** The cluster entrypoint. Run directly: `node --env-file=.env src/http/server.ts [port] [workers]`. */
+/** The entrypoint. Run directly: `node --env-file=.env src/http/server.ts [port]`. */
 export function main(): void {
   const port = Number(process.env.PORT ?? process.argv[2] ?? 3000);
-  const workers = Number(process.argv[3] ?? Math.max(1, os.availableParallelism()));
-
-  if (cluster.isPrimary) {
-    console.log(`cluster primary ${process.pid}: forking ${workers} workers on :${port}`);
-    for (let i = 0; i < workers; i++) cluster.fork();
-    cluster.on('exit', (worker) => {
-      console.log(`worker ${worker.process.pid} exited; refork`);
-      cluster.fork();
-    });
-  } else {
-    void startWorker(port);
-  }
+  void start(port);
 }
 
 // Run only when invoked as the entrypoint (not when imported by a test/bench).

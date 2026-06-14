@@ -33,7 +33,7 @@ export type ListenToken = unknown;
 
 /** The adapter handle: start/stop a real uWS server over the given engine. */
 export interface UwsServer {
-  /** Bind and listen on `port` (SO_REUSEPORT). Resolves with the listen-socket token. */
+  /** Bind and listen on `port`. Resolves with the listen-socket token. */
   listen(port: number): Promise<ListenToken>;
   /** Close a previously-returned listen-socket token. */
   close(token: ListenToken): void;
