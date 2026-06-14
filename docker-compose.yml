@@ -1,0 +1,33 @@
+# Explicit project name so this stack lives in its OWN namespace and never claims/removes
+# containers from other projects (the default name would be the dir basename "api", which on
+# this machine already collides with stray containers labelled project=api).
+name: absurdfastcms
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: absurd-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: absurd
+      POSTGRES_PASSWORD: absurd
+      POSTGRES_DB: absurd_dev
+    # Host port 5673 -> container 5432. The app connects over the host
+    # (localhost:5673), NOT a shared docker network, so this port is the
+    # only contract. Picked 5673 to avoid clashing with other local PG instances.
+    ports:
+      - "5673:5432"
+    volumes:
+      # Postgres 18+ stores data in a subdir of /var/lib/postgresql, so the volume mounts the
+      # PARENT (not /data) — mounting /data puts the image into a restart loop. See docker-library/postgres#37.
+      - absurd-pg-data:/var/lib/postgresql
+      # Runs once on an empty data dir: creates the separate test database.
+      - ./docker/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U absurd -d absurd_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  absurd-pg-data:
