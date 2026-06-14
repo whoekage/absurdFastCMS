@@ -21,10 +21,7 @@
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0"
   },
   "devDependencies": {
-    "@hono/node-server": "^2.0.4",
     "autocannon": "^8.0.0",
-    "drizzle-kit": "^0.31.10",
-    "fastify": "^5.8.5",
-    "hono": "^4.12.25"
+    "drizzle-kit": "^0.31.10"
   }
 }

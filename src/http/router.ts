@@ -9,17 +9,16 @@ import { parseQuery, QueryParseError } from '../store/query-parser.ts';
  * response Buffer) with ZERO dependency on any HTTP framework — the uWS adapter (`app.ts`) is a
  * thin shim that builds the request triple, calls this, and writes the result on its own response
  * object. That keeps the behavior in ONE place tested in-process with no socket and no mock, and the
- * adapter reduced to transport plumbing. (Hono drove this same core before the slice-2 cutover; it
- * has been removed — uWS is now the one and only HTTP server.)
+ * adapter reduced to transport plumbing. uWS is the one and only HTTP server.
  *
  * ROUTES (read-only this slice):
  *   GET /:type      — LIST. The raw query string (Strapi bracket syntax `filters[a][$op]=v`,
  *                     WITHOUT a leading '?') is parsed against the content-type's FIELD SCHEMA into
  *                     `{ options }`, then `engine.respond(type, options)` returns the PRE-SERIALIZED
  *                     response Buffer (offset-0, the body IS the buffer — no re-serialization).
- *   GET /:type/:id  — SINGLE. `id` must be a CANONICAL non-negative integer literal within
- *                     `[0, rowCount)` (reject "01", "1.5", "-1", "abc", "" -> 404); `engine.respondOne`
- *                     returns the single-item envelope Buffer.
+ *   GET /:type/:id  — SINGLE. `id` must be a CANONICAL non-negative integer literal (reject "01",
+ *                     "1.5", "-1", "abc", "" -> 404); `engine.respondById` resolves it as the PUBLIC
+ *                     primary key (Postgres PK) via the eq index, 404 when no row carries it.
  *
  * STATUS CODES (correct, not 200-with-error-body):
  *   - unknown content-type                 -> 404

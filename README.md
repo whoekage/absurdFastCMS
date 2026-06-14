@@ -38,7 +38,7 @@ Mainstream OSS headless CMSs serve reads straight from the database (plus a gene
 Emulates **Strapi v5** bracket syntax so existing clients/tooling work unchanged:
 
 ```
-GET /articles?filters[title][$contains]=hono&filters[views][$gte]=100&sort=views:desc&pagination[limit]=20
+GET /articles?filters[title][$contains]=intro&filters[views][$gte]=100&sort=views:desc&pagination[limit]=20
 ```
 
 - ~24 filter operators (`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$contains`, `$startsWith`, `$endsWith`, their case-insensitive `*i` variants, `$between`, `$in`, `$null`, …).
@@ -54,7 +54,7 @@ Measured on an M1 Pro (10-core), Node 24 — see `experiments/http-serialization
 
 - **Serialization strategy dominates the framework.** Pre-serialized buffers ≈ 3× the throughput of `JSON.stringify` on a 28 KB list payload, on every server tested. Framework choice moved results by <10%.
 - **Read engine** (1M rows): single full scan ≈ 0.8B rows/s (~1.2 ms); selective equality via index ≈ 11× faster than full scan; `ORDER BY … LIMIT 20` ≈ 0.014 ms via sorted-index walk with early termination.
-- **HTTP** (real uWS stack, 10k rows, cache on, single process): list ~45.6k req/s (p99 3 ms), single-item ~61.4k req/s. Horizontal scaling is the lever — node cluster ×6 reached ~113k req/s on a 28 KB payload (bandwidth-bound).
+- **HTTP** (real uWS stack, 10k rows, cache on, single process): list ~45.6k req/s (p99 3 ms), single-item ~61.4k req/s. Horizontal scaling is the lever — the cluster bootstrap forks one uWS worker per core (`SO_REUSEPORT`), and a 28 KB list payload is bandwidth-bound, so throughput scales with cores.
 
 ## Project layout
 
