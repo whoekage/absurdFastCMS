@@ -30,7 +30,7 @@ Mainstream OSS headless CMSs serve reads straight from the database (plus a gene
 - **Runtime:** Node.js 24 + TypeScript, run via native type-stripping — **no build step**. Erasable-syntax-only TS (no enums / parameter-properties). Tests use the native `node:test` runner with **no mocks**.
 - **Source of truth:** Postgres. Redis is reserved for pub/sub cache invalidation in the future clustered version — never as the source of truth.
 - **Read layer:** an in-process **columnar** store (`src/store/`). Columns are the query engine: typed arrays, tight scan loops, dictionary-encoded strings, and equality / sorted / substring / relation indexes. Output uses **late materialization** — each row's response JSON is serialized to UTF-8 bytes **once at write time** into a flat byte arena; a list response is assembled by concatenating arena slices, which benchmarked at ~3× the throughput of per-request `JSON.stringify`.
-- **HTTP:** **uWebSockets.js** (C++ core, native WebSockets) behind a framework-agnostic pure core. `src/http/router.ts` is `handleRequest(engine, {method, path, query}) → {status, contentType, body: Buffer}` with zero framework imports; `src/http/uws-app.ts` is a thin uWS adapter; `src/http/server.ts` forks N cluster workers (one per core) with `SO_REUSEPORT`. The server is swappable behind the pure core.
+- **HTTP:** **uWebSockets.js** (C++ core, native WebSockets) behind a framework-agnostic pure core. `src/http/router.ts` is `handleRequest(engine, {method, path, query}) → {status, contentType, body: Buffer}` with zero framework imports; `src/http/app.ts` is a thin uWS adapter; `src/http/server.ts` forks N cluster workers (one per core) with `SO_REUSEPORT`. The server is swappable behind the pure core.
 - **Caching:** an assembled-buffer response cache — a hot query is one `Map.get` → send. Invalidation goes through a `ChangeBus` interface: an in-process implementation for the single-instance OSS build, a Redis pub/sub implementation for the clustered (paid) build. Clustering is a second `ChangeBus` impl, not core surgery.
 
 ## Query API
@@ -67,7 +67,7 @@ src/
     relation.ts      response-cache.ts
   http/
     router.ts        # pure, framework-agnostic request core
-    uws-app.ts       # uWebSockets.js adapter
+    app.ts           # uWebSockets.js adapter
     server.ts        # cluster bootstrap (N workers, SO_REUSEPORT)
 test/           # node:test suites (slices, fuzz oracles, http) — no mocks
 bench/          # engine microbenchmarks

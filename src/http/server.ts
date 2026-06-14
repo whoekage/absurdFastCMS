@@ -1,7 +1,7 @@
 import cluster from 'node:cluster';
 import os from 'node:os';
 import { Engine } from '../store/engine.ts';
-import { createServer } from './uws-app.ts';
+import { createServer } from './app.ts';
 import type { FieldDef } from '../store/table.ts';
 
 /**

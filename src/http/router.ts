@@ -6,7 +6,7 @@ import { parseQuery, QueryParseError } from '../store/query-parser.ts';
  *
  * {@link handleRequest} is a PURE function `(engine, { method, path, query }) -> { status, contentType, body }`.
  * It carries the entire request semantics (routing, validation, status codes, the late-materialized
- * response Buffer) with ZERO dependency on any HTTP framework — the uWS adapter (`uws-app.ts`) is a
+ * response Buffer) with ZERO dependency on any HTTP framework — the uWS adapter (`app.ts`) is a
  * thin shim that builds the request triple, calls this, and writes the result on its own response
  * object. That keeps the behavior in ONE place tested in-process with no socket and no mock, and the
  * adapter reduced to transport plumbing. (Hono drove this same core before the slice-2 cutover; it

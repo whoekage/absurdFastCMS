@@ -11,7 +11,7 @@ import autocannon from 'autocannon';
 import net from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { seed } from '../../src/http/server.ts';
-import { createServer } from '../../src/http/uws-app.ts';
+import { createServer } from '../../src/http/app.ts';
 
 const CONNECTIONS = 100;
 const WARMUP_S = 2;
