@@ -7,7 +7,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --env-file=.env.test --test",
+    "test": "node --env-file=.env.test --test --test-concurrency=1",
     "bench": "node bench/scan.bench.ts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",

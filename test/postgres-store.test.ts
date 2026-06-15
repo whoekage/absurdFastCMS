@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import { createSql } from '../src/db/client.ts';
 import { runMigrations } from '../src/db/migrate.ts';
 import { PostgresStore } from '../src/db/postgres-store.ts';
+import { seedArticleIfAbsent } from '../src/http/server.ts';
 import { handleRequest } from '../src/http/router.ts';
 
 /**
- * POSTGRES-STORE SLICE — the boot load path, end-to-end against a REAL Postgres (no mocks).
- *
- * Requires the docker-compose Postgres up and `.env.test` -> the isolated `absurd_test` database
- * (the test runner is launched with `--env-file=.env.test`). We migrate, insert known rows over a
- * real connection, load them through {@link PostgresStore}, and prove the engine serves them: PK
- * lookup, NULL rendering, surrogate-pair text, and a filtered+sorted list vs a hand oracle.
+ * POSTGRES-STORE SLICE — the boot load path, end-to-end against a REAL Postgres (no mocks), on the
+ * GENERIC content-type path: `article` is now a dynamic content-type (ct_article) seeded via the
+ * step-2 createContentType path. We migrate, seed the type, insert known rows over a real connection
+ * into ct_article (registry column names incl. "publishedAt"), load through {@link PostgresStore}, and
+ * prove the engine serves them: PK lookup (now incl. created_at/updated_at), NULL rendering,
+ * surrogate-pair text, and a filtered+sorted list vs a hand oracle.
  */
 
 const sql = createSql(); // DATABASE_URL from .env.test
@@ -23,30 +24,31 @@ interface SeedRow {
   views: number | null;
   rating: number | null;
   active: boolean;
-  publishedAt: Date;
+  publishedAt: string;
 }
 
 // Deterministic fixtures. After TRUNCATE ... RESTART IDENTITY the serial PKs are 1..N in this order.
 const ROWS: SeedRow[] = [
-  { title: 'Hello', body: 'b1', status: 'published', views: 100, rating: 4.5, active: true, publishedAt: new Date('2021-01-01T00:00:00.000Z') },
-  { title: null, body: 'b2', status: 'draft', views: null, rating: null, active: false, publishedAt: new Date('2021-02-01T00:00:00.000Z') },
-  { title: 'World \u{1F600}', body: 'b3', status: 'published', views: 5, rating: 2, active: true, publishedAt: new Date('2021-03-01T00:00:00.000Z') },
-  { title: 'Archived one', body: 'b4', status: 'archived', views: 50, rating: 3.25, active: false, publishedAt: new Date('2021-04-01T00:00:00.000Z') },
+  { title: 'Hello', body: 'b1', status: 'published', views: 100, rating: 4.5, active: true, publishedAt: '2021-01-01T00:00:00.000Z' },
+  { title: null, body: 'b2', status: 'draft', views: null, rating: null, active: false, publishedAt: '2021-02-01T00:00:00.000Z' },
+  { title: 'World \u{1F600}', body: 'b3', status: 'published', views: 5, rating: 2, active: true, publishedAt: '2021-03-01T00:00:00.000Z' },
+  { title: 'Archived one', body: 'b4', status: 'archived', views: 50, rating: 3.25, active: false, publishedAt: '2021-04-01T00:00:00.000Z' },
 ];
 
 before(async () => {
   await runMigrations();
-  await sql`TRUNCATE articles RESTART IDENTITY`;
+  await seedArticleIfAbsent(sql);
+  await sql`TRUNCATE ct_article RESTART IDENTITY CASCADE`;
   for (const r of ROWS) {
     await sql`
-      INSERT INTO articles (title, body, status, views, rating, active, published_at)
+      INSERT INTO ct_article (title, body, status, views, rating, active, "publishedAt")
       VALUES (${r.title}, ${r.body}, ${r.status}, ${r.views}, ${r.rating}, ${r.active}, ${r.publishedAt})
     `;
   }
 });
 
 after(async () => {
-  await sql`TRUNCATE articles RESTART IDENTITY`;
+  await sql`TRUNCATE ct_article RESTART IDENTITY CASCADE`;
   await sql.end();
 });
 
@@ -55,8 +57,17 @@ test('load() builds an engine with every row, PK addressable, NULLs as JSON null
   assert.equal(engine.rowCount('article'), ROWS.length);
 
   // PK lookup hits the right row (PKs are 1-based); the all-null row renders title/views/rating null.
+  // The response now ALSO includes the system created_at/updated_at fields (registry projection).
   const two = JSON.parse(engine.respondById('article', 2)!.toString('utf8'));
-  assert.deepEqual(two.data, {
+  // Field order is [id, created_at, updated_at, ...user]; created_at/updated_at are ISO strings.
+  assert.deepEqual(Object.keys(two.data), ['id', 'created_at', 'updated_at', 'title', 'body', 'status', 'views', 'rating', 'active', 'publishedAt']);
+  assert.equal(typeof two.data.created_at, 'string');
+  assert.equal(typeof two.data.updated_at, 'string');
+  assert.ok(!Number.isNaN(Date.parse(two.data.created_at)));
+  const { created_at, updated_at, ...rest } = two.data;
+  void created_at;
+  void updated_at;
+  assert.deepEqual(rest, {
     id: 2,
     title: null,
     body: 'b2',
