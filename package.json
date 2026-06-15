@@ -11,17 +11,14 @@
     "bench": "node bench/scan.bench.ts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
-    "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file=.env src/db/migrate.ts",
     "db:migrate:test": "node --env-file=.env.test src/db/migrate.ts"
   },
   "dependencies": {
-    "drizzle-orm": "^0.45.2",
     "postgres": "^3.4.9",
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0"
   },
   "devDependencies": {
-    "autocannon": "^8.0.0",
-    "drizzle-kit": "^0.31.10"
+    "autocannon": "^8.0.0"
   }
 }

@@ -1,18 +1,31 @@
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { readdir, readFile } from 'node:fs/promises';
+import path from 'node:path';
 import postgres from 'postgres';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
 
 /**
- * Apply pending Drizzle migrations to `DATABASE_URL` PROGRAMMATICALLY (no drizzle-kit CLI), so the
- * exact same code path runs from the `db:migrate` scripts AND from test `before()` hooks — mock-free,
- * env-file-driven. Migration SQL itself is always authored by `drizzle-kit generate`, never by hand.
+ * A tiny, dependency-free SQL migration runner (replaces the Drizzle migrator). Applies every
+ * `migrations/*.sql` file in lexical order exactly once, tracked in a `_migrations` table, each in its
+ * own transaction (Postgres DDL is transactional). Runs from the `db:migrate` scripts AND from test
+ * `before()` hooks — mock-free, env-file-driven. SQL is authored by hand (these are real .sql files).
  */
+const MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations/', import.meta.url));
+
 export async function runMigrations(url = process.env.DATABASE_URL): Promise<void> {
   if (!url) throw new Error('DATABASE_URL is not set (launch with --env-file=.env or .env.test)');
   const sql = postgres(url, { max: 1, onnotice: () => {} });
   try {
-    await migrate(drizzle(sql), { migrationsFolder: './drizzle' });
+    await sql`CREATE TABLE IF NOT EXISTS _migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
+    const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith('.sql')).sort();
+    for (const file of files) {
+      const already = await sql`SELECT 1 FROM _migrations WHERE name = ${file}`;
+      if (already.length > 0) continue;
+      const ddl = await readFile(path.join(MIGRATIONS_DIR, file), 'utf8');
+      await sql.begin(async (tx) => {
+        await tx.unsafe(ddl);
+        await tx`INSERT INTO _migrations (name) VALUES (${file})`;
+      });
+    }
   } finally {
     await sql.end();
   }

@@ -6,8 +6,8 @@ import type { Sql } from 'postgres';
  * process was launched with decides). The caller OWNS the handle and must `await sql.end()` when done
  * (a worker keeps it for the process lifetime; tests close it in `after()`).
  *
- * We use the raw postgres.js client (not the Drizzle query builder) on the read path because the
- * boot load streams rows with `.cursor()` — Drizzle is reserved for migrations.
+ * postgres.js is the only DB layer: the boot load streams rows with `.cursor()`, writes are
+ * parameterized template queries, and migrations run raw SQL files — no ORM in the stack.
  */
 export function createSql(url = process.env.DATABASE_URL): Sql {
   if (!url) throw new Error('DATABASE_URL is not set (launch with --env-file=.env or .env.test)');
