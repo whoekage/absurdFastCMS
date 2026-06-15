@@ -15,6 +15,7 @@
     "db:migrate:test": "node --env-file=.env.test src/db/migrate.ts"
   },
   "dependencies": {
+    "kysely": "^0.29.2",
     "postgres": "^3.4.9",
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0"
   },
