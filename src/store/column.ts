@@ -1,7 +1,17 @@
 import { Bitset } from './bitset.ts';
 import { SubstringIndex } from './substring-index.ts';
+import { DECIMAL_MAX_SAFE_PRECISION } from '../db/type-catalog.ts';
 
-export type ColumnType = 'i32' | 'f64' | 'bool' | 'string' | 'date' | 'text';
+export type ColumnType =
+  | 'i32'
+  | 'f64'
+  | 'bool'
+  | 'string'
+  | 'date'
+  | 'text'
+  | 'i64'
+  | 'decimal'
+  | 'json';
 
 /**
  * Comparison operators, mapped from Strapi-style `$eq`, `$gt`, ... at the API edge.
@@ -502,6 +512,400 @@ export class DateColumn implements Column {
       default:
         return null; // substring/affix/null are not temporal ops.
     }
+  }
+}
+
+// --- exact 64-bit integer / fixed-point decimal substrate -----------------------------------
+
+/** Inclusive int64 range. A BigInt64Array SILENTLY WRAPS out-of-range values, so we range-check. */
+const I64_MIN = -(2n ** 63n);
+const I64_MAX = 2n ** 63n - 1n;
+
+/**
+ * Coerce an `i64` predicate/insert value to an exact `bigint` in the int64 range. Accepts the three
+ * shapes the engine sees and rejects anything that would silently lose precision or wrap:
+ *
+ *   - `bigint`           -> taken verbatim (the canonical form);
+ *   - integer `number`   -> only when `Number.isSafeInteger` (2^53 boundary), so a float / NaN /
+ *                           Infinity / unsafe-large Number is rejected rather than rounded;
+ *   - digit `string`     -> `/^-?\d+$/` (rejects ''/' '/'+1'/'0x1f'/'1.0'/'1e3'/'abc'), then `BigInt`.
+ *
+ * The result is range-checked to `[-2^63, 2^63-1]`: a BigInt64Array assignment WRAPS modulo 2^64, so
+ * an out-of-range value must throw here, never store a wrapped (wrong) mantissa. Mirrors `coerceDate`'s
+ * reject-don't-store discipline; the SAME helper runs at the push edge and on predicate values so a
+ * query by string / Number / bigint all coerce to the identical bigint and compare equal.
+ */
+export function coerceI64(value: unknown): bigint {
+  let v: bigint;
+  if (typeof value === 'bigint') {
+    v = value;
+  } else if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) {
+      throw new Error(`i64 value ${value} is not a safe integer (use a bigint or a digit string for |x| > 2^53)`);
+    }
+    v = BigInt(value);
+  } else if (typeof value === 'string') {
+    const s = value.trim();
+    if (!/^-?\d+$/.test(s)) throw new Error(`i64 value "${value}" is not an integer string`);
+    v = BigInt(s); // the regex already rejected '' / signs-only / non-digits.
+  } else {
+    throw new Error(`i64 value must be a bigint, an integer Number, or a digit string, got ${typeof value}`);
+  }
+  if (v < I64_MIN || v > I64_MAX) throw new Error(`i64 value ${v} out of int64 range [${I64_MIN}, ${I64_MAX}]`);
+  return v;
+}
+
+/**
+ * Coerce a `decimal` value to its SCALED INT64 MANTISSA (`round(value * 10^scale)`, computed by
+ * STRING DECOMPOSITION — never a float multiply, which would corrupt the low digits). This is Apache
+ * Arrow's Decimal128 approach at 64 bits: a fixed per-column `scale`, the mantissa an exact `bigint`.
+ * Mirrors `ddl.ts:240-247` so the RAM engine and Postgres agree byte-for-byte.
+ *
+ *   - `bigint`  -> treated as an INTEGER value (fraction 0), scaled up by `10^scale`. NOTE: this arm is
+ *     DEAD in production — every live bigint into a decimal column is intercepted BEFORE coerceDecimal by
+ *     `I64Column.push`/`resolve` and `Table.i64Bound`, which store/compare it VERBATIM as an already-scaled
+ *     mantissa (the parser only ever passes the wire `raw` string here). The contradiction is intentional:
+ *     no caller reaches this branch, so a future direct `coerceDecimal(mantissaBigInt, scale)` would be the
+ *     one place a bigint is interpreted as an unscaled integer — route bigints through push/resolve instead.
+ *   - `number`  -> must be finite and stringify WITHOUT an exponent (so `1e21` is rejected); then the
+ *                  string path. A non-finite Number throws.
+ *   - `string`  -> strict shape gate `/^-?\d+(\.\d+)?$/` (rejects NaN/Infinity/`1e3`/''/'abc').
+ *
+ * Decomposition: split on `.`; `frac.length > scale` THROWS (no silent rounding); the fraction is
+ * right-padded with `'0'` to exactly `scale`. Leading zeros of the integer part are stripped before
+ * counting; with a known `precision`, `intDigits > precision - scale` THROWS (mirrors ddl.ts). The
+ * mantissa is `BigInt(sign + intDigits + paddedFrac)`, asserted within int64 range. `-0`/`-0.00` -> `0n`
+ * (BigInt has no negative zero — the canonical form).
+ */
+export function coerceDecimal(value: unknown, scale: number, precision?: number): bigint {
+  let text: string;
+  if (typeof value === 'bigint') {
+    // An integer value: scale it up by 10^scale exactly (no string round-trip needed).
+    const m = value * 10n ** BigInt(scale);
+    if (m < I64_MIN || m > I64_MAX) throw new Error(`decimal mantissa ${m} out of int64 range`);
+    return m;
+  } else if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error(`decimal value ${value} is not finite`);
+    text = String(value);
+    if (text.includes('e') || text.includes('E')) {
+      throw new Error(`decimal value ${value} stringifies with an exponent; pass a digit string instead`);
+    }
+  } else if (typeof value === 'string') {
+    text = value.trim();
+  } else {
+    throw new Error(`decimal value must be a bigint, a finite Number, or a numeric string, got ${typeof value}`);
+  }
+
+  if (!/^-?\d+(\.\d+)?$/.test(text)) {
+    throw new Error(`decimal value "${text}" is not a valid fixed-point number`);
+  }
+  const negative = text.startsWith('-');
+  const unsigned = negative ? text.slice(1) : text;
+  const dot = unsigned.indexOf('.');
+  const intPart = dot === -1 ? unsigned : unsigned.slice(0, dot);
+  const fracPart = dot === -1 ? '' : unsigned.slice(dot + 1);
+  if (fracPart.length > scale) {
+    throw new Error(`decimal value "${text}" has ${fracPart.length} fraction digits, exceeding scale ${scale}`);
+  }
+  const paddedFrac = fracPart.padEnd(scale, '0');
+  const intDigits = intPart.replace(/^0+(?=\d)/, '');
+  if (precision !== undefined && intDigits.length > precision - scale) {
+    throw new Error(`decimal value "${text}" exceeds precision ${precision} (max ${precision - scale} integer digits)`);
+  }
+  const mantissa = BigInt((negative ? '-' : '') + intDigits + paddedFrac);
+  // -0 / -0.00 collapse to 0n (BigInt has no negative zero); range-check defensively (precision <= 18
+  // guarantees the fit, but a bigint input scaled above could not reach here without the cap).
+  if (mantissa < I64_MIN || mantissa > I64_MAX) throw new Error(`decimal mantissa ${mantissa} out of int64 range`);
+  return mantissa;
+}
+
+/**
+ * Render a scaled-int64 `mantissa` back to its exact fixed-point decimal STRING at `scale` — no float.
+ *
+ *   - scale 0          -> the bare integer (`'123'`, no point).
+ *   - mantissa 5  @s2  -> `'0.05'`; 100 @s2 -> `'1.00'` (trailing zeros KEPT — fixed scale).
+ *   - mantissa 0  @s2  -> `'0.00'` (never `'-0.00'`; the sign is attached only when mantissa < 0n).
+ *
+ * The whole-string is `(sign?) intDigits '.' fracDigits`, the digit run left-padded to `scale+1` so an
+ * all-fraction value (|v| < 1) still renders a leading `'0'`. This is `coerceDecimal`'s inverse:
+ * `coerceDecimal(formatDecimal(m, s), s) === m`.
+ */
+export function formatDecimal(mantissa: bigint, scale: number): string {
+  if (scale === 0) return mantissa.toString();
+  const negative = mantissa < 0n;
+  const digits = (negative ? -mantissa : mantissa).toString().padStart(scale + 1, '0');
+  const cut = digits.length - scale;
+  return (negative ? '-' : '') + digits.slice(0, cut) + '.' + digits.slice(cut);
+}
+
+/**
+ * Output marker for the type-aware row serializer (engine.ts). `materialize` returns a {@link RawJson}
+ * so the serializer SPLICES a `json` field's raw bytes verbatim — nested integers > 2^53 and object key
+ * order survive byte-exact, never re-parsed/re-stringified. (i64 and decimal need no marker: they
+ * materialize as plain STRINGS that `JSON.stringify` quotes — the interoperable wire form.)
+ */
+export class RawJson {
+  readonly raw: string;
+  constructor(raw: string) {
+    this.raw = raw;
+  }
+}
+
+/**
+ * Exact 64-bit integer column, backed by a growable `BigInt64Array` — the SAME backing store powers
+ * both `i64` (scale 0) and `decimal` (the value's scaled int64 mantissa + a fixed per-column `scale`).
+ * The 2^53 Number limit does NOT apply: native BigInt is exact int64, so a nested-or-large key never
+ * loses precision the way an f64 would. At a fixed scale the mantissa order EQUALS the value order, so
+ * decimal reuses the i64 ordering/sorted-index path unchanged.
+ *
+ * NULLs are driven off the Table's per-column null bitset (a NULL row stores the dense sentinel `0n`,
+ * harmless because the null bit excludes it). The sorted index reads {@link rawData} (the BigInt64Array)
+ * directly so it NEVER coerces a mantissa to f64.
+ */
+export class I64Column implements Column {
+  readonly type: 'i64' | 'decimal';
+  /** Fixed scale for `decimal` (0 for `i64`). The column stores the already-scaled mantissa. */
+  readonly scale: number;
+  /**
+   * Total significant digits for `decimal` (the integer-part cap is `precision - scale`); `undefined`
+   * means "enforce only the int64 range" (the engine's pre-precision-threading behaviour). When set,
+   * an out-of-precision value throws at push exactly as Postgres rejects `numeric(p,s)` overflow.
+   */
+  readonly precision: number | undefined;
+  private data: BigInt64Array;
+  length = 0;
+
+  constructor(type: 'i64' | 'decimal', scale: number, precision?: number) {
+    if (type === 'decimal') {
+      if (!Number.isInteger(scale) || scale < 0 || scale > DECIMAL_MAX_SAFE_PRECISION) {
+        throw new Error(`decimal scale must be an integer in [0, ${DECIMAL_MAX_SAFE_PRECISION}], got ${scale}`);
+      }
+    }
+    this.type = type;
+    this.scale = scale;
+    this.precision = precision;
+    this.data = new BigInt64Array(INITIAL_CAPACITY);
+  }
+
+  private grow(): void {
+    const next = new BigInt64Array(this.data.length * 2);
+    next.set(this.data);
+    this.data = next;
+  }
+
+  /**
+   * Append a raw value. For `i64` it is coerced to an exact bigint; for `decimal` to its scaled
+   * mantissa. The Table pushes the `0n` sentinel for NULL rows (a bigint, stored directly).
+   */
+  push(value: unknown): number {
+    if (this.length === this.data.length) this.grow();
+    const i = this.length++;
+    let v: bigint;
+    if (typeof value === 'bigint') v = value; // sentinel 0n, or a pre-coerced mantissa.
+    else if (this.type === 'i64') v = coerceI64(value);
+    else v = coerceDecimal(value, this.scale, this.precision);
+    this.data[i] = v;
+    return i;
+  }
+
+  at(row: number): bigint {
+    return this.data[row]!;
+  }
+
+  /** The raw BigInt64Array (a view over the live rows) — the sorted index reads this, never `at`. */
+  rawData(): BigInt64Array {
+    return this.data.subarray(0, this.length);
+  }
+
+  /**
+   * Resolve a predicate value to the column's canonical bigint ONCE: for `i64` via `coerceI64`; for
+   * `decimal` accept a pre-coerced mantissa bigint (the parser already scaled it) else `coerceDecimal`.
+   */
+  private resolve(value: unknown): bigint {
+    if (this.type === 'i64') return coerceI64(value);
+    if (typeof value === 'bigint') return value;
+    return coerceDecimal(value, this.scale, this.precision);
+  }
+
+  scan(op: ScanOp, value: unknown, out: Bitset): void {
+    const d = this.data;
+    const n = this.length;
+    switch (op) {
+      case 'between': {
+        const raw = value as [unknown, unknown];
+        const lo = this.resolve(raw[0]);
+        const hi = this.resolve(raw[1]);
+        for (let i = 0; i < n; i++) { const x = d[i]!; if (x >= lo && x <= hi) out.set(i); }
+        return;
+      }
+      case 'in':
+      case 'notIn': {
+        const set = this.toBigIntSet(value);
+        if (op === 'in') {
+          for (let i = 0; i < n; i++) if (set.has(d[i]!)) out.set(i);
+        } else {
+          for (let i = 0; i < n; i++) if (!set.has(d[i]!)) out.set(i);
+        }
+        return;
+      }
+      // null/notNull are resolved at the Table level off the null bitset, never here.
+      case 'null':
+      case 'notNull':
+        return;
+      // Substring/affix operators are string-only; on a numeric column they match nothing.
+      case 'contains':
+      case 'containsi':
+      case 'notContains':
+      case 'notContainsi':
+      case 'startsWith':
+      case 'startsWithi':
+      case 'endsWith':
+      case 'endsWithi':
+        return;
+      default: {
+        const v = this.resolve(value);
+        switch (op) {
+          case 'gt':  for (let i = 0; i < n; i++) if (d[i]! >  v) out.set(i); break;
+          case 'gte': for (let i = 0; i < n; i++) if (d[i]! >= v) out.set(i); break;
+          case 'lt':  for (let i = 0; i < n; i++) if (d[i]! <  v) out.set(i); break;
+          case 'lte': for (let i = 0; i < n; i++) if (d[i]! <= v) out.set(i); break;
+          case 'eq':
+          case 'eqi': for (let i = 0; i < n; i++) if (d[i]! === v) out.set(i); break;
+          case 'ne':
+          case 'nei': for (let i = 0; i < n; i++) if (d[i]! !== v) out.set(i); break;
+        }
+        return;
+      }
+    }
+  }
+
+  /** Coerce a predicate set to a `Set<bigint>` for `$in`/`$notIn` (every element to the canonical bigint). */
+  private toBigIntSet(value: unknown): Set<bigint> {
+    const arr = Array.isArray(value) ? value : [value];
+    const set = new Set<bigint>();
+    for (const v of arr) set.add(this.resolve(v));
+    return set;
+  }
+
+  /**
+   * Monomorphic probe over the raw BigInt64Array. The bound(s) are resolved to bigint ONCE here, so
+   * the closure does only bigint compares. Substring/affix/null ops are not numeric (null).
+   */
+  makeProbe(op: ScanOp, value: unknown): RowProbe | null {
+    const d = this.data;
+    switch (op) {
+      case 'between': {
+        const raw = value as [unknown, unknown];
+        const lo = this.resolve(raw[0]);
+        const hi = this.resolve(raw[1]);
+        return (row) => { const x = d[row]!; return x >= lo && x <= hi; };
+      }
+      case 'in': {
+        const set = this.toBigIntSet(value);
+        return (row) => set.has(d[row]!);
+      }
+      case 'notIn': {
+        const set = this.toBigIntSet(value);
+        return (row) => !set.has(d[row]!);
+      }
+      case 'gt':  { const v = this.resolve(value); return (row) => d[row]! >  v; }
+      case 'gte': { const v = this.resolve(value); return (row) => d[row]! >= v; }
+      case 'lt':  { const v = this.resolve(value); return (row) => d[row]! <  v; }
+      case 'lte': { const v = this.resolve(value); return (row) => d[row]! <= v; }
+      case 'eq':
+      case 'eqi': { const v = this.resolve(value); return (row) => d[row]! === v; }
+      case 'ne':
+      case 'nei': { const v = this.resolve(value); return (row) => d[row]! !== v; }
+      default:
+        return null; // substring/affix/null are not numeric column ops.
+    }
+  }
+}
+
+/**
+ * JSON column: stores each row's RAW jsonb text verbatim (UTF-8 bytes in a single growable arena +
+ * an `Int32Array` of offsets, mirroring {@link TextColumn} — json bodies are near-unique and long, so
+ * a dictionary buys no dedup; the 2^31-byte arena cap is documented there too).
+ *
+ * CRITICAL precision point: the value is NEVER round-tripped through `JSON.parse` -> materialize ->
+ * `JSON.stringify` (that loses nested integers > 2^53 and reorders object keys). At push we `JSON.parse`
+ * ONLY as a validity GATE (the result is discarded) and store the verbatim bytes; `materialize` emits
+ * them as a {@link RawJson} fragment so nested big integers and key order survive byte-exact.
+ *
+ * JSON is NOT filterable (the query parser rejects any op on a json field, and no sorted/eq index is
+ * built), so `scan` throws defensively (unreachable in normal flow) and `makeProbe` returns null.
+ */
+export class JsonColumn implements Column {
+  readonly type = 'json';
+  private bytes = new Uint8Array(INITIAL_CAPACITY);
+  private used = 0;
+  private offsets = new Int32Array(INITIAL_CAPACITY + 1);
+  length = 0;
+
+  private static readonly encoder = new TextEncoder();
+  private static readonly decoder = new TextDecoder();
+
+  private ensureBytes(need: number): void {
+    if (this.used + need <= this.bytes.length) return;
+    let cap = this.bytes.length;
+    while (cap < this.used + need) cap *= 2;
+    const next = new Uint8Array(cap);
+    next.set(this.bytes);
+    this.bytes = next;
+  }
+
+  private ensureOffsets(): void {
+    if (this.length + 1 < this.offsets.length) return;
+    const next = new Int32Array(this.offsets.length * 2);
+    next.set(this.offsets);
+    this.offsets = next;
+  }
+
+  /**
+   * Append a row's JSON. A string is the RAW jsonb text (used verbatim — the only shape that preserves
+   * big ints / key order off the wire); any other in-process value is `JSON.stringify`d. The value is
+   * VALIDATED by `JSON.parse` (a gate; the parse result is discarded) so invalid JSON / empty /
+   * whitespace-only is REJECTED before any byte is stored (reject-don't-store, like `coerceDate`).
+   */
+  push(value: unknown): number {
+    const raw = typeof value === 'string' ? value : JSON.stringify(value);
+    if (typeof raw !== 'string') throw new Error('json field: value is not serializable to JSON');
+    // Validity gate: JSON.parse throws on '' / whitespace-only / malformed. We discard the result and
+    // store the verbatim bytes — NEVER the re-stringified parse (which would lose big ints / key order).
+    JSON.parse(raw);
+    // Well-formed-UTF-16 gate (reject-don't-store): JSON.parse ACCEPTS a string carrying a lone/unpaired
+    // surrogate (e.g. a literal \uD800 code unit), but TextEncoder.encode would silently replace it with
+    // U+FFFD — corrupting the verbatim bytes and breaking the "nested bytes survive exactly" contract.
+    // A value that cannot be stored byte-exact must fail loudly at insert, like the JSON.parse gate.
+    if (raw.isWellFormed !== undefined && !raw.isWellFormed()) {
+      throw new Error('json field: value contains an unpaired surrogate (not well-formed UTF-16)');
+    }
+    const encoded = JsonColumn.encoder.encode(raw);
+    this.ensureBytes(encoded.length);
+    this.ensureOffsets();
+    const i = this.length;
+    this.offsets[i] = this.used;
+    this.bytes.set(encoded, this.used);
+    this.used += encoded.length;
+    this.offsets[i + 1] = this.used;
+    this.length = i + 1;
+    return i;
+  }
+
+  /** Decode row r's verbatim JSON text. */
+  at(row: number): string {
+    const start = this.offsets[row]!;
+    const end = this.offsets[row + 1]!;
+    return JsonColumn.decoder.decode(this.bytes.subarray(start, end));
+  }
+
+  /** json is not filterable — the parser blocks every op upstream; throw defensively if reached. */
+  scan(_op: ScanOp, _value: unknown, _out: Bitset): void {
+    throw new Error('json column is not filterable');
+  }
+
+  makeProbe(_op: ScanOp, _value: unknown): RowProbe | null {
+    return null;
   }
 }
 
@@ -1205,7 +1609,7 @@ export class TextColumn implements Column {
   }
 }
 
-export function createColumn(type: ColumnType): Column {
+export function createColumn(type: ColumnType, scale?: number, precision?: number): Column {
   switch (type) {
     case 'i32':
     case 'f64':
@@ -1218,5 +1622,12 @@ export function createColumn(type: ColumnType): Column {
       return new DateColumn();
     case 'text':
       return new TextColumn();
+    case 'i64':
+      return new I64Column('i64', 0);
+    case 'decimal':
+      if (scale === undefined) throw new Error('decimal column requires a scale');
+      return new I64Column('decimal', scale, precision);
+    case 'json':
+      return new JsonColumn();
   }
 }

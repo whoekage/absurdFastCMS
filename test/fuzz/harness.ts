@@ -85,11 +85,14 @@ export interface FieldSpec {
   nullRate: number;
   /** Distinct-value budget knob. */
   cardinality: Cardinality;
+  /** Fixed scale for a `decimal` field (the engine stores `round(value * 10^scale)`). */
+  scale?: number;
 }
 
 /** A generated row: plain JS, each field a real value or `null` (NULL). */
 export type Row = Record<string, ScalarOrNull>;
-export type Scalar = number | string | boolean;
+/** `bigint` carries an i64 / decimal-mantissa value exactly (an f64 would lose precision > 2^53). */
+export type Scalar = number | string | boolean | bigint;
 export type ScalarOrNull = Scalar | null;
 
 /** Map a cardinality knob to a concrete distinct-value count for `n` rows. */
@@ -132,10 +135,43 @@ const STRING_ALPHABET: readonly string[] = [
   'PineApple',
 ];
 
+/**
+ * A spread of i64 values exercising mixed sign, the > 2^53 region, and the ±2^63 boundaries — the
+ * exact precision corners an f64 would lose. Drawn from this set (sized by `count`) so eq/in are
+ * non-trivial and ranges have spread; always includes 0n and the two boundaries.
+ */
+function buildI64Pool(rng: Rng, count: number): bigint[] {
+  const I64_MAX = 2n ** 63n - 1n;
+  const I64_MIN = -(2n ** 63n);
+  const fixed: bigint[] = [0n, 1n, -1n, 9007199254740992n, 9007199254740993n, -9007199254740993n, I64_MAX, I64_MIN];
+  const seen = new Set<bigint>(fixed);
+  const pool: bigint[] = [...fixed];
+  while (pool.length < count) {
+    // A signed value in a moderate range plus the occasional huge magnitude.
+    const v = rng.chance(0.3)
+      ? BigInt(rng.intBetween(-1_000_000, 1_000_000)) * 1_000_000_000n + BigInt(rng.intBetween(-999, 999))
+      : BigInt(rng.intBetween(-500, 500));
+    if (!seen.has(v)) { seen.add(v); pool.push(v); }
+    if (seen.size > count * 4 + fixed.length) break;
+  }
+  return pool;
+}
+
 /** Build the concrete distinct value list a field will draw from, sized by cardinality. */
-function buildValuePool(rng: Rng, type: ColumnType, count: number): Scalar[] {
+function buildValuePool(rng: Rng, type: ColumnType, count: number, scale = 0): Scalar[] {
   const pool: Scalar[] = [];
   switch (type) {
+    case 'i64':
+      return buildI64Pool(rng, count);
+    case 'decimal':
+      // Decimal VALUES are their scaled int64 MANTISSA (a bigint), inserted verbatim — scale affects
+      // only materialization, never filtering, so the filter oracle treats decimal exactly like i64.
+      // (`scale` is accepted for signature symmetry; the mantissa universe is scale-independent.)
+      return buildI64Pool(rng, count);
+    case 'json':
+      // json is not filterable, so it is never used by the fuzz filter matrix. Return a trivial pool
+      // (exhaustiveness only — a json field in a generated schema would just round-trip verbatim).
+      return ['null'];
     case 'bool':
       // Only two possible distinct values regardless of the knob.
       return [false, true];
@@ -216,7 +252,7 @@ export interface GeneratedData {
 export function generateRows(rng: Rng, fields: FieldSpec[], n: number): GeneratedData {
   const pools = new Map<string, Scalar[]>();
   for (const f of fields) {
-    pools.set(f.name, buildValuePool(rng, f.type, distinctCount(f.cardinality, n)));
+    pools.set(f.name, buildValuePool(rng, f.type, distinctCount(f.cardinality, n), f.scale ?? 0));
   }
   const rows: Row[] = [];
   for (let r = 0; r < n; r++) {
@@ -274,6 +310,8 @@ export function oracleCoerceDate(value: unknown): number {
 function canonical(type: ColumnType, cell: ScalarOrNull): ScalarOrNull {
   if (cell === null) return null;
   if (type === 'date') return oracleCoerceDate(cell);
+  // i64 / decimal cells are already exact bigints in the generated rows (a decimal cell is its
+  // scaled int64 mantissa), so they pass through unchanged — bigint `===`/`<`/`>` compare exactly.
   return cell;
 }
 
@@ -325,6 +363,9 @@ export function oracleLeafMatch(fieldType: ColumnType, p: Predicate, row: Row): 
       return cell === value;
     case 'ne':
       return cell !== value;
+    // The `as number` here is a TS ANNOTATION ONLY — for an i64/decimal cell both operands are bigints
+    // at runtime, so `<`/`>` is exact bigint ordering above 2^53. Do NOT "fix" this to `Number(...)`,
+    // which WOULD coerce to f64 and lose precision in the > 2^53 region the fuzz specifically targets.
     case 'gt':
       return (cell as number) > (value as number);
     case 'gte':
@@ -469,7 +510,12 @@ function sentinelFor(type: ColumnType): Scalar {
     case 'bool':
       return false;
     case 'string':
+    case 'text':
+    case 'json':
       return '';
+    case 'i64':
+    case 'decimal':
+      return 0n;
   }
 }
 
@@ -478,10 +524,14 @@ function sentinelFor(type: ColumnType): Scalar {
 // ===========================================================================
 
 /** Operators that are valid for each column type (so we never generate a nonsense leaf). */
+const NUMERIC_RANGE_OPS: ScanOp[] = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'in', 'notIn', 'null', 'notNull'];
 const OPS_BY_TYPE: Record<ColumnType, ScanOp[]> = {
-  i32: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'in', 'notIn', 'null', 'notNull'],
-  f64: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'in', 'notIn', 'null', 'notNull'],
-  date: ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'in', 'notIn', 'null', 'notNull'],
+  i32: NUMERIC_RANGE_OPS,
+  f64: NUMERIC_RANGE_OPS,
+  date: NUMERIC_RANGE_OPS,
+  // i64 / decimal share the numeric/range op surface (compared exactly on bigint).
+  i64: NUMERIC_RANGE_OPS,
+  decimal: NUMERIC_RANGE_OPS,
   bool: ['eq', 'ne', 'eqi', 'nei', 'in', 'notIn', 'null', 'notNull'],
   string: [
     'eq', 'ne', 'in', 'notIn', 'eqi', 'nei',
@@ -489,6 +539,16 @@ const OPS_BY_TYPE: Record<ColumnType, ScanOp[]> = {
     'startsWith', 'startsWithi', 'endsWith', 'endsWithi',
     'null', 'notNull',
   ],
+  text: [
+    'eq', 'ne', 'eqi', 'nei',
+    'contains', 'containsi', 'notContains', 'notContainsi',
+    'startsWith', 'startsWithi', 'endsWith', 'endsWithi',
+    'null', 'notNull',
+  ],
+  // json is NOT filterable — excluded from the filter matrix entirely (no leaf is ever generated).
+  // Empty makes the exclusion STRUCTURAL: if a json field were ever added to a fuzz schema,
+  // randomLeaf's `rng.pick([])` would surface a clear error rather than silently generating leaves.
+  json: [],
 };
 
 /** Substrings the generator uses as needles so contains/affix actually hit sometimes. */
@@ -525,6 +585,28 @@ function randomValue(rng: Rng, type: ColumnType, op: ScanOp): unknown {
     }
     // eq/ne/eqi/nei — pick a real-ish value (mix case to exercise folding).
     return rng.pick(STRING_ALPHABET);
+  }
+
+  // i64 / decimal universe: values are exact bigints (an i64 value, or a decimal scaled mantissa),
+  // including mixed sign, the > 2^53 region, and the ±2^63 boundaries.
+  if (type === 'i64' || type === 'decimal') {
+    const I64_MAX = 2n ** 63n - 1n;
+    const I64_MIN = -(2n ** 63n);
+    const edges: bigint[] = [0n, 1n, -1n, 9007199254740992n, 9007199254740993n, I64_MAX, I64_MIN];
+    const pick = (): bigint =>
+      rng.chance(0.25) ? rng.pick(edges) : BigInt(rng.intBetween(-1000, 1000)) * (rng.chance(0.4) ? 1_000_000_000n : 1n);
+    if (op === 'in' || op === 'notIn') {
+      const k = rng.int(3);
+      const arr: bigint[] = [];
+      for (let i = 0; i < k; i++) arr.push(pick());
+      return arr;
+    }
+    if (op === 'between') {
+      const a = pick();
+      const b = pick();
+      return rng.chance(0.2) ? [b, a] : [a < b ? a : b, a < b ? b : a];
+    }
+    return pick();
   }
 
   // Numeric / date universe.
@@ -771,10 +853,16 @@ export class Coverage {
 // 7. Convenience: the full Strapi operator set per type (for assertCoverage callers).
 // ===========================================================================
 
-/** Every (type, op) pair the generators can legally produce — the natural coverage target. */
+/**
+ * Every (type, op) pair the CLASSIC randomized generators produce — the natural coverage target for
+ * the multi-type fuzz runs (numeric/string/bool/date relation matrices). Restricted to those five
+ * types so existing callers stay unaffected by step 3: the i64/decimal fuzz files assert their OWN
+ * targeted coverage, and json is not filterable (no leaf is ever generated for it).
+ */
+const CLASSIC_FUZZ_TYPES: ColumnType[] = ['i32', 'f64', 'date', 'bool', 'string'];
 export function allLeafPairs(): Array<[ColumnType, ScanOp]> {
   const out: Array<[ColumnType, ScanOp]> = [];
-  for (const t of Object.keys(OPS_BY_TYPE) as ColumnType[]) {
+  for (const t of CLASSIC_FUZZ_TYPES) {
     for (const op of OPS_BY_TYPE[t]) out.push([t, op]);
   }
   return out;
