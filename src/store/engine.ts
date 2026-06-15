@@ -70,6 +70,34 @@ class OutputArena {
   }
 }
 
+/**
+ * A DETACHED Table + OutputArena pair, built OFF to the side from a field schema and populated row by
+ * row with the EXACT same serialize-on-write discipline as {@link Engine.insert}. This is the building
+ * block for {@link Engine.replaceType}: a per-type rebuild streams all rows into a fresh detached pair
+ * (registering indexes + warming once), then asks the live Engine to swap it in atomically — so reads
+ * keep hitting the OLD slot while the new one is constructed, and the byte format is defined in ONE
+ * place (here), never drifting from `Engine.insert`.
+ */
+export class DetachedTable {
+  readonly table: Table;
+  readonly arena = new OutputArena();
+  readonly hasRawField: boolean;
+
+  constructor(fields: FieldDef[]) {
+    this.table = new Table(fields);
+    this.hasRawField = fields.some((f) => f.type === 'i64' || f.type === 'decimal' || f.type === 'json');
+  }
+
+  /** Append one row: into the Table (columns + null bits) AND serialize-on-write into the side arena. */
+  insert(row: Record<string, unknown>): number {
+    const rowId = this.table.insert(row);
+    const materialized = this.table.materialize(rowId);
+    const json = this.hasRawField ? serializeRow(materialized) : JSON.stringify(materialized);
+    this.arena.append(json);
+    return rowId;
+  }
+}
+
 export interface PaginationMeta {
   page: number;
   pageSize: number;
@@ -189,6 +217,42 @@ export class Engine {
     // aware partial invalidation is a later optimization; for this slice we drop the whole type.
     this.bus.publish(name);
     return rowId;
+  }
+
+  /**
+   * Install a freshly-built {@link DetachedTable} as a NEW content-type (the boot/load path) WITHOUT
+   * the throwaway empty Table + OutputArena that `define` would allocate. Sets the three Map slots
+   * directly from the detached pair. Throws if `name` is ALREADY defined (use {@link replaceType} to
+   * swap an existing type). No cache invalidation publish: at boot the cache is empty, and a freshly
+   * registered type has no cached responses to drop.
+   */
+  registerDetached(name: string, detached: DetachedTable): void {
+    if (this.tables.has(name)) throw new Error(`content-type "${name}" already defined`);
+    this.tables.set(name, detached.table);
+    this.arenas.set(name, detached.arena);
+    this.hasRawField.set(name, detached.hasRawField);
+  }
+
+  /**
+   * Atomically REPLACE an already-defined content-type's storage with a freshly-built {@link
+   * DetachedTable} (its Table + output arena + hasRawField). The per-type rebuild fast path: the
+   * caller streams the type's rows into the detached pair off to the side (registering indexes +
+   * warming once), THEN calls this — which does the three Map writes + the per-type cache
+   * invalidation in ONE synchronous burst (no await between them, so a synchronous GET can never
+   * observe a torn state: it sees either the whole old slot or the whole new one). Dropping the old
+   * Table+arena refs makes them GC-eligible once `bus.publish` -> `invalidateType` releases this
+   * type's cached Buffer VIEWS (which pinned the old arena's ArrayBuffer).
+   *
+   * Throws if `name` is NOT already defined (replace != define; {@link define} still throws on an
+   * existing name). Sibling types' tables/arenas/caches are untouched — the blast radius is one type.
+   */
+  replaceType(name: string, detached: DetachedTable): void {
+    if (!this.tables.has(name)) throw new Error(`content-type "${name}" is not defined (use define)`);
+    // Synchronous swap burst: no await between these, so no torn read is possible.
+    this.tables.set(name, detached.table);
+    this.arenas.set(name, detached.arena);
+    this.hasRawField.set(name, detached.hasRawField);
+    this.bus.publish(name); // drop ONLY this type's cached responses (frees the old arena's views).
   }
 
   /** Compute Strapi-style pagination meta from a total count and the query's offset/limit. */

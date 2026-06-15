@@ -1,6 +1,8 @@
 import uWS from 'uWebSockets.js';
 import type { Engine } from '../store/engine.ts';
+import type { Registry } from '../store/registry.ts';
 import type { PostgresStore } from '../db/postgres-store.ts';
+import { rebuildType } from '../db/load.ts';
 import { handleRequest, errorResponse, type CoreResponse } from './router.ts';
 import { handleWrite, type WriteContext } from './write.ts';
 
@@ -138,20 +140,21 @@ function handleWriteRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, method: s
  * Build a uWS server over `engine`. Construction is SEPARATE from listening so tests build the
  * server once and bind it to a free port chosen by the harness.
  *
- * Pass a {@link PostgresStore} to ENABLE WRITES: POST/PUT/DELETE commit to Postgres and then rebuild
- * the in-memory engine from it ({@link WriteContext.rebuild} swaps the live `current` engine, so reads
- * after a write reflect it). Without a store the server is read-only and a write falls to the core's
- * 405. The read handlers reference `current` (not the original `engine`) so the swap is seen live.
+ * Pass a {@link PostgresStore} AND a {@link Registry} to ENABLE WRITES: POST/PUT/DELETE commit to
+ * Postgres and then rebuild ONLY the written type's RAM storage in place ({@link Engine.replaceType}),
+ * invalidating ONLY that type's response cache (sibling types stay hot). The engine object itself is
+ * NEVER reassigned on a write — only its per-type storage is swapped — so the read handlers' reference
+ * stays valid. Without a store the server is read-only and a write falls to the core's 405.
  */
-export function createServer(engine: Engine, store?: PostgresStore): UwsServer {
+export function createServer(engine: Engine, store?: PostgresStore, registry?: Registry): UwsServer {
   const app = uWS.App();
-  let current = engine;
+  const current = engine;
 
   // LIST: /:type  — read everything off `req` synchronously, then delegate to the core.
   app.get('/:type', (res, req) => {
     const method = req.getMethod();
     const type = req.getParameter(0) ?? '';
-    const query = req.getQuery();
+    const query = req.getQuery() ?? '';
     // SYNC handler: no await past this point, so `req` is no longer touched and no onAborted needed.
     writeResponse(res, handleRequest(current, { method, path: `/${type}`, query }));
   });
@@ -161,17 +164,25 @@ export function createServer(engine: Engine, store?: PostgresStore): UwsServer {
     const method = req.getMethod();
     const type = req.getParameter(0) ?? '';
     const id = req.getParameter(1) ?? '';
-    const query = req.getQuery();
+    const query = req.getQuery() ?? '';
     writeResponse(res, handleRequest(current, { method, path: `/${type}/${id}`, query }));
   });
 
-  // WRITES (only when a store is supplied): commit to Postgres, then rebuild the RAM engine.
-  if (store) {
+  // WRITES (only when a store + registry are supplied): commit to Postgres, then rebuild ONLY the
+  // written type's RAM storage in place (per-type rebuild + per-type cache invalidation).
+  if (store && registry) {
     const ctx: WriteContext = {
       engine: () => current,
+      registry: () => registry,
       sql: store.sql,
-      rebuild: async () => {
-        current = await store.load();
+      rebuild: async (type: string) => {
+        // A DATA write never changes the schema, so re-stream the ALREADY-RESOLVED registry def — no
+        // meta re-query on the hot path (CL20). Only an actual schema mutation (addField/dropField/
+        // changeFieldType) must call registry.rebuildType to re-read content_types/content_type_fields;
+        // that is the future DDL hook, NOT this per-entry-write path. The def is guaranteed present: the
+        // write core resolved it via registry.get(type) before any SQL ran.
+        const def = registry.get(type)!;
+        await rebuildType(store.sql, current, def);
       },
     };
     app.post('/:type', (res, req) => handleWriteRoute(res, req, 'POST', false, ctx));
@@ -184,7 +195,7 @@ export function createServer(engine: Engine, store?: PostgresStore): UwsServer {
   app.any('/*', (res, req) => {
     const method = req.getMethod();
     const url = req.getUrl();
-    const query = req.getQuery();
+    const query = req.getQuery() ?? '';
     writeResponse(res, handleRequest(current, { method, path: url, query }));
   });
 

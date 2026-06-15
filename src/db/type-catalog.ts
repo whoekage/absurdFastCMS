@@ -34,11 +34,11 @@ export type CmsType =
   | 'uuid';
 
 /**
- * The engine INTENT recorded in `content_type_fields.engine_type`: the six real {@link ColumnType}s
- * PLUS three intent-only strings (`i64`/`decimal`/`json`) kept deliberately SEPARATE from the engine
- * union. The intent-only strings are never fed to `createColumn`/`engine.define` in this step (a
- * guard test asserts it); they exist so a later ingest step knows a `bigint` must be read with
- * `BigInt` not `Number`, a `numeric` kept as an exact string, and a `jsonb` re-stringified.
+ * The engine INTENT recorded in `content_type_fields.engine_type`. NOTE: as of step 4 the names
+ * `i64`/`decimal`/`json` ARE genuine {@link ColumnType}s and ARE now fed to `createColumn` /
+ * `engine.define` via the runtime registry (the loader builds a {@link import('../store/table.ts').FieldDef}
+ * directly from `engine_type`). The `INTENT_ONLY_ENGINE_TYPES` set below is retained only as
+ * documentation of the step-3 boundary (no code path / test depends on it any longer).
  */
 export type EngineTypeIntent = ColumnType | 'i64' | 'decimal' | 'json';
 

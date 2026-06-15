@@ -1,16 +1,15 @@
 import type { Sql } from 'postgres';
-import { Engine } from '../store/engine.ts';
-import { defineArticle } from '../store/content-type.ts';
+import type { Engine, EngineOptions } from '../store/engine.ts';
+import { Registry } from '../store/registry.ts';
 import type { Store } from '../store/store.ts';
+import { buildEngine } from './load.ts';
 import { createSql } from './client.ts';
 
-/** Rows pulled per cursor batch — bounds peak memory so a multi-million-row table never buffers whole. */
-const LOAD_BATCH = 5000;
-
 /**
- * {@link Store} backed by Postgres (the source of truth). `load()` builds an Engine, CURSOR-STREAMS
- * the `articles` table in batches (never buffering the whole table), serialize-on-write inserts each
- * row, then warms the indexes once. The Postgres `id` (serial PK) becomes the engine's public `id`.
+ * {@link Store} backed by Postgres (the source of truth). `load()` builds the content-type
+ * {@link Registry} from the meta tables, then CURSOR-STREAMS every type's `ct_<apiId>` table into a
+ * fresh Engine (type-aware coercion per the registry), warming each type's indexes once. The Postgres
+ * `id` (serial PK) becomes the engine's public `id`. Empty catalog / empty type are valid.
  *
  * Connection ownership: construct with a `DATABASE_URL` string (or nothing, to read it from the env)
  * and the store OWNS the postgres.js handle — call {@link close} when done. Construct with an existing
@@ -32,51 +31,24 @@ export class PostgresStore implements Store {
     }
   }
 
-  async load(): Promise<Engine> {
-    const engine = new Engine();
-    const table = defineArticle(engine);
-
-    const cursor = this.sql<ArticleDbRow[]>`
-      SELECT id, title, body, status, views, rating, active, published_at
-      FROM articles
-      ORDER BY id
-    `.cursor(LOAD_BATCH);
-
-    for await (const rows of cursor) {
-      for (const r of rows) {
-        // Map snake_case storage columns onto the engine's camelCase FieldDef names. NULLs pass
-        // through as null (the engine renders them as JSON null); `published_at` is a JS Date.
-        engine.insert('article', {
-          id: r.id,
-          title: r.title,
-          body: r.body,
-          status: r.status,
-          views: r.views,
-          rating: r.rating,
-          active: r.active,
-          publishedAt: r.published_at,
-        });
-      }
-    }
-
-    table.warmIndexes();
+  /** Build the registry + a fresh engine loaded from it (the {@link Store} contract). */
+  async load(opts?: EngineOptions): Promise<Engine> {
+    const { engine } = await this.loadWithRegistry(opts);
     return engine;
+  }
+
+  /**
+   * Build BOTH the registry and the engine: the server needs the registry (to resolve write defs) and
+   * the engine (to serve reads) from the SAME boot snapshot of the meta tables.
+   */
+  async loadWithRegistry(opts?: EngineOptions): Promise<{ engine: Engine; registry: Registry }> {
+    const registry = await Registry.build(this.sql);
+    const engine = await buildEngine(this.sql, registry, opts);
+    return { engine, registry };
   }
 
   /** Close the owned connection (no-op when an external `Sql` handle was injected). */
   async close(): Promise<void> {
     if (this.ownsSql) await this.sql.end();
   }
-}
-
-/** Raw row shape as returned by postgres.js for the SELECT above (snake_case, Date for timestamptz). */
-interface ArticleDbRow {
-  id: number;
-  title: string | null;
-  body: string;
-  status: string;
-  views: number | null;
-  rating: number | null;
-  active: boolean;
-  published_at: Date;
 }

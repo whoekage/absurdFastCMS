@@ -1,11 +1,16 @@
+import type { Sql } from 'postgres';
 import { Engine } from '../store/engine.ts';
-import { defineArticle } from '../store/content-type.ts';
+import type { FieldDef } from '../store/table.ts';
 import { PostgresStore } from '../db/postgres-store.ts';
+import { runMigrations } from '../db/migrate.ts';
+import { createContentType, getContentType, type FieldSpec } from '../db/content-type-repo.ts';
+import { ContentTypeExistsError } from '../db/ddl.ts';
 import { createServer } from './app.ts';
 
 /**
- * The PRODUCTION entrypoint: a SINGLE process that loads its in-memory {@link Engine} from Postgres
- * ({@link PostgresStore}) at boot and serves the uWebSockets.js app over it.
+ * The PRODUCTION entrypoint: a SINGLE process that migrates, seeds the `article` content-type as a
+ * DYNAMIC content-type (via the validated step-2 path) when absent, loads its in-memory {@link Engine}
+ * + {@link Registry} from Postgres at boot, and serves the uWebSockets.js app over it.
  *
  * SHARED-NOTHING, single-instance: the process builds its OWN Engine (columns, indexes, response
  * cache) — a self-contained read replica. FUTURE: the ChangeBus becomes a Redis pub/sub bus so a
@@ -18,6 +23,65 @@ import { createServer } from './app.ts';
 
 const STATUSES = ['draft', 'published', 'archived'];
 
+/**
+ * The `article` content-type seed spec. Reproduces migration 0001's article shape so the read path
+ * stays byte-identical, with ONE deliberate deviation: `status` is seeded as an `enumeration`
+ * (members `['draft','published','archived']`) rather than a free-form varchar(32), so it is
+ * eq-indexed (index-plan parity with the old static `defineArticle`) — every test fixture status is a
+ * member, and an enum materializes byte-identically to a varchar. `publishedAt` is the FIELD NAME so
+ * the physical column is `"publishedAt"` and the wire key is unchanged.
+ *
+ * Nullability matches 0001: title/views/rating nullable; body/status/active/publishedAt NOT NULL. The
+ * resulting engine types (i32/date/date | string/text/string/i32/f64/bool/date) carry no i64/decimal/
+ * json field, so the table keeps the fast JSON.stringify path -> byte-identical reads.
+ */
+export const ARTICLE_SEED_FIELDS: FieldSpec[] = [
+  { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
+  { name: 'body', cmsType: 'text', options: { nullable: false } },
+  { name: 'status', cmsType: 'enumeration', options: { values: STATUSES, nullable: false } },
+  { name: 'views', cmsType: 'integer', options: { nullable: true } },
+  { name: 'rating', cmsType: 'float', options: { nullable: true } },
+  { name: 'active', cmsType: 'boolean', options: { nullable: false } },
+  // WIRE CONTRACT: the field NAME is `publishedAt`, so the physical column AND the wire key are both
+  // `publishedAt`. The old static `articles` table mapped a `published_at` column -> `publishedAt` wire
+  // key; that mapping is GONE. The wire key is preserved ONLY because this field is named `publishedAt`,
+  // so RENAMING this field is a BREAKING wire change for existing clients.
+  { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
+];
+
+/**
+ * Idempotently seed `article` as a dynamic content-type (content_types + fields + ct_article). A no-op
+ * when it already exists; a benign peer-race (ContentTypeExistsError / a 23505 from the DB UNIQUE) is
+ * tolerated and swallowed (the subsequent load re-reads the committed meta). Runs through
+ * createContentType's own atomic transaction — NO outer transaction here. NOTE: this does NOT touch the
+ * legacy static `articles` table (migration 0001), which remains only as the injection canary; the live
+ * article data is owned by `ct_article`.
+ */
+export async function seedArticleIfAbsent(sql: Sql): Promise<void> {
+  if (await getContentType(sql, 'article')) return;
+  try {
+    await createContentType(sql, { apiId: 'article', fields: ARTICLE_SEED_FIELDS });
+  } catch (e) {
+    if (e instanceof ContentTypeExistsError) return;
+    if ((e as { code?: string }).code === '23505') return;
+    throw e;
+  }
+}
+
+/** The static engine FieldDef[] mirroring {@link ARTICLE_SEED_FIELDS} for the in-memory bench generator. */
+const ARTICLE_BENCH_FIELDS: FieldDef[] = [
+  { name: 'id', type: 'i32' },
+  { name: 'created_at', type: 'date' },
+  { name: 'updated_at', type: 'date' },
+  { name: 'title', type: 'string' },
+  { name: 'body', type: 'text' },
+  { name: 'status', type: 'string' },
+  { name: 'views', type: 'i32' },
+  { name: 'rating', type: 'f64' },
+  { name: 'active', type: 'bool' },
+  { name: 'publishedAt', type: 'date' },
+];
+
 function lcg(seedNum: number): () => number {
   let s = seedNum >>> 0;
   return () => {
@@ -29,16 +93,23 @@ function lcg(seedNum: number): () => number {
 /**
  * Build an Engine and fill the `article` content-type with `n` deterministic rows — a benchmark /
  * fixture generator, NOT the production boot path (the process loads from {@link PostgresStore}). `id`
- * is a dense 1-based serial so it matches a freshly-seeded Postgres table.
+ * is a dense 1-based serial so it matches a freshly-seeded Postgres table. Uses a static in-memory
+ * schema (mirroring the seed spec) + the same index plan — no DB.
  */
 export function seed(n: number, seedNum = 1): Engine {
   const engine = new Engine();
-  const t = defineArticle(engine);
+  const t = engine.define('article', ARTICLE_BENCH_FIELDS);
+  t.createEqIndex('id');
+  t.createEqIndex('status');
+  t.createSortedIndex('views');
+  t.createSortedIndex('publishedAt');
   const rng = lcg(seedNum);
   const base = Date.UTC(2021, 0, 1);
   for (let i = 0; i < n; i++) {
     engine.insert('article', {
       id: i + 1,
+      created_at: base + i * 3_600_000,
+      updated_at: base + i * 3_600_000,
       title: rng() < 0.1 ? null : `Title "${i}" e zh`,
       body: `Body text for row ${i}, lorem ipsum dolor sit amet.`,
       status: STATUSES[(rng() * STATUSES.length) | 0]!,
@@ -52,13 +123,16 @@ export function seed(n: number, seedNum = 1): Engine {
   return engine;
 }
 
-/** Boot the server: load the Engine from Postgres, build the uWS server, and listen on `port`. */
+/** Boot the server: migrate, seed article, load the Engine + Registry from Postgres, listen on `port`. */
 export async function start(port: number): Promise<void> {
+  await runMigrations();
   const store = new PostgresStore();
-  const engine = await store.load();
-  const server = createServer(engine, store); // store enables POST/PUT/DELETE
+  await seedArticleIfAbsent(store.sql);
+  const { engine, registry } = await store.loadWithRegistry();
+  const server = createServer(engine, store, registry); // store + registry enable POST/PUT/DELETE
   await server.listen(port);
-  console.log(`ready on ${port} (${engine.rowCount('article')} rows from postgres)`);
+  const rows = engine.has('article') ? engine.rowCount('article') : 0;
+  console.log(`ready on ${port} (${rows} article rows from postgres)`);
 }
 
 /** The entrypoint. Run directly: `node --env-file=.env src/http/server.ts [port]`. */
