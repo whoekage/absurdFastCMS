@@ -7,7 +7,6 @@ import {
   formatDecimal,
   I64Column,
   RawJson,
-  RawNum,
   StringColumn,
   TextColumn,
   type Column,
@@ -753,17 +752,19 @@ export class Table {
         continue;
       }
       const col = this.columns.get(f.name)!;
-      // Type-aware rendering. The serializer (engine.ts) recognizes the RawNum/RawJson markers and
-      // splices their bytes; every other value goes through plain JSON.stringify.
+      // Type-aware rendering. The serializer (engine.ts) recognizes the RawJson marker and splices its
+      // bytes verbatim; every other value (incl. the i64/decimal STRINGS) goes through JSON.stringify.
       switch (col.type) {
         case 'date':
           // epoch-ms -> a stable ISO-8601 UTC string (the form `coerceDate` accepts: materialize ∘ coerce = id).
           out[f.name] = new Date(col.at(row) as number).toISOString();
           break;
         case 'i64':
-          // An unquoted JSON integer literal — JSON.stringify(BigInt) THROWS, and Strapi emits a bigint
-          // as a JSON number, so quoting would change the contract. RawNum splices it verbatim.
-          out[f.name] = new RawNum((col.at(row) as bigint).toString());
+          // A QUOTED decimal STRING. JSON numbers are only interoperable within ±2^53 (RFC 8259), so a
+          // bigint emitted as an unquoted JSON number silently loses precision in a naive client's
+          // JSON.parse -> Number. Industry standard (Strapi biginteger, protobuf int64 JSON mapping,
+          // Twitter id_str) is a string; JSON.stringify quotes it and `coerceI64` reads it back exactly.
+          out[f.name] = (col.at(row) as bigint).toString();
           break;
         case 'decimal':
           // A quoted decimal STRING (formatDecimal, exact), matching the Postgres source-of-truth

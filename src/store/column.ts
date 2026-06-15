@@ -639,20 +639,11 @@ export function formatDecimal(mantissa: bigint, scale: number): string {
 }
 
 /**
- * Output markers for the type-aware row serializer (engine.ts). `materialize` returns these so the
- * serializer can SPLICE a value that `JSON.stringify` cannot render correctly:
- *
- *   - {@link RawNum}: an unquoted numeric literal (an i64 emitted as a JSON number, exact — quoting it
- *     would change the wire contract and `JSON.stringify(BigInt)` THROWS).
- *   - {@link RawJson}: a verbatim JSON fragment (a `json` field's raw bytes, spliced unchanged so
- *     nested integers > 2^53 and object key order survive — never re-parsed/re-stringified).
+ * Output marker for the type-aware row serializer (engine.ts). `materialize` returns a {@link RawJson}
+ * so the serializer SPLICES a `json` field's raw bytes verbatim — nested integers > 2^53 and object key
+ * order survive byte-exact, never re-parsed/re-stringified. (i64 and decimal need no marker: they
+ * materialize as plain STRINGS that `JSON.stringify` quotes — the interoperable wire form.)
  */
-export class RawNum {
-  readonly raw: string;
-  constructor(raw: string) {
-    this.raw = raw;
-  }
-}
 export class RawJson {
   readonly raw: string;
   constructor(raw: string) {

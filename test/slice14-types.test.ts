@@ -68,7 +68,7 @@ test('i64 T2: ordering + range over the full int64 range (bigint oracle)', () =>
   t.warmIndexes();
 
   // ORDER BY n asc -> ids in ascending-value order. Read the raw bigint via the column (materialize
-  // wraps i64 in a RawNum marker for the serializer).
+  // materializes i64 as an exact decimal string for the serializer).
   const idAt = (rowId: number) => t.column('id').at(rowId) as number;
   const nAt = (rowId: number) => t.column('n').at(rowId) as bigint;
   const ordered = t.query({ sort: [{ field: 'n', dir: 'asc' }] }).map(idAt);
@@ -121,16 +121,17 @@ test('i64 T4: eq-index + $in with mixed bigint/string elements; sentinel 0n excl
   assert.deepEqual(t.scan([{ field: 'n', op: 'eq', value: 0n }]).toArray(), []);
 });
 
-test('i64 T5: full Engine.insert + respond emits an UNQUOTED exact integer literal', () => {
+test('i64 T5: full Engine.insert + respond emits an exact QUOTED integer string', () => {
   const eng = new Engine();
   eng.define('b', [{ name: 'id', type: 'i32' }, { name: 'qty', type: 'i64' }]);
   eng.insert('b', { id: 1, qty: I64_MAX });
   const one = eng.respondOne('b', 0);
-  // Unquoted (a JSON number), not "9223372036854775807" (a string), not a lossy double.
-  assert.ok(one.includes(Buffer.from('"qty":9223372036854775807')));
-  assert.ok(!one.includes(Buffer.from('"9223372036854775807"')));
-  // The whole envelope still JSON.parses structurally (the framing is valid).
-  assert.doesNotThrow(() => JSON.parse(one.toString('utf8')));
+  // QUOTED string (the interoperable wire form): a JSON number > 2^53 would lose precision in a naive
+  // client's JSON.parse -> Number. Exact digits, quoted; NOT an unquoted number.
+  assert.ok(one.includes(Buffer.from('"qty":"9223372036854775807"')));
+  assert.ok(!one.includes(Buffer.from('"qty":9223372036854775807,')) && !one.includes(Buffer.from('"qty":9223372036854775807}')));
+  // The whole envelope JSON.parses structurally, and the field comes back as the exact string.
+  assert.equal(JSON.parse(one.toString('utf8')).data.qty, '9223372036854775807');
 });
 
 test('i64 T6: NULL i64 materializes null', () => {
@@ -445,8 +446,8 @@ test('json T19: two json fields + placeholder-like string + i64 splice correctly
   });
   const one = eng.respondOne('mix', 0);
   const text = one.toString('utf8');
-  // i64 unquoted + exact; both json fragments verbatim; the string field still QUOTED + escaped.
-  assert.ok(text.includes('"q":9223372036854775807'));
+  // i64 a QUOTED exact string; both json fragments verbatim; the string field still QUOTED + escaped.
+  assert.ok(text.includes('"q":"9223372036854775807"'));
   assert.ok(text.includes('"a":{"x":11111111111111111111}'));
   assert.ok(text.includes('"b":{"k":1,"j":2}'));
   assert.ok(text.includes('"s":"{\\"x\\":99}"'), 'string field stays a quoted escaped string, no collision');

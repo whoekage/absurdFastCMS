@@ -1,5 +1,5 @@
 import { Table, type FieldDef, type QueryOptions } from './table.ts';
-import { RawJson, RawNum } from './column.ts';
+import { RawJson } from './column.ts';
 import {
   ResponseCache,
   InProcessChangeBus,
@@ -181,7 +181,7 @@ export class Engine {
     const rowId = t.insert(row);
     // Serialize the row's output exactly as JSON.stringify would render it in the envelope's data[].
     // A table with NO i64/decimal/json field takes the fast JSON.stringify path (byte-identical to
-    // before this slice); otherwise the type-aware serializer splices RawNum/RawJson fragments.
+    // before this slice); otherwise the type-aware serializer splices RawJson fragments verbatim.
     const materialized = t.materialize(rowId);
     const json = this.hasRawField.get(name) ? serializeRow(materialized) : JSON.stringify(materialized);
     this.arena(name).append(json);
@@ -265,19 +265,17 @@ export class Engine {
 }
 
 /**
- * Type-aware single-row JSON serializer for a materialized row that may contain {@link RawNum} /
- * {@link RawJson} markers (an i64 / decimal-as-number / json field). It iterates the object's own keys
- * IN ORDER and concatenates the SAME segments `JSON.stringify` would emit — no spaces, `:`/`,`
- * separators, keys via `JSON.stringify(key)` — so for an object with no markers it is byte-identical
- * to `JSON.stringify`. A marker is spliced specially:
+ * Type-aware single-row JSON serializer for a materialized row that may contain a {@link RawJson}
+ * marker (a `json` field's verbatim bytes). It iterates the object's own keys IN ORDER and concatenates
+ * the SAME segments `JSON.stringify` would emit — no spaces, `:`/`,` separators, keys via
+ * `JSON.stringify(key)` — so for an object with no markers it is byte-identical to `JSON.stringify`.
  *
- *   - {@link RawNum}: `.raw` UNQUOTED (so `"qty":9223372036854775807`, an exact JSON number, not a
- *     lossy double and not a quoted string).
  *   - {@link RawJson}: `.raw` VERBATIM (no quotes, no re-escape) so nested integers > 2^53 and object
  *     key order survive byte-exact.
  *
- * Each marker is spliced at its own field position independently (N json/i64 fields all handled), and
- * there is NO placeholder/string-replace step (collision-free by construction).
+ * i64/decimal need no marker: they materialize as plain STRINGS that `JSON.stringify` quotes (the
+ * interoperable wire form). Each RawJson is spliced at its own field position independently (N json
+ * fields all handled), with NO placeholder/string-replace step (collision-free by construction).
  */
 function serializeRow(row: Record<string, unknown>): string {
   let out = '{';
@@ -287,8 +285,8 @@ function serializeRow(row: Record<string, unknown>): string {
     first = false;
     out += JSON.stringify(key) + ':';
     const v = row[key];
-    if (v instanceof RawNum || v instanceof RawJson) out += v.raw;
-    else out += JSON.stringify(v); // a plain value, incl. `null` -> the literal `null`.
+    if (v instanceof RawJson) out += v.raw;
+    else out += JSON.stringify(v); // a plain value (incl. i64/decimal strings, and `null`).
   }
   return out + '}';
 }
