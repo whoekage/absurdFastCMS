@@ -1,4 +1,5 @@
 import { Table, type FieldDef, type QueryOptions } from './table.ts';
+import { RawJson, RawNum } from './column.ts';
 import {
   ResponseCache,
   InProcessChangeBus,
@@ -99,6 +100,12 @@ export interface EngineOptions {
 export class Engine {
   private readonly tables = new Map<string, Table>();
   private readonly arenas = new Map<string, OutputArena>();
+  /**
+   * Per-table flag: true iff the schema has any i64/decimal/json field, so insert uses the
+   * type-aware row serializer. A table with ONLY existing types keeps the fast `JSON.stringify`
+   * path, producing bytes BYTE-IDENTICAL to before this slice (the 304-test additive guarantee).
+   */
+  private readonly hasRawField = new Map<string, boolean>();
 
   /** The invalidation seam: insert() publishes here; the response cache subscribes. */
   readonly bus: ChangeBus;
@@ -116,6 +123,10 @@ export class Engine {
     const t = new Table(fields);
     this.tables.set(name, t);
     this.arenas.set(name, new OutputArena());
+    this.hasRawField.set(
+      name,
+      fields.some((f) => f.type === 'i64' || f.type === 'decimal' || f.type === 'json'),
+    );
     return t;
   }
 
@@ -136,7 +147,16 @@ export class Engine {
    * validates against). Throws on an unknown type — callers gate with {@link has} first.
    */
   fields(name: string): FieldDef[] {
-    return this.table(name).fields.map((f) => ({ name: f.name, type: f.type }));
+    // Carry `scale` (and `precision`) so a `decimal` field round-trips through the parser: it needs the
+    // column's scale to coerce a predicate value to the SAME mantissa the column stored (dropping scale
+    // would coerce against scale 0 and silently miss), and the precision to reject an out-of-precision
+    // predicate value exactly as the column's push and Postgres do.
+    return this.table(name).fields.map((f) => ({
+      name: f.name,
+      type: f.type,
+      ...(f.scale !== undefined ? { scale: f.scale } : {}),
+      ...(f.precision !== undefined ? { precision: f.precision } : {}),
+    }));
   }
 
   /** The dense row count of a content-type (the single-item id range gate: id in [0, rowCount)). */
@@ -160,7 +180,11 @@ export class Engine {
     const t = this.table(name);
     const rowId = t.insert(row);
     // Serialize the row's output exactly as JSON.stringify would render it in the envelope's data[].
-    this.arena(name).append(JSON.stringify(t.materialize(rowId)));
+    // A table with NO i64/decimal/json field takes the fast JSON.stringify path (byte-identical to
+    // before this slice); otherwise the type-aware serializer splices RawNum/RawJson fragments.
+    const materialized = t.materialize(rowId);
+    const json = this.hasRawField.get(name) ? serializeRow(materialized) : JSON.stringify(materialized);
+    this.arena(name).append(json);
     // A write to this type invalidates every cached response for it (no stale serve). Predicate-
     // aware partial invalidation is a later optimization; for this slice we drop the whole type.
     this.bus.publish(name);
@@ -238,4 +262,33 @@ export class Engine {
     const rowId = this.table(name).rowIdByEq('id', id);
     return rowId === undefined ? null : this.respondOne(name, rowId);
   }
+}
+
+/**
+ * Type-aware single-row JSON serializer for a materialized row that may contain {@link RawNum} /
+ * {@link RawJson} markers (an i64 / decimal-as-number / json field). It iterates the object's own keys
+ * IN ORDER and concatenates the SAME segments `JSON.stringify` would emit — no spaces, `:`/`,`
+ * separators, keys via `JSON.stringify(key)` — so for an object with no markers it is byte-identical
+ * to `JSON.stringify`. A marker is spliced specially:
+ *
+ *   - {@link RawNum}: `.raw` UNQUOTED (so `"qty":9223372036854775807`, an exact JSON number, not a
+ *     lossy double and not a quoted string).
+ *   - {@link RawJson}: `.raw` VERBATIM (no quotes, no re-escape) so nested integers > 2^53 and object
+ *     key order survive byte-exact.
+ *
+ * Each marker is spliced at its own field position independently (N json/i64 fields all handled), and
+ * there is NO placeholder/string-replace step (collision-free by construction).
+ */
+function serializeRow(row: Record<string, unknown>): string {
+  let out = '{';
+  let first = true;
+  for (const key of Object.keys(row)) {
+    if (!first) out += ',';
+    first = false;
+    out += JSON.stringify(key) + ':';
+    const v = row[key];
+    if (v instanceof RawNum || v instanceof RawJson) out += v.raw;
+    else out += JSON.stringify(v); // a plain value, incl. `null` -> the literal `null`.
+  }
+  return out + '}';
 }

@@ -83,5 +83,10 @@ function coerce(name: string, type: ColumnType, v: unknown): unknown {
       if (Number.isNaN(d.getTime())) throw new BodyParseError(`field "${name}" is not a valid date`);
       return d;
     }
+    // i64 / decimal / json are not in the article schema; this write path is article-only. A future
+    // dynamic-content write of one of these types must fail LOUDLY here rather than silently return
+    // undefined (type-stripping does not typecheck, so a missing arm is a runtime hole).
+    default:
+      throw new BodyParseError(`field "${name}" has unsupported write type "${type}"`);
   }
 }

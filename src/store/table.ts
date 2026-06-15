@@ -1,7 +1,13 @@
 import { Bitset } from './bitset.ts';
 import {
   coerceDate,
+  coerceDecimal,
+  coerceI64,
   createColumn,
+  formatDecimal,
+  I64Column,
+  RawJson,
+  RawNum,
   StringColumn,
   TextColumn,
   type Column,
@@ -15,6 +21,15 @@ import { SortedIndex, type SortDir } from './sorted-index.ts';
 export interface FieldDef {
   name: string;
   type: ColumnType;
+  /** Fixed scale for a `decimal` field (the column stores `round(value * 10^scale)`). Ignored otherwise. */
+  scale?: number;
+  /**
+   * Total significant digits for a `decimal` field (the integer-part cap is `precision - scale`).
+   * Threaded so the RAM engine rejects an out-of-precision value exactly as Postgres (22003) does —
+   * without it the only backstop is the int64 range, which permits up to 18 digits regardless of the
+   * declared `numeric(p,s)`. Ignored for non-decimal fields.
+   */
+  precision?: number;
 }
 
 export interface Predicate {
@@ -103,7 +118,7 @@ export class Table {
   constructor(fields: FieldDef[]) {
     this.fields = fields;
     this.columns = new Map();
-    for (const f of fields) this.columns.set(f.name, createColumn(f.type));
+    for (const f of fields) this.columns.set(f.name, createColumn(f.type, f.scale, f.precision));
   }
 
   column(name: string): Column {
@@ -124,6 +139,7 @@ export class Table {
    */
   createEqIndex(field: string): void {
     const col = this.column(field);
+    if (col.type === 'json') throw new Error(`json fields are not eq-indexable, "${field}" is json`);
     const idx = new EqIndex(col.type === 'bool');
     for (let r = 0; r < this.rowCount; r++) idx.add(col.at(r), r);
     this.eqIndexes.set(field, idx);
@@ -167,14 +183,21 @@ export class Table {
   }
 
   /**
-   * Sorted index for numeric/temporal range filters and ORDER BY. Numeric ('i32'/'f64') or
-   * 'date' fields only — a date column is an f64 epoch-ms column under the hood, so the same
-   * order-preserving radix key and binary search apply unchanged (the f64 key path handles it).
+   * Sorted index for numeric/temporal range filters and ORDER BY. Numeric ('i32'/'f64'), 'date',
+   * 'i64' or 'decimal' fields only — a date column is an f64 epoch-ms column under the hood (the f64
+   * radix key handles it); i64/decimal use an int64-exact key path (the BigInt64Array, sign-bit-flip
+   * key) so a mantissa above 2^53 is never coerced to f64. json/string/text/bool stay rejected.
    */
   createSortedIndex(field: string): void {
     const col = this.column(field);
-    if (col.type !== 'i32' && col.type !== 'f64' && col.type !== 'date') {
-      throw new Error(`sorted index requires a numeric or date field, "${field}" is ${col.type}`);
+    if (
+      col.type !== 'i32' &&
+      col.type !== 'f64' &&
+      col.type !== 'date' &&
+      col.type !== 'i64' &&
+      col.type !== 'decimal'
+    ) {
+      throw new Error(`sorted index requires a numeric, date, i64, or decimal field, "${field}" is ${col.type}`);
     }
     this.sortedIndexes.set(field, new SortedIndex());
   }
@@ -194,10 +217,16 @@ export class Table {
       const raw = present ? row[f.name] : undefined;
       const isNull = !present || raw === null || raw === undefined;
       const value = isNull ? this.sentinel(f.type) : raw;
-      this.columns.get(f.name)!.push(value);
+      const col = this.columns.get(f.name)!;
+      const at = col.push(value);
       if (isNull) this.setNull(f.name, rowId);
       const eq = this.eqIndexes.get(f.name);
-      if (eq !== undefined) eq.add(value, rowId);
+      // Index the column's CANONICAL stored value, not the raw input: a decimal '1.50' / '1.5' /
+      // Number 1.5 all push to the same mantissa, and the query side probes by that mantissa. Feeding
+      // the raw value would bucket by its string/Number identity and silently disagree with the scan
+      // (and with the createEqIndex backfill, which also reads col.at(r)). For a NULL row this re-reads
+      // the sentinel the column stored (0n / '' / 0); the null bit still excludes it from results.
+      if (eq !== undefined) eq.add(col.at(at), rowId);
       const sorted = this.sortedIndexes.get(f.name);
       if (sorted !== undefined) sorted.markDirty();
     }
@@ -221,6 +250,16 @@ export class Table {
         return ''; // interns to a reserved code; the null bit is what marks it NULL
       case 'text':
         return ''; // stores an empty UTF-8 slice; the null bit is what marks it NULL
+      case 'i64':
+      case 'decimal':
+        // A BigInt64Array stores the exact mantissa; the sentinel is the bigint 0n (a real value 0),
+        // harmless because the null bit — not the bytes — excludes the row from every comparison.
+        return 0n;
+      case 'json':
+        // A valid JSON literal so the validity gate passes; the null bit (not these bytes) marks NULL,
+        // and materialize surfaces the row as `null` regardless. (SQL NULL vs the JSON literal `null`
+        // are disambiguated by the null bit: a real JSON `null` value has its bit clear.)
+        return 'null';
     }
   }
 
@@ -338,26 +377,37 @@ export class Table {
     if (p.op === 'between') {
       const sorted = this.sortedIndexes.get(p.field);
       if (sorted !== undefined) {
-        // For a date column the bounds may be Date / ISO / number — coerce them to the same
-        // canonical epoch-ms the column stored, so the binary search compares like with like.
-        const isDate = this.column(p.field).type === 'date';
+        const col = this.column(p.field);
         const rawPair = p.value as [unknown, unknown];
-        const lo = isDate ? coerceDate(rawPair[0]) : (rawPair[0] as number);
-        const hi = isDate ? coerceDate(rawPair[1]) : (rawPair[1] as number);
-        sorted.ensureBuilt(this.column(p.field), this.rowCount);
+        sorted.ensureBuilt(col, this.rowCount);
         // Selectivity guard: a wide range matching > ~50% of rows does O(k) SCATTERED `out.set`
-        // (random in row-id space), which loses to NumericColumn.scan's branch-predictable
-        // sequential O(n) pass. countRange is already O(log n) from the bounds, so estimating is
-        // free. Above half the rows, fall back to the linear scan.
-        if (sorted.countRangeBetween(lo, hi) * 2 > this.rowCount) {
-          this.column(p.field).scan('between', p.value, out);
+        // (random in row-id space), which loses to the column scan's branch-predictable sequential
+        // O(n) pass. countRange is O(log n) from the bounds, so estimating is free.
+        if (col instanceof I64Column) {
+          // int64-exact: coerce both bounds to the column's bigint mantissa, compare on bigint.
+          const lo = this.i64Bound(col, rawPair[0]);
+          const hi = this.i64Bound(col, rawPair[1]);
+          if (sorted.countRangeBetweenI64(lo, hi) * 2 > this.rowCount) {
+            col.scan('between', p.value, out);
+          } else {
+            sorted.fillBitsetBetweenI64(lo, hi, out);
+          }
         } else {
-          sorted.fillBitsetBetween(lo, hi, out);
+          // For a date column the bounds may be Date / ISO / number — coerce them to the same
+          // canonical epoch-ms the column stored, so the binary search compares like with like.
+          const isDate = col.type === 'date';
+          const lo = isDate ? coerceDate(rawPair[0]) : (rawPair[0] as number);
+          const hi = isDate ? coerceDate(rawPair[1]) : (rawPair[1] as number);
+          if (sorted.countRangeBetween(lo, hi) * 2 > this.rowCount) {
+            col.scan('between', p.value, out);
+          } else {
+            sorted.fillBitsetBetween(lo, hi, out);
+          }
         }
         this.excludeNulls(p.field, out);
         return;
       }
-      // No sorted index: one-pass NumericColumn.scan checking lo <= x <= hi.
+      // No sorted index: one-pass column scan checking lo <= x <= hi.
       this.column(p.field).scan('between', p.value, out);
       this.excludeNulls(p.field, out);
       return;
@@ -365,17 +415,26 @@ export class Table {
     if (isRangeOp(p.op)) {
       const sorted = this.sortedIndexes.get(p.field);
       if (sorted !== undefined) {
-        // A date column stores epoch-ms; coerce a Date / ISO / number bound to the same ms so the
-        // sorted-index probe and the scan-fallback compare against the identical canonical value.
-        const isDate = this.column(p.field).type === 'date';
-        const bound = isDate ? coerceDate(p.value) : (p.value as number);
-        sorted.ensureBuilt(this.column(p.field), this.rowCount);
-        // Same >50% selectivity guard as $between: a non-selective range scatters more than it
-        // saves, so fall back to the sequential scan when the slice exceeds half the rows.
-        if (sorted.countRange(p.op, bound) * 2 > this.rowCount) {
-          this.column(p.field).scan(p.op, p.value, out);
+        const col = this.column(p.field);
+        sorted.ensureBuilt(col, this.rowCount);
+        // Same >50% selectivity guard as $between: a non-selective range scatters more than it saves.
+        if (col instanceof I64Column) {
+          const bound = this.i64Bound(col, p.value);
+          if (sorted.countRangeI64(p.op, bound) * 2 > this.rowCount) {
+            col.scan(p.op, p.value, out);
+          } else {
+            sorted.fillBitsetI64(p.op, bound, out);
+          }
         } else {
-          sorted.fillBitset(p.op, bound, out);
+          // A date column stores epoch-ms; coerce a Date / ISO / number bound to the same ms so the
+          // sorted-index probe and the scan-fallback compare against the identical canonical value.
+          const isDate = col.type === 'date';
+          const bound = isDate ? coerceDate(p.value) : (p.value as number);
+          if (sorted.countRange(p.op, bound) * 2 > this.rowCount) {
+            col.scan(p.op, p.value, out);
+          } else {
+            sorted.fillBitset(p.op, bound, out);
+          }
         }
         this.excludeNulls(p.field, out);
         return;
@@ -383,6 +442,18 @@ export class Table {
     }
     this.column(p.field).scan(p.op, p.value, out);
     this.excludeNulls(p.field, out);
+  }
+
+  /**
+   * Resolve a range/between bound to an `I64Column`'s canonical bigint mantissa, matching exactly what
+   * the column's own scan resolves (the SAME `coerceI64`/`coerceDecimal` the parser uses), so the
+   * sorted-index binary search and the scan fallback agree byte-for-byte. A `decimal` predicate value
+   * is usually a pre-coerced mantissa bigint (from the parser) — accepted verbatim; otherwise coerced.
+   */
+  private i64Bound(col: I64Column, value: unknown): bigint {
+    if (col.type === 'i64') return coerceI64(value);
+    if (typeof value === 'bigint') return value;
+    return coerceDecimal(value, col.scale, col.precision);
   }
 
   /**
@@ -577,8 +648,12 @@ export class Table {
     if (p.op === 'between') {
       const sorted = this.sortedIndexes.get(p.field);
       if (sorted === undefined || sorted.isDirty(this.rowCount)) return null;
-      const isDate = this.column(p.field).type === 'date';
+      const col = this.column(p.field);
       const raw = p.value as [unknown, unknown];
+      if (col instanceof I64Column) {
+        return sorted.countRangeBetweenI64(this.i64Bound(col, raw[0]), this.i64Bound(col, raw[1]));
+      }
+      const isDate = col.type === 'date';
       const lo = isDate ? coerceDate(raw[0]) : (raw[0] as number);
       const hi = isDate ? coerceDate(raw[1]) : (raw[1] as number);
       return sorted.countRangeBetween(lo, hi);
@@ -586,7 +661,11 @@ export class Table {
     if (isRangeOp(p.op)) {
       const sorted = this.sortedIndexes.get(p.field);
       if (sorted === undefined || sorted.isDirty(this.rowCount)) return null;
-      const isDate = this.column(p.field).type === 'date';
+      const col = this.column(p.field);
+      if (col instanceof I64Column) {
+        return sorted.countRangeI64(p.op, this.i64Bound(col, p.value));
+      }
+      const isDate = col.type === 'date';
       const bound = isDate ? coerceDate(p.value) : (p.value as number);
       return sorted.countRange(p.op, bound);
     }
@@ -650,8 +729,10 @@ export class Table {
     const keys = sort.map((k) => ({ col: this.column(k.field), sign: k.dir === 'desc' ? -1 : 1 }));
     return (a, b) => {
       for (const k of keys) {
-        const va = k.col.at(a) as number | string | boolean;
-        const vb = k.col.at(b) as number | string | boolean;
+        // bigint widens the cast for an i64/decimal lead key; BigInt `<`/`>` order is exact. (A json
+        // column is never sortable — the parser rejects it — so it never reaches the comparator.)
+        const va = k.col.at(a) as number | string | boolean | bigint;
+        const vb = k.col.at(b) as number | string | boolean | bigint;
         if (va < vb) return -k.sign;
         if (va > vb) return k.sign;
       }
@@ -672,9 +753,31 @@ export class Table {
         continue;
       }
       const col = this.columns.get(f.name)!;
-      // A date column stores epoch-ms; round-trip it back to a stable, documented ISO-8601 UTC
-      // string (the same form `coerceDate` accepts), so materialize ∘ coerce is the identity.
-      out[f.name] = col.type === 'date' ? new Date(col.at(row) as number).toISOString() : col.at(row);
+      // Type-aware rendering. The serializer (engine.ts) recognizes the RawNum/RawJson markers and
+      // splices their bytes; every other value goes through plain JSON.stringify.
+      switch (col.type) {
+        case 'date':
+          // epoch-ms -> a stable ISO-8601 UTC string (the form `coerceDate` accepts: materialize ∘ coerce = id).
+          out[f.name] = new Date(col.at(row) as number).toISOString();
+          break;
+        case 'i64':
+          // An unquoted JSON integer literal — JSON.stringify(BigInt) THROWS, and Strapi emits a bigint
+          // as a JSON number, so quoting would change the contract. RawNum splices it verbatim.
+          out[f.name] = new RawNum((col.at(row) as bigint).toString());
+          break;
+        case 'decimal':
+          // A quoted decimal STRING (formatDecimal, exact), matching the Postgres source-of-truth
+          // representation (postgres.js surfaces `numeric` as a string) — JSON.stringify quotes it.
+          out[f.name] = formatDecimal(col.at(row) as bigint, (col as I64Column).scale);
+          break;
+        case 'json':
+          // The verbatim raw JSON fragment — spliced unchanged so nested integers > 2^53 and object key
+          // order survive byte-exact (NEVER re-parsed/re-stringified).
+          out[f.name] = new RawJson(col.at(row) as string);
+          break;
+        default:
+          out[f.name] = col.at(row);
+      }
     }
     return out;
   }

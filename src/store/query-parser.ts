@@ -1,4 +1,4 @@
-import { coerceDate, type ColumnType, type ScanOp } from './column.ts';
+import { coerceDate, coerceDecimal, coerceI64, type ColumnType, type ScanOp } from './column.ts';
 import type { FieldDef, FilterNode, Predicate, QueryOptions, SortKey } from './table.ts';
 import type { SortDir } from './sorted-index.ts';
 
@@ -109,6 +109,18 @@ const LOGICAL_KEYS = new Set(['$and', '$or', '$not']);
 export type ParamNode = string | ParamNode[] | { [k: string]: ParamNode };
 
 /**
+ * A schema entry: the field's column type plus, for `decimal`, its fixed `scale`. The scale must be
+ * threaded so a decimal predicate value coerces to the SAME scaled-int64 mantissa the column stored —
+ * a `Map<string, ColumnType>` (the pre-step-3 shape) would lose it and silently mis-coerce.
+ */
+export interface SchemaEntry {
+  type: ColumnType;
+  scale?: number;
+  precision?: number;
+}
+export type Schema = Map<string, SchemaEntry>;
+
+/**
  * Split a bracket key like `filters[$and][0][status][$eq]` into its path segments
  * `['filters', '$and', '0', 'status', '$eq']`. Rejects malformed brackets (unbalanced, empty
  * `[]` in the middle, stray characters) so a typo can't silently drop a clause.
@@ -201,10 +213,11 @@ function asOrderedList(node: ParamNode): ParamNode[] {
 
 // --- value coercion per field type ------------------------------------------
 
-function coerceScalar(field: string, type: ColumnType, op: ScanOp, raw: ParamNode): unknown {
+function coerceScalar(field: string, entry: SchemaEntry, op: ScanOp, raw: ParamNode): unknown {
   if (typeof raw !== 'string') {
     throw new QueryParseError(`filter ${field} $${op}: expected a scalar value, got a nested structure`);
   }
+  const type = entry.type;
   switch (type) {
     case 'i32':
     case 'f64': {
@@ -233,6 +246,29 @@ function coerceScalar(field: string, type: ColumnType, op: ScanOp, raw: ParamNod
         throw new QueryParseError(`filter ${field}: ${(e as Error).message}`);
       }
     }
+    case 'i64': {
+      // Coerce the wire string to an exact int64 bigint (the column's canonical form). A float /
+      // out-of-range / non-integer string is a parse error, not a silent miss.
+      try {
+        return coerceI64(raw);
+      } catch (e) {
+        throw new QueryParseError(`filter ${field}: ${(e as Error).message}`);
+      }
+    }
+    case 'decimal': {
+      // Coerce to the SAME scaled-int64 mantissa the column stored (using the field's threaded scale
+      // and precision), so a decimal `$eq`/range matches exactly. An excess-fraction / out-of-precision /
+      // malformed value throws — agreeing with what the column's own push would reject.
+      try {
+        return coerceDecimal(raw, entry.scale ?? 0, entry.precision);
+      } catch (e) {
+        throw new QueryParseError(`filter ${field}: ${(e as Error).message}`);
+      }
+    }
+    case 'json':
+      // Unreachable: parseLeafOp rejects every op on a json field before dispatch. Kept for the
+      // exhaustive switch so type-stripping never silently returns undefined for a json arm.
+      throw new QueryParseError(`field "${field}" is json; filtering on json fields is not supported`);
     case 'string':
     case 'text':
       return raw;
@@ -240,16 +276,16 @@ function coerceScalar(field: string, type: ColumnType, op: ScanOp, raw: ParamNod
 }
 
 /** Split a `$in`/`$notIn` value: either a `[]`-shaped param array or a comma-separated string. */
-function coerceSet(field: string, type: ColumnType, op: ScanOp, raw: ParamNode): unknown[] {
+function coerceSet(field: string, entry: SchemaEntry, op: ScanOp, raw: ParamNode): unknown[] {
   let parts: ParamNode[];
   if (Array.isArray(raw)) parts = raw;
   else if (typeof raw !== 'string') parts = asOrderedList(raw);
   else parts = raw === '' ? [] : raw.split(',');
-  return parts.map((p) => coerceScalar(field, type, op, p));
+  return parts.map((p) => coerceScalar(field, entry, op, p));
 }
 
 /** Coerce a `$between` value: exactly two comma/array elements, each per-type-coerced. */
-function coerceBetween(field: string, type: ColumnType, raw: ParamNode): [unknown, unknown] {
+function coerceBetween(field: string, entry: SchemaEntry, raw: ParamNode): [unknown, unknown] {
   let parts: ParamNode[];
   if (Array.isArray(raw)) parts = raw;
   else if (typeof raw === 'string') parts = raw.split(',');
@@ -257,7 +293,7 @@ function coerceBetween(field: string, type: ColumnType, raw: ParamNode): [unknow
   if (parts.length !== 2) {
     throw new QueryParseError(`filter ${field} $between: expected exactly 2 bounds, got ${parts.length}`);
   }
-  return [coerceScalar(field, type, 'between', parts[0]!), coerceScalar(field, type, 'between', parts[1]!)];
+  return [coerceScalar(field, entry, 'between', parts[0]!), coerceScalar(field, entry, 'between', parts[1]!)];
 }
 
 /** The `$null`/`$notNull` presence flag must be the literal `true`. */
@@ -274,13 +310,19 @@ function coerceNullFlag(field: string, op: ScanOp, raw: ParamNode): void {
  * type-compatible, and the value coerces. Returns the engine {@link FilterNode} leaf.
  */
 function parseLeafOp(
-  schema: Map<string, ColumnType>,
+  schema: Schema,
   field: string,
   opToken: string,
   raw: ParamNode,
 ): Predicate {
-  const type = schema.get(field);
-  if (type === undefined) throw new QueryParseError(`unknown field "${field}"`);
+  const entry = schema.get(field);
+  if (entry === undefined) throw new QueryParseError(`unknown field "${field}"`);
+  const type = entry.type;
+  // json is NOT filterable: reject EVERY op before dispatch, so a `$eq`/`$gt`/`$contains` on a json
+  // field is a clear parse error (never a silent 200 with empty data, never a column scan that throws).
+  if (type === 'json') {
+    throw new QueryParseError(`field "${field}" is json; filtering on json fields is not supported`);
+  }
   const op = OP_MAP[opToken];
   if (op === undefined) throw new QueryParseError(`unknown operator "${opToken}" on field "${field}"`);
   if (STRING_ONLY_OPS.has(op) && type !== 'string' && type !== 'text') {
@@ -291,19 +333,19 @@ function parseLeafOp(
     return { field, op, value: true };
   }
   if (op === 'between') {
-    return { field, op, value: coerceBetween(field, type, raw) };
+    return { field, op, value: coerceBetween(field, entry, raw) };
   }
   if (SET_OPS.has(op)) {
-    return { field, op, value: coerceSet(field, type, op, raw) };
+    return { field, op, value: coerceSet(field, entry, op, raw) };
   }
-  return { field, op, value: coerceScalar(field, type, op, raw) };
+  return { field, op, value: coerceScalar(field, entry, op, raw) };
 }
 
 /**
  * A field-level filter object `{ $eq: 1, $gt: 0 }` (multiple ops on one field AND together) or the
  * Strapi short form `filters[field]=value` (bare value = `$eq`). Produces one leaf or an AND group.
  */
-function parseFieldFilters(schema: Map<string, ColumnType>, field: string, node: ParamNode): FilterNode {
+function parseFieldFilters(schema: Schema, field: string, node: ParamNode): FilterNode {
   if (typeof node === 'string') {
     // Short form: `filters[field]=value` means `$eq`.
     return { leaf: parseLeafOp(schema, field, '$eq', node) };
@@ -325,7 +367,7 @@ function parseFieldFilters(schema: Map<string, ColumnType>, field: string, node:
  * keys (each a field-level operator object). Multiple sibling keys at one level AND together
  * (Strapi's implicit-AND of co-located conditions).
  */
-function parseFilterObject(schema: Map<string, ColumnType>, node: ParamNode): FilterNode {
+function parseFilterObject(schema: Schema, node: ParamNode): FilterNode {
   if (typeof node === 'string' || Array.isArray(node)) {
     throw new QueryParseError('filters must be an object of fields / logical operators');
   }
@@ -371,7 +413,7 @@ function parseSort(node: ParamNode): SortKey[] {
 }
 
 /** Validate that every sort field exists in the schema (a misspelling is rejected, not ignored). */
-function validateSortFields(schema: Map<string, ColumnType>, sort: SortKey[]): void {
+function validateSortFields(schema: Schema, sort: SortKey[]): void {
   for (const s of sort) {
     if (!schema.has(s.field)) throw new QueryParseError(`unknown sort field "${s.field}"`);
   }
@@ -426,7 +468,7 @@ function parsePagination(node: ParamNode): { offset?: number; limit?: number } {
 }
 
 /** `fields=a,b,c` (or `fields[0]=a&fields[1]=b`) -> validated field-name list. */
-function parseFields(schema: Map<string, ColumnType>, node: ParamNode): string[] {
+function parseFields(schema: Schema, node: ParamNode): string[] {
   const tokens = typeof node === 'string' ? node.split(',') : asOrderedList(node);
   const out: string[] = [];
   for (const tok of tokens) {
@@ -486,8 +528,8 @@ function parsePopulate(node: ParamNode): PopulatePlan {
  * rejected.
  */
 export function parseQuery(fields: FieldDef[], input: string | { [k: string]: ParamNode }): ParsedQuery {
-  const schema = new Map<string, ColumnType>();
-  for (const f of fields) schema.set(f.name, f.type);
+  const schema: Schema = new Map<string, SchemaEntry>();
+  for (const f of fields) schema.set(f.name, { type: f.type, scale: f.scale, precision: f.precision });
 
   const params = typeof input === 'string' ? parseParams(input) : input;
 
