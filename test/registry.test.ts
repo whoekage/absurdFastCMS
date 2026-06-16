@@ -6,6 +6,7 @@ import { Registry, RegistryError } from '../src/store/registry.ts';
 import { loadType } from '../src/db/load.ts';
 import { Engine } from '../src/store/engine.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
+import { cleanCatalog } from './helpers.ts';
 
 /**
  * REGISTRY SLICE — Registry.build from the real meta tables (no mocks). Proves the runtime source of
@@ -17,18 +18,11 @@ import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
 
-/** Clean-start each test: drop every runtime per-type table + wipe the catalog (never the static `articles`). */
-async function cleanCatalog(): Promise<void> {
-  const tables = await sql<{ table_name: string }[]>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'ct\\_%'`;
-  for (const { table_name } of tables) await sql.unsafe(`DROP TABLE IF EXISTS "${table_name}" CASCADE`);
-  await sql`TRUNCATE content_type_fields, content_types RESTART IDENTITY CASCADE`;
-}
-
 before(async () => {
   db = await createFileDatabase('reg');
   sql = db.sql;
 });
-beforeEach(cleanCatalog);
+beforeEach(() => cleanCatalog(sql));
 after(async () => {
   // Guard so a failing before() (db/sql undefined) surfaces the real error, not a deref of undefined.
   if (sql) await sql.end();
