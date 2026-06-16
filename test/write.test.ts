@@ -8,6 +8,7 @@ import { seedArticleIfAbsent } from '../src/http/server.ts';
 import { createContentType, getContentType, dropContentType } from '../src/db/content-type-repo.ts';
 import { createServer, type ListenToken } from '../src/http/app.ts';
 import type { Engine } from '../src/store/engine.ts';
+import { withCatalogRead, withCatalogWrite } from './catalog-lock.ts';
 
 /**
  * WRITE-PATH SLICE — POST/PUT/DELETE end-to-end over a REAL uWS server backed by a REAL Postgres
@@ -48,14 +49,16 @@ async function seedRows(): Promise<void> {
 
 before(async () => {
   await runMigrations();
-  await seedArticleIfAbsent(sql);
-  // A SECOND content-type to prove per-type cache isolation on an article write.
-  if (await getContentType(sql, 'widget')) await dropContentType(sql, 'widget');
-  await createContentType(sql, { apiId: 'widget', fields: [{ name: 'label', cmsType: 'string', options: { nullable: false } }] });
-  await sql`INSERT INTO ct_widget (label) VALUES ('w1')`;
+  await withCatalogWrite(sql, async () => {
+    await seedArticleIfAbsent(sql);
+    // A SECOND content-type to prove per-type cache isolation on an article write.
+    if (await getContentType(sql, 'wr_widget')) await dropContentType(sql, 'wr_widget');
+    await createContentType(sql, { apiId: 'wr_widget', fields: [{ name: 'label', cmsType: 'string', options: { nullable: false } }] });
+  });
+  await sql`INSERT INTO ct_wr_widget (label) VALUES ('w1')`;
   await seedRows();
   const store = new PostgresStore(sql);
-  const loaded = await store.loadWithRegistry();
+  const loaded = await withCatalogRead(sql, () => store.loadWithRegistry());
   engine = loaded.engine;
   const server = createServer(engine, store, loaded.registry);
   close = server.close;
@@ -67,7 +70,7 @@ before(async () => {
 after(async () => {
   if (token) close(token);
   await sql`TRUNCATE ct_article RESTART IDENTITY CASCADE`;
-  await dropContentType(sql, 'widget');
+  await withCatalogWrite(sql, () => dropContentType(sql, 'wr_widget'));
   await sql.end();
 });
 
@@ -172,32 +175,34 @@ test('POST with an over-length string -> a clean 400 (length guard, not a PG 220
 });
 
 test('system-fields-only content-type: POST {} -> 201 via DEFAULT VALUES, GET sees it, DELETE removes it', async () => {
-  if (await getContentType(sql, 'blank')) await dropContentType(sql, 'blank');
-  await createContentType(sql, { apiId: 'blank', fields: [] });
+  await withCatalogWrite(sql, async () => {
+    if (await getContentType(sql, 'wr_blank')) await dropContentType(sql, 'wr_blank');
+    await createContentType(sql, { apiId: 'wr_blank', fields: [] });
+  });
   // Rebuild a server over a registry that includes `blank` (fresh load picks up the new type).
   const store = new PostgresStore(sql);
-  const loaded = await store.loadWithRegistry();
+  const loaded = await withCatalogRead(sql, () => store.loadWithRegistry());
   const server = createServer(loaded.engine, store, loaded.registry);
   const port = await freePort();
   const tk = await server.listen(port);
   const b = `http://127.0.0.1:${port}`;
   try {
-    const res = await fetch(`${b}/blank`, j({}));
+    const res = await fetch(`${b}/wr_blank`, j({}));
     const payload = await res.json();
     assert.equal(res.status, 201, JSON.stringify(payload));
     const created = payload.data;
     assert.deepEqual(Object.keys(created).sort(), ['created_at', 'id', 'updated_at']);
     assert.equal(typeof created.id, 'number');
 
-    const got = await (await fetch(`${b}/blank/${created.id}`)).json();
+    const got = await (await fetch(`${b}/wr_blank/${created.id}`)).json();
     assert.deepEqual(got.data, created);
 
-    const del = await fetch(`${b}/blank/${created.id}`, { method: 'DELETE' });
+    const del = await fetch(`${b}/wr_blank/${created.id}`, { method: 'DELETE' });
     assert.equal(del.status, 200);
-    assert.equal((await fetch(`${b}/blank/${created.id}`)).status, 404);
+    assert.equal((await fetch(`${b}/wr_blank/${created.id}`)).status, 404);
   } finally {
     server.close(tk);
-    await dropContentType(sql, 'blank');
+    await withCatalogWrite(sql, () => dropContentType(sql, 'wr_blank'));
   }
 });
 
@@ -210,7 +215,7 @@ test('the rebuild path warms the type indexes (no dirty index after a write)', a
 
 test('a write to article does NOT invalidate a sibling type cache (per-type invalidation)', async () => {
   // Warm widget's list cache (first GET is a MISS that assembles + caches the response buffer).
-  const w1 = await (await fetch(`${base}/widget`)).json();
+  const w1 = await (await fetch(`${base}/wr_widget`)).json();
   assert.equal(w1.data.length, 1);
   // OBSERVE the cache directly: snapshot the hit counter. (Total `size` would also be perturbed by the
   // article write dropping its OWN entries, which is correct per-type behavior — so we pin widget via
@@ -225,7 +230,7 @@ test('a write to article does NOT invalidate a sibling type cache (per-type inva
 
   // The second widget GET is therefore served from cache — a HIT (counter incremented), NOT a re-assemble.
   // This is what actually pins per-type invalidation: an article write left widget's cache entry alive.
-  const w2 = await (await fetch(`${base}/widget`)).json();
+  const w2 = await (await fetch(`${base}/wr_widget`)).json();
   assert.equal(engine.cache.hits, hitsBefore + 1, 'sibling widget read after an article write must be a cache HIT');
   assert.deepEqual(w2.data, w1.data);
 });

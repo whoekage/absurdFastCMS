@@ -6,6 +6,7 @@ import { Registry } from '../src/store/registry.ts';
 import { DetachedTable, Engine } from '../src/store/engine.ts';
 import { insertEntry, EntryWriteError } from '../src/db/entry-repo.ts';
 import { createContentType, getContentType, dropContentType } from '../src/db/content-type-repo.ts';
+import { withCatalogWrite } from './catalog-lock.ts';
 
 /**
  * Pins two backstops the validator normally front-runs, against REAL Postgres (no mocks):
@@ -18,14 +19,16 @@ const sql = createSql();
 
 before(async () => {
   await runMigrations();
-  if (await getContentType(sql, 'gadget')) await dropContentType(sql, 'gadget');
-  await createContentType(sql, { apiId: 'gadget', fields: [{ name: 'code', cmsType: 'string', options: { nullable: false } }] });
-  // A real UNIQUE constraint on a user column so a duplicate insert raises 23505 through the repo.
-  await sql`ALTER TABLE ct_gadget ADD CONSTRAINT ct_gadget_code_uniq UNIQUE (code)`;
+  await withCatalogWrite(sql, async () => {
+    if (await getContentType(sql, 'erb_gadget')) await dropContentType(sql, 'erb_gadget');
+    await createContentType(sql, { apiId: 'erb_gadget', fields: [{ name: 'code', cmsType: 'string', options: { nullable: false } }] });
+    // A real UNIQUE constraint on a user column so a duplicate insert raises 23505 through the repo.
+    await sql`ALTER TABLE ct_erb_gadget ADD CONSTRAINT ct_erb_gadget_code_uniq UNIQUE (code)`;
+  });
 });
 
 after(async () => {
-  await dropContentType(sql, 'gadget');
+  await withCatalogWrite(sql, () => dropContentType(sql, 'erb_gadget'));
   await sql.end();
 });
 
@@ -37,7 +40,7 @@ test('Engine.replaceType throws on a type that is not defined', () => {
 
 test('a real 23505 unique violation maps to a generic EntryWriteError (no SQL/constraint leak)', async () => {
   const registry = await Registry.build(sql);
-  const def = registry.get('gadget')!;
+  const def = registry.get('erb_gadget')!;
   await insertEntry(sql, def, { code: 'dup' });
   await assert.rejects(
     () => insertEntry(sql, def, { code: 'dup' }),

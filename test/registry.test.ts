@@ -6,6 +6,7 @@ import { createContentType } from '../src/db/content-type-repo.ts';
 import { Registry, RegistryError } from '../src/store/registry.ts';
 import { loadType } from '../src/db/load.ts';
 import { Engine } from '../src/store/engine.ts';
+import { withCatalogWrite } from './catalog-lock.ts';
 
 /**
  * REGISTRY SLICE — Registry.build from the real meta tables (no mocks). Proves the runtime source of
@@ -17,10 +18,11 @@ import { Engine } from '../src/store/engine.ts';
 const sql = createSql();
 
 async function cleanCatalog(): Promise<void> {
-  const tables = await sql<{ table_name: string }[]>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'ct\\_%'`;
-  for (const { table_name } of tables) await sql.unsafe(`DROP TABLE IF EXISTS "${table_name}" CASCADE`);
-  await sql`DELETE FROM content_type_fields`;
-  await sql`DELETE FROM content_types`;
+  await withCatalogWrite(sql, async () => {
+    const tables = await sql<{ table_name: string }[]>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'ct\\_reg\\_%'`;
+    for (const { table_name } of tables) await sql.unsafe(`DROP TABLE IF EXISTS "${table_name}" CASCADE`);
+    await sql`DELETE FROM content_types WHERE api_id LIKE 'reg\\_%'`;
+  });
 }
 
 before(async () => {
@@ -35,7 +37,7 @@ after(async () => {
 
 test('build: system fields prepended in order, engine types 1:1, decimal scale/precision (incl scale 0), index plan, writable/required', async () => {
   await createContentType(sql, {
-    apiId: 'kitchen',
+    apiId: 'reg_kitchen',
     fields: [
       { name: 'name', cmsType: 'string', options: { length: 50, nullable: false } },
       { name: 'big', cmsType: 'biginteger', options: { nullable: true } },
@@ -51,7 +53,7 @@ test('build: system fields prepended in order, engine types 1:1, decimal scale/p
   });
 
   const reg = await Registry.build(sql);
-  const def = reg.get('kitchen')!;
+  const def = reg.get('reg_kitchen')!;
   assert.ok(def);
 
   // System fields first, in DDL order, then user fields by sort.
@@ -96,19 +98,19 @@ test('build: system fields prepended in order, engine types 1:1, decimal scale/p
 });
 
 test('build: a `time` field is rejected with RegistryError (engineType i32 but pg returns a string)', async () => {
-  await createContentType(sql, { apiId: 'sched', fields: [{ name: 'at', cmsType: 'time', options: { nullable: true } }] });
+  await createContentType(sql, { apiId: 'reg_sched', fields: [{ name: 'at', cmsType: 'time', options: { nullable: true } }] });
   await assert.rejects(() => Registry.build(sql), RegistryError);
 });
 
 test('a system-fields-only type builds a 3-field def and loads to a valid 0-row table', async () => {
-  await createContentType(sql, { apiId: 'bare', fields: [] });
+  await createContentType(sql, { apiId: 'reg_bare', fields: [] });
   const reg = await Registry.build(sql);
-  const def = reg.get('bare')!;
+  const def = reg.get('reg_bare')!;
   assert.equal(def.fields.length, 3);
   assert.equal(def.writable.length, 0);
 
   const engine = new Engine();
   await loadType(sql, engine, def);
-  assert.equal(engine.rowCount('bare'), 0);
-  assert.equal(engine.respondById('bare', 1), null);
+  assert.equal(engine.rowCount('reg_bare'), 0);
+  assert.equal(engine.respondById('reg_bare', 1), null);
 });
