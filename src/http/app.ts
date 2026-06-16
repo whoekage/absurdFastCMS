@@ -5,6 +5,7 @@ import type { PostgresStore } from '../db/postgres-store.ts';
 import { rebuildType } from '../db/load.ts';
 import { handleRequest, errorResponse, type CoreResponse } from './router.ts';
 import { handleWrite, type WriteContext } from './write.ts';
+import { handleContentTypeRequest, type ContentTypeContext } from './content-type-api.ts';
 
 /**
  * uWS-MIGRATION SLICE 1 — the uWebSockets.js HTTP adapter, a THIN transport shim over the
@@ -55,6 +56,7 @@ const STATUS_LINE: Record<number, string> = {
   400: '400 Bad Request',
   404: '404 Not Found',
   405: '405 Method Not Allowed',
+  409: '409 Conflict',
   413: '413 Payload Too Large',
   500: '500 Internal Server Error',
 };
@@ -136,6 +138,47 @@ function handleWriteRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, method: s
   });
 }
 
+/** Which template a builder route is on — drives which getParameter slots to read synchronously. */
+interface CtRouteOpts {
+  /** Read getParameter(0) as `:apiId` (false for the `/content-types` collection). */
+  hasApiId: boolean;
+  /** The literal segment after `:apiId` (`'fields'`), or undefined. */
+  sub?: string;
+  /** Read getParameter(1) as `:name` (the `.../fields/:name` template). */
+  hasName?: boolean;
+}
+
+/**
+ * A CONTENT-TYPE BUILDER route — structurally identical to {@link handleWriteRoute}: capture the
+ * params synchronously, read the body (reusing the {@link MAX_BODY_BYTES} cap -> 413), JSON.parse in a
+ * try/catch -> 400, run the async core, then cork the response. GET/DELETE also drain the body (empty
+ * -> `body=undefined`). An unexpected throw from the core maps to 500 here (no message leak).
+ */
+function handleContentTypeRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, method: string, ctx: ContentTypeContext, opts: CtRouteOpts): void {
+  const apiId = opts.hasApiId ? (req.getParameter(0) ?? '') : undefined;
+  const fieldName = opts.hasName ? (req.getParameter(1) ?? '') : undefined;
+  const { aborted } = readBody(res, (raw) => {
+    void (async () => {
+      if (raw === null) return corkSend(res, aborted, errorResponse(413, 'request body too large'));
+      let body: unknown = undefined;
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8'));
+        } catch {
+          return corkSend(res, aborted, errorResponse(400, 'invalid JSON body'));
+        }
+      }
+      let result: CoreResponse;
+      try {
+        result = await handleContentTypeRequest(ctx, { method, apiId, fieldName, sub: opts.sub, body });
+      } catch {
+        result = errorResponse(500, 'internal error');
+      }
+      corkSend(res, aborted, result);
+    })();
+  });
+}
+
 /**
  * Build a uWS server over `engine`. Construction is SEPARATE from listening so tests build the
  * server once and bind it to a free port chosen by the harness.
@@ -185,6 +228,21 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
         await rebuildType(store.sql, current, def);
       },
     };
+    // CONTENT-TYPE BUILDER (runtime DDL over HTTP) — registered BEFORE the data `/:type` routes. The
+    // `/content-types` prefix can never shadow a real type: '-' is not a legal api_id char, so no
+    // content-type is ever named 'content-types', and uWS matches a static segment over a `:param`.
+    // Wired only here (store + registry present): a read-only server has no builder, so /content-types
+    // falls to any('/*') -> 404. An unsupported verb on a builder path is not a registered (path,verb),
+    // so it also falls to any('/*') -> the read core -> 404 (the spec-permitted method-mismatch handling).
+    const ctCtx: ContentTypeContext = { sql: store.sql, engine: () => current, registry: () => registry };
+    app.post('/content-types', (res, req) => handleContentTypeRoute(res, req, 'POST', ctCtx, { hasApiId: false }));
+    app.get('/content-types', (res, req) => handleContentTypeRoute(res, req, 'GET', ctCtx, { hasApiId: false }));
+    app.get('/content-types/:apiId', (res, req) => handleContentTypeRoute(res, req, 'GET', ctCtx, { hasApiId: true }));
+    app.del('/content-types/:apiId', (res, req) => handleContentTypeRoute(res, req, 'DELETE', ctCtx, { hasApiId: true }));
+    app.post('/content-types/:apiId/fields', (res, req) => handleContentTypeRoute(res, req, 'POST', ctCtx, { hasApiId: true, sub: 'fields' }));
+    app.put('/content-types/:apiId/fields/:name', (res, req) => handleContentTypeRoute(res, req, 'PUT', ctCtx, { hasApiId: true, sub: 'fields', hasName: true }));
+    app.del('/content-types/:apiId/fields/:name', (res, req) => handleContentTypeRoute(res, req, 'DELETE', ctCtx, { hasApiId: true, sub: 'fields', hasName: true }));
+
     app.post('/:type', (res, req) => handleWriteRoute(res, req, 'POST', false, ctx));
     app.put('/:type/:id', (res, req) => handleWriteRoute(res, req, 'PUT', true, ctx));
     app.del('/:type/:id', (res, req) => handleWriteRoute(res, req, 'DELETE', true, ctx));
