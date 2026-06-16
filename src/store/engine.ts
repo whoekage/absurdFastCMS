@@ -1,9 +1,17 @@
-import { Table, type FieldDef, type QueryOptions } from './table.ts';
+import { Table, type FieldDef, type QueryOptions, type KeysetOptions } from './table.ts';
 import { RawJson } from './column.ts';
+import {
+  CursorCodec,
+  InvalidCursorError,
+  type CursorPayload,
+  type SigInput,
+  type SortFieldType,
+} from './cursor-codec.ts';
 import {
   ResponseCache,
   InProcessChangeBus,
   queryKey,
+  filterCanonical,
   type ChangeBus,
   type ResponseCacheOptions,
 } from './response-cache.ts';
@@ -105,6 +113,21 @@ export interface PaginationMeta {
   total: number;
 }
 
+/**
+ * Keyset (cursor) pagination meta. `total`/`pageCount` are present ONLY when `withCount` (free via
+ * the filter bitset popcount). `nextCursor`/`prevCursor` are opaque tokens (null when no further /
+ * preceding page). The offset/page meta shape is unchanged ({@link PaginationMeta}).
+ */
+export interface KeysetPaginationMeta {
+  pageSize: number;
+  total?: number;
+  pageCount?: number;
+  nextCursor: string | null;
+  prevCursor: string | null;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
+
 const HEAD = Buffer.from('{"data":[', 'utf8');
 const COMMA = Buffer.from(',', 'utf8');
 
@@ -123,6 +146,12 @@ export interface EngineOptions {
   bus?: ChangeBus;
   /** Response-cache tuning (caps, enabled). See {@link ResponseCacheOptions}. */
   cache?: ResponseCacheOptions;
+  /**
+   * The HMAC cursor codec for keyset pagination (constructed at the composition root with the
+   * `CURSOR_SECRET`). When absent, a keyset request throws {@link InvalidCursorError} (so a
+   * misconfigured deployment fails closed, never serving an unsigned cursor).
+   */
+  cursorCodec?: CursorCodec;
 }
 
 export class Engine {
@@ -139,10 +168,44 @@ export class Engine {
   readonly bus: ChangeBus;
   /** The bounded-LRU assembled-buffer cache (the SLICE 1 hot-path lever). */
   readonly cache: ResponseCache;
+  /** The HMAC cursor codec (undefined unless wired at the composition root). */
+  private readonly codec: CursorCodec | undefined;
+  /**
+   * Per-type SCHEMA VERSION: a counter bumped ONLY when a type's field SHAPE changes (DDL), NOT on
+   * pure data writes. Tracked by the canonical field-list hash so a same-schema rebuild keeps the
+   * version — the headline write-stability guarantee (a cursor survives a data write, but an old
+   * cursor after a DDL is rejected). Drives the cursor sig.
+   */
+  private readonly schemaVersions = new Map<string, number>();
+  private readonly schemaShapes = new Map<string, string>();
 
   constructor(opts: EngineOptions = {}) {
     this.bus = opts.bus ?? new InProcessChangeBus();
     this.cache = new ResponseCache(this.bus, opts.cache);
+    this.codec = opts.cursorCodec;
+  }
+
+  /** Canonical hash of a type's field SHAPE (name+type+scale+precision, in order). */
+  private shapeOf(fields: readonly FieldDef[]): string {
+    return fields.map((f) => `${f.name}:${f.type}:${f.scale ?? ''}:${f.precision ?? ''}`).join(',');
+  }
+
+  /**
+   * Record a type's field shape, bumping its schema version IFF the shape changed. Called on
+   * define / registerDetached / replaceType so a pure-data rebuild (same shape) keeps the version
+   * and an old cursor stays valid, while a DDL (shape change) bumps it and invalidates old cursors.
+   */
+  private trackSchema(name: string, fields: readonly FieldDef[]): void {
+    const shape = this.shapeOf(fields);
+    const prev = this.schemaShapes.get(name);
+    if (prev === shape) return; // same shape => keep the version (data-write stability).
+    this.schemaShapes.set(name, shape);
+    this.schemaVersions.set(name, (this.schemaVersions.get(name) ?? 0) + 1);
+  }
+
+  /** The current schema version for a type (field-shape counter); 0 if unknown. */
+  schemaVersion(name: string): number {
+    return this.schemaVersions.get(name) ?? 0;
   }
 
   /** Define a content-type by name + field schema, creating its Table and output arena. */
@@ -155,6 +218,7 @@ export class Engine {
       name,
       fields.some((f) => f.type === 'i64' || f.type === 'decimal' || f.type === 'json'),
     );
+    this.trackSchema(name, fields);
     return t;
   }
 
@@ -231,6 +295,7 @@ export class Engine {
     this.tables.set(name, detached.table);
     this.arenas.set(name, detached.arena);
     this.hasRawField.set(name, detached.hasRawField);
+    this.trackSchema(name, detached.table.fields);
   }
 
   /**
@@ -252,6 +317,9 @@ export class Engine {
     this.tables.set(name, detached.table);
     this.arenas.set(name, detached.arena);
     this.hasRawField.set(name, detached.hasRawField);
+    // Bump the schema version ONLY if the field shape changed; a pure-data rebuild keeps it, so an
+    // outstanding cursor survives a write (the headline write-stability win) but not a DDL.
+    this.trackSchema(name, detached.table.fields);
     this.bus.publish(name); // drop ONLY this type's cached responses (frees the old arena's views).
   }
 
@@ -267,6 +335,9 @@ export class Engine {
     this.tables.delete(name);
     this.arenas.delete(name);
     this.hasRawField.delete(name);
+    // Drop the schema-shape memo but KEEP the version counter: a re-created type with the same name
+    // must bump past any version an old cursor was signed under (so a stale cursor never re-validates).
+    this.schemaShapes.delete(name);
     this.bus.publish(name); // ResponseCache.invalidateType drops this type's cached Buffers (frees arena views).
   }
 
@@ -301,14 +372,26 @@ export class Engine {
   private assemble(name: string, opts: QueryOptions): Buffer {
     const t = this.table(name);
     const arena = this.arena(name);
-    const rowIds = t.query(opts);
-    // Total is the FULL match count (tree or flat filters), independent of offset/limit.
-    const total = t.matchSet(opts).count();
-    const offset = opts.offset ?? 0;
-    const limit = opts.limit ?? Infinity;
-    const meta = { pagination: this.paginationMeta(total, offset, limit) };
 
-    const tail = Buffer.from(`],"meta":${JSON.stringify(meta)}}`, 'utf8');
+    // Additive third mode: a keyset request takes the seek path. The OFFSET/page branch below is
+    // byte-identical to before this slice (no keysetRaw => unchanged code path).
+    let rowIds: number[];
+    let metaJson: string;
+    if (opts.keysetRaw !== undefined) {
+      const { rowIds: ids, metaJson: mj } = this.assembleKeyset(name, t, opts);
+      rowIds = ids;
+      metaJson = mj;
+    } else {
+      rowIds = t.query(opts);
+      // Total is the FULL match count (tree or flat filters), independent of offset/limit.
+      const total = t.matchSet(opts).count();
+      const offset = opts.offset ?? 0;
+      const limit = opts.limit ?? Infinity;
+      const meta = { pagination: this.paginationMeta(total, offset, limit) };
+      metaJson = JSON.stringify(meta);
+    }
+
+    const tail = Buffer.from(`],"meta":${metaJson}}`, 'utf8');
     const parts: Buffer[] = [HEAD];
     for (let i = 0; i < rowIds.length; i++) {
       if (i > 0) parts.push(COMMA);
@@ -316,6 +399,71 @@ export class Engine {
     }
     parts.push(tail);
     return Buffer.concat(parts);
+  }
+
+  /**
+   * The keyset seek branch: decode + verify the cursor/before tokens against the live request sig,
+   * run {@link Table.queryKeyset}, mint next/prev cursors, and build the keyset meta JSON. Throws
+   * {@link InvalidCursorError} (router maps to 400) for a missing codec, a bad/mismatched cursor, or
+   * an unseekable sort (caught + re-thrown as a generic invalid-cursor failure to avoid a 500/leak).
+   */
+  private assembleKeyset(name: string, t: Table, opts: QueryOptions): { rowIds: number[]; metaJson: string } {
+    if (this.codec === undefined) throw new InvalidCursorError();
+    const raw = opts.keysetRaw!;
+
+    // Resolve the sort spec (client keys + appended id) and build the sig context + per-key types.
+    // A json sort key / missing id surfaces as KeysetUnsupportedError -> normalize to InvalidCursorError.
+    let resolved;
+    let fieldTypes: SortFieldType[];
+    try {
+      resolved = t.resolveSortKeys(opts.sort ?? []);
+      fieldTypes = (opts.sort ?? []).map((s) => {
+        const f = t.fields.find((fd) => fd.name === s.field)!;
+        return { type: f.type, scale: f.scale, precision: f.precision };
+      });
+    } catch {
+      throw new InvalidCursorError();
+    }
+
+    const sortCanonical = Table.canonicalSortSpec(resolved);
+    const sig: SigInput = {
+      typeName: name,
+      sortCanonical,
+      filterCanonical: filterCanonical(opts),
+      schemaVersion: this.schemaVersion(name),
+    };
+
+    const ks: KeysetOptions = { pageSize: raw.pageSize, withCount: raw.withCount };
+    // An EMPTY cursor/before token is the bootstrap FIRST page (head walk) — no boundary to decode.
+    if (raw.cursorToken !== undefined && raw.cursorToken !== '') {
+      ks.cursor = this.codec.decode(sig, fieldTypes, raw.cursorToken);
+    }
+    if (raw.beforeToken !== undefined && raw.beforeToken !== '') {
+      ks.before = this.codec.decode(sig, fieldTypes, raw.beforeToken);
+    }
+
+    const result = t.queryKeyset({ ...opts, keyset: ks });
+
+    const mint = (boundary: typeof result.firstBoundary): string | null => {
+      if (boundary === undefined) return null;
+      const payload: CursorPayload = { v: 1, sortValues: boundary.sortValues, id: boundary.id };
+      return this.codec!.encode(sig, fieldTypes, payload);
+    };
+
+    const meta: KeysetPaginationMeta = {
+      pageSize: raw.pageSize,
+      nextCursor: mint(result.lastBoundary),
+      prevCursor: mint(result.firstBoundary),
+      hasNextPage: result.hasNextPage,
+      hasPreviousPage: result.hasPreviousPage,
+    };
+    if (raw.withCount) {
+      const total = t.matchSet(opts).count();
+      meta.total = total;
+      meta.pageCount = Math.ceil(total / raw.pageSize);
+    }
+
+    return { rowIds: result.rowIds, metaJson: JSON.stringify({ pagination: meta }) };
   }
 
   /**

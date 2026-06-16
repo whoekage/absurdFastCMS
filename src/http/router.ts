@@ -1,5 +1,6 @@
 import type { Engine } from '../store/engine.ts';
 import { parseQuery, QueryParseError } from '../store/query-parser.ts';
+import { InvalidCursorError } from '../store/cursor-codec.ts';
 
 /**
  * uWS-MIGRATION SLICE 0 — the framework-agnostic HTTP request CORE.
@@ -83,14 +84,16 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
     if (!isGet) return errorResponse(405, `method ${req.method} not allowed`);
     // Tolerate a leading '?' so the parser never sees it (uWS getQuery() omits it; be robust anyway).
     const query = req.query.startsWith('?') ? req.query.slice(1) : req.query;
-    let options;
+    // The cursor decode/verify happens INSIDE engine.respond (the codec lives in the Engine), so the
+    // respond call is inside the try too: an InvalidCursorError -> 400, never a 500. The error body
+    // is the generic message only (no secret / sig / expected-value leak).
     try {
-      options = parseQuery(engine.fields(name), query).options;
+      const options = parseQuery(engine.fields(name), query).options;
+      return { status: 200, contentType: JSON_CT, body: engine.respond(name, options) };
     } catch (e) {
-      if (e instanceof QueryParseError) return errorResponse(400, e.message);
+      if (e instanceof QueryParseError || e instanceof InvalidCursorError) return errorResponse(400, e.message);
       throw e;
     }
-    return { status: 200, contentType: JSON_CT, body: engine.respond(name, options) };
   }
 
   // SINGLE: /:type/:id

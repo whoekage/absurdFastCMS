@@ -6,6 +6,7 @@ import { runMigrations } from '../db/migrate.ts';
 import { createContentType, getContentType, type FieldSpec } from '../db/content-type-repo.ts';
 import { ContentTypeExistsError } from '../db/ddl.ts';
 import { createServer } from './app.ts';
+import { cursorCodecFromEnv } from '../db/load.ts';
 
 /**
  * The PRODUCTION entrypoint: a SINGLE process that migrates, seeds the `article` content-type as a
@@ -128,7 +129,8 @@ export async function start(port: number): Promise<void> {
   await runMigrations();
   const store = new PostgresStore();
   await seedArticleIfAbsent(store.sql);
-  const { engine, registry } = await store.loadWithRegistry();
+  // Wire the keyset cursor codec (HMAC over CURSOR_SECRET) once at the composition root.
+  const { engine, registry } = await store.loadWithRegistry({ cursorCodec: cursorCodecFromEnv() });
   const server = createServer(engine, store, registry); // store + registry enable POST/PUT/DELETE
   await server.listen(port);
   const rows = engine.has('article') ? engine.rowCount('article') : 0;

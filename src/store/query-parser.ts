@@ -1,5 +1,5 @@
 import { coerceDate, coerceDecimal, coerceI64, type ColumnType, type ScanOp } from './column.ts';
-import type { FieldDef, FilterNode, Predicate, QueryOptions, SortKey } from './table.ts';
+import type { FieldDef, FilterNode, Predicate, QueryOptions, RawKeysetOptions, SortKey } from './table.ts';
 import type { SortDir } from './sorted-index.ts';
 
 /**
@@ -432,28 +432,82 @@ function parsePositiveInt(raw: string, what: string): number {
   return n;
 }
 
+/** The parser's pagination result: EITHER offset/limit (page/start modes) OR a raw keyset request. */
+type ParsedPagination = { offset?: number; limit?: number; keyset?: RawKeysetOptions };
+
 /**
- * Map BOTH Strapi pagination styles to engine offset/limit. Page-based
- * (`pagination[page]`/`pagination[pageSize]`) -> offset=(page-1)*pageSize, limit=pageSize, so a
- * downstream meta derives the REQUESTED page back (AV1's offset->page wart is gone). Offset-based
- * (`pagination[start]`/`pagination[limit]`) passes through directly. The two styles are mutually
- * exclusive — mixing them is rejected.
+ * Map the THREE Strapi-compatible pagination styles. Page-based
+ * (`pagination[page]`/`pagination[pageSize]`) -> offset=(page-1)*pageSize, limit=pageSize. Offset-
+ * based (`pagination[start]`/`pagination[limit]`) passes through directly. KEYSET (the additive
+ * third mode) -> `pagination[cursor]` (forward) / `pagination[before]` (backward) + `pageSize` +
+ * `withCount`, returned as a RAW token shape (the Engine owns the cursor codec and decodes it).
+ *
+ * `pageSize` is NEUTRAL — shared by page + keyset; it only enters keyset mode when `cursor`/`before`
+ * is present, so a bare `pageSize` stays the legacy page path (byte-identical). The four modes
+ * (page, start, cursor, before) are MUTUALLY EXCLUSIVE; cursor and before are exclusive too.
  */
-function parsePagination(node: ParamNode): { offset?: number; limit?: number } {
+function parsePagination(node: ParamNode): ParsedPagination {
   if (typeof node === 'string' || Array.isArray(node)) {
     throw new QueryParseError('pagination must be an object');
   }
   const obj = node as { [k: string]: ParamNode };
-  const hasPage = 'page' in obj || 'pageSize' in obj;
+  // `pageSize` is a PAGE-mode knob (legacy) UNLESS keyset is active. Track it as part of "page".
+  const hasCursor = 'cursor' in obj;
+  const hasBefore = 'before' in obj;
+  const hasKeyset = hasCursor || hasBefore;
+  const hasPage = 'page' in obj || (!hasKeyset && 'pageSize' in obj);
   const hasStart = 'start' in obj || 'limit' in obj;
-  if (hasPage && hasStart) {
-    throw new QueryParseError('pagination: cannot mix page/pageSize with start/limit');
+
+  // Mutual exclusivity across the modes (withCount is a neutral knob; pageSize is shared with keyset).
+  const modes = (hasPage ? 1 : 0) + (hasStart ? 1 : 0) + (hasKeyset ? 1 : 0);
+  if (modes > 1) {
+    throw new QueryParseError('pagination: cannot mix page / start / cursor pagination modes');
   }
+  if (hasCursor && hasBefore) {
+    throw new QueryParseError('pagination: cannot use cursor and before together');
+  }
+
   for (const k of Object.keys(obj)) {
-    if (k !== 'page' && k !== 'pageSize' && k !== 'start' && k !== 'limit') {
+    if (
+      k !== 'page' && k !== 'pageSize' && k !== 'start' && k !== 'limit' &&
+      k !== 'cursor' && k !== 'before' && k !== 'withCount'
+    ) {
       throw new QueryParseError(`unknown pagination key "${k}"`);
     }
   }
+  // `withCount` is a KEYSET-only knob (page mode always emits total; offset mode has no count). Reject
+  // it in the non-keyset modes so a misplaced `withCount` keeps the SAME 400 it threw pre-keyset (the
+  // offset/page response stays byte-identical), instead of being silently accepted-and-dropped.
+  if (!hasKeyset && 'withCount' in obj) {
+    throw new QueryParseError('pagination[withCount] is only valid with cursor/before pagination');
+  }
+
+  if (hasKeyset) {
+    // pageSize: reuse parsePositiveInt; default 25; reject 0 (can't advance a cursor).
+    const pageSize = 'pageSize' in obj
+      ? parsePositiveInt(leafString(obj.pageSize!, 'pagination[pageSize]'), 'pagination[pageSize]')
+      : 25;
+    if (pageSize < 1) throw new QueryParseError('pagination[pageSize] must be >= 1 for cursor pagination');
+    let withCount = false;
+    if ('withCount' in obj) {
+      const wc = leafString(obj.withCount!, 'pagination[withCount]');
+      if (wc !== 'true' && wc !== 'false') throw new QueryParseError('pagination[withCount] must be true or false');
+      withCount = wc === 'true';
+    }
+    const keyset: RawKeysetOptions = { pageSize, withCount };
+    if (hasCursor) keyset.cursorToken = leafString(obj.cursor!, 'pagination[cursor]');
+    if (hasBefore) {
+      const beforeToken = leafString(obj.before!, 'pagination[before]');
+      // Only `cursor=` (empty) bootstraps the FIRST page (head walk). An empty `before` has no
+      // backward-tail semantics wired (assembleKeyset would silently treat it as a forward head
+      // walk), so reject it rather than surprise a client bootstrapping the LAST page.
+      if (beforeToken === '') throw new QueryParseError('pagination[before] must be a non-empty cursor; use pagination[cursor]= to bootstrap');
+      keyset.beforeToken = beforeToken;
+    }
+    return { keyset };
+  }
+
+  // page mode (includes a bare `pageSize` when no keyset is active — legacy back-compat).
   if (hasPage) {
     const page = 'page' in obj ? parsePositiveInt(leafString(obj.page!, 'pagination[page]'), 'pagination[page]') : 1;
     // A page is 1-based; page 0 is meaningless (parsePositiveInt only floors out negatives).
@@ -537,6 +591,7 @@ export function parseQuery(fields: FieldDef[], input: string | { [k: string]: Pa
   let sort: SortKey[] | undefined;
   let offset: number | undefined;
   let limit: number | undefined;
+  let keysetRaw: RawKeysetOptions | undefined;
   let populate: PopulatePlan = [];
 
   for (const key of Object.keys(params)) {
@@ -554,6 +609,7 @@ export function parseQuery(fields: FieldDef[], input: string | { [k: string]: Pa
         const pg = parsePagination(params[key]!);
         offset = pg.offset;
         limit = pg.limit;
+        keysetRaw = pg.keyset;
         break;
       }
       case 'fields':
@@ -573,6 +629,7 @@ export function parseQuery(fields: FieldDef[], input: string | { [k: string]: Pa
   if (sort !== undefined) options.sort = sort;
   if (offset !== undefined) options.offset = offset;
   if (limit !== undefined) options.limit = limit;
+  if (keysetRaw !== undefined) options.keysetRaw = keysetRaw;
 
   const out: ParsedQuery = { options, populate };
   if (where !== undefined) out.where = where;
