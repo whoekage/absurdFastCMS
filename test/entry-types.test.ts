@@ -1,12 +1,11 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { createSql } from '../src/db/client.ts';
-import { runMigrations } from '../src/db/migrate.ts';
+import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres-store.ts';
-import { createContentType, getContentType, dropContentType } from '../src/db/content-type-repo.ts';
+import { createContentType } from '../src/db/content-type-repo.ts';
 import { createServer, type ListenToken } from '../src/http/app.ts';
-import { withCatalogRead, withCatalogWrite } from './catalog-lock.ts';
+import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 
 /**
  * ENTRY-TYPES SLICE — write round-trip for i64/decimal/json over the REAL uWS + Postgres path. A
@@ -14,7 +13,8 @@ import { withCatalogRead, withCatalogWrite } from './catalog-lock.ts';
  * and the subsequent GET byte-identically; over-precision / non-digit / malformed each 400.
  */
 
-const sql = createSql();
+let sql: Sql;
+let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let token: ListenToken;
 let base: string;
 let close: (t: ListenToken) => void;
@@ -34,20 +34,18 @@ function freePort(): Promise<number> {
 }
 
 before(async () => {
-  await runMigrations();
-  await withCatalogWrite(sql, async () => {
-    if (await getContentType(sql, 'et_metric')) await dropContentType(sql, 'et_metric');
-    await createContentType(sql, {
-      apiId: 'et_metric',
-      fields: [
-        { name: 'big', cmsType: 'biginteger', options: { nullable: false } },
-        { name: 'amount', cmsType: 'decimal', options: { precision: 18, scale: 2, nullable: false } },
-        { name: 'payload', cmsType: 'json', options: { nullable: false } },
-      ],
-    });
+  db = await createFileDatabase('et');
+  sql = db.sql;
+  await createContentType(sql, {
+    apiId: 'metric',
+    fields: [
+      { name: 'big', cmsType: 'biginteger', options: { nullable: false } },
+      { name: 'amount', cmsType: 'decimal', options: { precision: 18, scale: 2, nullable: false } },
+      { name: 'payload', cmsType: 'json', options: { nullable: false } },
+    ],
   });
   const store = new PostgresStore(sql);
-  const { engine, registry } = await withCatalogRead(sql, () => store.loadWithRegistry());
+  const { engine, registry } = await store.loadWithRegistry();
   const server = createServer(engine, store, registry);
   close = server.close;
   const port = await freePort();
@@ -57,8 +55,9 @@ before(async () => {
 
 after(async () => {
   if (token) close(token);
-  await withCatalogWrite(sql, () => dropContentType(sql, 'et_metric'));
-  await sql.end();
+  // Guard so a failing before() (db/sql undefined) surfaces the real error, not a deref of undefined.
+  if (sql) await sql.end();
+  if (db) await dropFileDatabase(db.name);
 });
 
 function field(buf: string, key: string): string {
@@ -87,7 +86,7 @@ function field(buf: string, key: string): string {
 }
 
 test('POST i64/decimal/json round-trips byte-identical to the GET; PUT changes them', async () => {
-  const res = await fetch(`${base}/et_metric`, {
+  const res = await fetch(`${base}/metric`, {
     method: 'POST',
     body: JSON.stringify({ big: '9223372036854775807', amount: '12345.67', payload: { nested: 'value', n: 7 } }),
   });
@@ -103,7 +102,7 @@ test('POST i64/decimal/json round-trips byte-identical to the GET; PUT changes t
   assert.equal(field(createdText, 'payload'), '{"n": 7, "nested": "value"}');
 
   const id = JSON.parse(createdText).data.id;
-  const got = await (await fetch(`${base}/et_metric/${id}`)).text();
+  const got = await (await fetch(`${base}/metric/${id}`)).text();
   // CREATE response data and GET data are BYTE-IDENTICAL (same registry serializer / arena materialize).
   // Compare the whole `data` envelope verbatim, not just one scalar — created_at/updated_at, i64,
   // decimal AND the verbatim json all have to match to the byte.
@@ -116,11 +115,11 @@ test('POST i64/decimal/json round-trips byte-identical to the GET; PUT changes t
   assert.equal(field(got, 'payload'), '{"n": 7, "nested": "value"}');
 
   // PUT changes them — incl. a NEW json payload, proving the json WRITE round-trip on update too.
-  const put = await fetch(`${base}/et_metric/${id}`, { method: 'PUT', body: JSON.stringify({ big: '42', amount: '0.05', payload: { nested: 'updated', k: [1, 2] } }) });
+  const put = await fetch(`${base}/metric/${id}`, { method: 'PUT', body: JSON.stringify({ big: '42', amount: '0.05', payload: { nested: 'updated', k: [1, 2] } }) });
   assert.equal(put.status, 200);
   const putText = await put.text();
   assert.equal(field(putText, 'payload'), '{"k": [1, 2], "nested": "updated"}');
-  const after = await (await fetch(`${base}/et_metric/${id}`)).text();
+  const after = await (await fetch(`${base}/metric/${id}`)).text();
   assert.equal(field(after, 'big'), '"42"');
   assert.equal(field(after, 'amount'), '"0.05"');
   assert.equal(field(after, 'payload'), '{"k": [1, 2], "nested": "updated"}');
@@ -135,7 +134,7 @@ test('invalid i64/decimal/json -> 400', async () => {
     'malformed json (string body)': { big: '1', amount: '1.00', payload: '{not json' },
   };
   for (const [label, payload] of Object.entries(cases)) {
-    const res = await fetch(`${base}/et_metric`, { method: 'POST', body: JSON.stringify(payload) });
+    const res = await fetch(`${base}/metric`, { method: 'POST', body: JSON.stringify(payload) });
     assert.equal(res.status, 400, label);
   }
 });

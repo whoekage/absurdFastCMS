@@ -1,11 +1,10 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSql } from '../src/db/client.ts';
-import { runMigrations } from '../src/db/migrate.ts';
+import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres-store.ts';
-import { getContentType, dropContentType, createContentType } from '../src/db/content-type-repo.ts';
+import { createContentType } from '../src/db/content-type-repo.ts';
 import { handleRequest } from '../src/http/router.ts';
-import { withCatalogRead, withCatalogWrite } from './catalog-lock.ts';
+import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 
 /**
  * POSTGRES-STORE SLICE — the boot load path, end-to-end against a REAL Postgres (no mocks), on the
@@ -16,7 +15,8 @@ import { withCatalogRead, withCatalogWrite } from './catalog-lock.ts';
  * surrogate-pair text, and a filtered+sorted list vs a hand oracle.
  */
 
-const sql = createSql(); // DATABASE_URL from .env.test
+let sql: Sql;
+let db: Awaited<ReturnType<typeof createFileDatabase>>;
 
 interface SeedRow {
   title: string | null;
@@ -37,42 +37,41 @@ const ROWS: SeedRow[] = [
 ];
 
 before(async () => {
-  await runMigrations();
-  await withCatalogWrite(sql, async () => {
-    if (await getContentType(sql, 'ps_article')) await dropContentType(sql, 'ps_article');
-    await createContentType(sql, {
-      apiId: 'ps_article',
-      fields: [
-        { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
-        { name: 'body', cmsType: 'text', options: { nullable: false } },
-        { name: 'status', cmsType: 'string', options: { nullable: false } },
-        { name: 'views', cmsType: 'integer', options: { nullable: true } },
-        { name: 'rating', cmsType: 'decimal', options: { precision: 10, scale: 2, nullable: true } },
-        { name: 'active', cmsType: 'boolean', options: { nullable: false } },
-        { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
-      ],
-    });
+  db = await createFileDatabase('ps');
+  sql = db.sql;
+  await createContentType(sql, {
+    apiId: 'article',
+    fields: [
+      { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
+      { name: 'body', cmsType: 'text', options: { nullable: false } },
+      { name: 'status', cmsType: 'string', options: { nullable: false } },
+      { name: 'views', cmsType: 'integer', options: { nullable: true } },
+      { name: 'rating', cmsType: 'decimal', options: { precision: 10, scale: 2, nullable: true } },
+      { name: 'active', cmsType: 'boolean', options: { nullable: false } },
+      { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
+    ],
   });
   for (const r of ROWS) {
     await sql`
-      INSERT INTO ct_ps_article (title, body, status, views, rating, active, "publishedAt")
+      INSERT INTO ct_article (title, body, status, views, rating, active, "publishedAt")
       VALUES (${r.title}, ${r.body}, ${r.status}, ${r.views}, ${r.rating}, ${r.active}, ${r.publishedAt})
     `;
   }
 });
 
 after(async () => {
-  await withCatalogWrite(sql, () => dropContentType(sql, 'ps_article'));
-  await sql.end();
+  // Guard so a failing before() (db/sql undefined) surfaces the real error, not a deref of undefined.
+  if (sql) await sql.end();
+  if (db) await dropFileDatabase(db.name);
 });
 
 test('load() builds an engine with every row, PK addressable, NULLs as JSON null', async () => {
-  const engine = await withCatalogRead(sql, () => new PostgresStore(sql).load());
-  assert.equal(engine.rowCount('ps_article'), ROWS.length);
+  const engine = await new PostgresStore(sql).load();
+  assert.equal(engine.rowCount('article'), ROWS.length);
 
   // PK lookup hits the right row (PKs are 1-based); the all-null row renders title/views/rating null.
   // The response now ALSO includes the system created_at/updated_at fields (registry projection).
-  const two = JSON.parse(engine.respondById('ps_article', 2)!.toString('utf8'));
+  const two = JSON.parse(engine.respondById('article', 2)!.toString('utf8'));
   // Field order is [id, created_at, updated_at, ...user]; created_at/updated_at are ISO strings.
   assert.deepEqual(Object.keys(two.data), ['id', 'created_at', 'updated_at', 'title', 'body', 'status', 'views', 'rating', 'active', 'publishedAt']);
   assert.equal(typeof two.data.created_at, 'string');
@@ -93,18 +92,18 @@ test('load() builds an engine with every row, PK addressable, NULLs as JSON null
   });
 
   // Surrogate-pair text round-trips through the byte arena unscathed.
-  const three = JSON.parse(engine.respondById('ps_article', 3)!.toString('utf8'));
+  const three = JSON.parse(engine.respondById('article', 3)!.toString('utf8'));
   assert.equal(three.data.title, 'World \u{1F600}');
 
   // A PK with no row is a miss.
-  assert.equal(engine.respondById('ps_article', 999), null);
+  assert.equal(engine.respondById('article', 999), null);
 });
 
 test('loaded engine answers a filtered + sorted list like a hand oracle', async () => {
-  const engine = await withCatalogRead(sql, () => new PostgresStore(sql).load());
+  const engine = await new PostgresStore(sql).load();
   const res = handleRequest(engine, {
     method: 'GET',
-    path: '/ps_article',
+    path: '/article',
     query: 'filters[status][$eq]=published&sort=views:desc',
   });
   assert.equal(res.status, 200);

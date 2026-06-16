@@ -1,12 +1,11 @@
 import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSql } from '../src/db/client.ts';
-import { runMigrations } from '../src/db/migrate.ts';
+import type { Sql } from 'postgres';
 import { createContentType } from '../src/db/content-type-repo.ts';
 import { Registry, RegistryError } from '../src/store/registry.ts';
 import { loadType } from '../src/db/load.ts';
 import { Engine } from '../src/store/engine.ts';
-import { withCatalogWrite } from './catalog-lock.ts';
+import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 
 /**
  * REGISTRY SLICE — Registry.build from the real meta tables (no mocks). Proves the runtime source of
@@ -15,29 +14,30 @@ import { withCatalogWrite } from './catalog-lock.ts';
  * (unknown/forward-incompatible meta -> RegistryError, incl. the `time` rejection).
  */
 
-const sql = createSql();
+let sql: Sql;
+let db: Awaited<ReturnType<typeof createFileDatabase>>;
 
+/** Clean-start each test: drop every runtime per-type table + wipe the catalog (never the static `articles`). */
 async function cleanCatalog(): Promise<void> {
-  await withCatalogWrite(sql, async () => {
-    const tables = await sql<{ table_name: string }[]>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'ct\\_reg\\_%'`;
-    for (const { table_name } of tables) await sql.unsafe(`DROP TABLE IF EXISTS "${table_name}" CASCADE`);
-    await sql`DELETE FROM content_types WHERE api_id LIKE 'reg\\_%'`;
-  });
+  const tables = await sql<{ table_name: string }[]>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'ct\\_%'`;
+  for (const { table_name } of tables) await sql.unsafe(`DROP TABLE IF EXISTS "${table_name}" CASCADE`);
+  await sql`TRUNCATE content_type_fields, content_types RESTART IDENTITY CASCADE`;
 }
 
 before(async () => {
-  await runMigrations();
-  await cleanCatalog();
+  db = await createFileDatabase('reg');
+  sql = db.sql;
 });
 beforeEach(cleanCatalog);
 after(async () => {
-  await cleanCatalog();
-  await sql.end();
+  // Guard so a failing before() (db/sql undefined) surfaces the real error, not a deref of undefined.
+  if (sql) await sql.end();
+  if (db) await dropFileDatabase(db.name);
 });
 
 test('build: system fields prepended in order, engine types 1:1, decimal scale/precision (incl scale 0), index plan, writable/required', async () => {
   await createContentType(sql, {
-    apiId: 'reg_kitchen',
+    apiId: 'kitchen',
     fields: [
       { name: 'name', cmsType: 'string', options: { length: 50, nullable: false } },
       { name: 'big', cmsType: 'biginteger', options: { nullable: true } },
@@ -53,7 +53,7 @@ test('build: system fields prepended in order, engine types 1:1, decimal scale/p
   });
 
   const reg = await Registry.build(sql);
-  const def = reg.get('reg_kitchen')!;
+  const def = reg.get('kitchen')!;
   assert.ok(def);
 
   // System fields first, in DDL order, then user fields by sort.
@@ -98,19 +98,19 @@ test('build: system fields prepended in order, engine types 1:1, decimal scale/p
 });
 
 test('build: a `time` field is rejected with RegistryError (engineType i32 but pg returns a string)', async () => {
-  await createContentType(sql, { apiId: 'reg_sched', fields: [{ name: 'at', cmsType: 'time', options: { nullable: true } }] });
+  await createContentType(sql, { apiId: 'sched', fields: [{ name: 'at', cmsType: 'time', options: { nullable: true } }] });
   await assert.rejects(() => Registry.build(sql), RegistryError);
 });
 
 test('a system-fields-only type builds a 3-field def and loads to a valid 0-row table', async () => {
-  await createContentType(sql, { apiId: 'reg_bare', fields: [] });
+  await createContentType(sql, { apiId: 'bare', fields: [] });
   const reg = await Registry.build(sql);
-  const def = reg.get('reg_bare')!;
+  const def = reg.get('bare')!;
   assert.equal(def.fields.length, 3);
   assert.equal(def.writable.length, 0);
 
   const engine = new Engine();
   await loadType(sql, engine, def);
-  assert.equal(engine.rowCount('reg_bare'), 0);
-  assert.equal(engine.respondById('reg_bare', 1), null);
+  assert.equal(engine.rowCount('bare'), 0);
+  assert.equal(engine.respondById('bare', 1), null);
 });
