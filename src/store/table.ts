@@ -16,6 +16,13 @@ import {
 } from './column.ts';
 import { EqIndex } from './eq-index.ts';
 import { SortedIndex, type SortDir } from './sorted-index.ts';
+import {
+  CompositeSortedIndex,
+  type Boundary,
+  type BoundaryValue,
+  type ResolvedSortKey,
+} from './composite-sorted-index.ts';
+import type { CursorPayload } from './cursor-codec.ts';
 
 export interface FieldDef {
   name: string;
@@ -42,6 +49,18 @@ export interface SortKey {
   dir: SortDir;
 }
 
+/**
+ * The opt-in KEYSET (seek) pagination request. Mutually exclusive with `offset`/`limit` (the
+ * parser enforces this). Exactly one of `cursor`/`before` may be set; both unset = the FIRST page
+ * (head walk). `cursor` = forward (rows after the boundary); `before` = backward (rows before it).
+ */
+export interface KeysetOptions {
+  cursor?: CursorPayload;
+  before?: CursorPayload;
+  pageSize: number;
+  withCount: boolean;
+}
+
 export interface QueryOptions {
   filters?: Predicate[];
   /**
@@ -54,6 +73,46 @@ export interface QueryOptions {
   sort?: SortKey[];
   offset?: number;
   limit?: number;
+  /**
+   * Opt-in keyset (seek) pagination, with DECODED cursor payloads. Set by the Engine after it
+   * decodes/verifies the raw {@link RawKeysetOptions} tokens. When present, {@link Table.queryKeyset}
+   * is used instead of the offset/limit walk; `offset`/`limit` are untouched and ignored.
+   */
+  keyset?: KeysetOptions;
+  /**
+   * The RAW keyset request as produced by the query parser: opaque cursor/before TOKENS (not yet
+   * decoded — the Engine owns the codec) + pageSize + withCount. The Engine decodes these into
+   * {@link keyset} before calling {@link Table.queryKeyset}; the cache key is built from this raw
+   * shape so two different cursors never collide.
+   */
+  keysetRaw?: RawKeysetOptions;
+}
+
+/** The parser-produced keyset request: opaque tokens (decoded later by the Engine) + page knobs. */
+export interface RawKeysetOptions {
+  cursorToken?: string;
+  beforeToken?: string;
+  pageSize: number;
+  withCount: boolean;
+}
+
+/** The result of a keyset seek: the page's row ids + the boundaries to mint next/prev cursors. */
+export interface KeysetResult {
+  rowIds: number[];
+  /** The page's FIRST row boundary (mints prevCursor). Undefined when the page is empty. */
+  firstBoundary?: Boundary;
+  /** The page's LAST row boundary (mints nextCursor). Undefined when the page is empty. */
+  lastBoundary?: Boundary;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
+
+/** A typed error for a keyset request the table can't seek (no `id` field, or a json sort key). */
+export class KeysetUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'KeysetUnsupportedError';
+  }
 }
 
 /**
@@ -84,6 +143,9 @@ function isRangeOp(op: ScanOp): boolean {
 const PROBE_LEAD_NUM = 1;
 const PROBE_LEAD_DENOM = 64;
 
+/** Hard cap on distinct composite-index specs kept per table (client-driven DoS guard). */
+const MAX_COMPOSITE_INDEXES = 32;
+
 /**
  * One content-type, stored column-by-column. Rows are dense (row index 0..rowCount).
  *
@@ -96,6 +158,12 @@ export class Table {
   private readonly columns: Map<string, Column>;
   private readonly eqIndexes = new Map<string, EqIndex>();
   private readonly sortedIndexes = new Map<string, SortedIndex>();
+  /**
+   * Lazily-built MULTI-KEY seekable indexes, keyed by the canonical resolved-sort spec string.
+   * Client-driven, so an LRU cap bounds the count (a DoS guard against unbounded distinct specs).
+   * An insert marks every built composite index dirty (see {@link insert}).
+   */
+  private readonly compositeIndexes = new Map<string, CompositeSortedIndex>();
   /**
    * Per-column null planes: word `w` holds the null bits for rows [w*32, w*32+32).
    * Stored as growable Uint32Array (parallel to the dense columns) and only allocated
@@ -229,6 +297,9 @@ export class Table {
       const sorted = this.sortedIndexes.get(f.name);
       if (sorted !== undefined) sorted.markDirty();
     }
+    // A new row invalidates every built composite (multi-key) index; they rebuild lazily on the
+    // next keyset query. (isDirty also catches len !== rowCount, so this is belt-and-suspenders.)
+    for (const idx of this.compositeIndexes.values()) idx.markDirty();
     this.rowCount = rowId + 1;
     return rowId;
   }
@@ -721,6 +792,139 @@ export class Table {
     }
 
     return matches.slice(offset, limit);
+  }
+
+  // --- keyset (seek) pagination ------------------------------------------------
+
+  /**
+   * The default NULL rule for a sort direction, matching SQL/GitLab keyset convention: NULLs sort
+   * FIRST for a DESC key and LAST for an ASC key. (`nullsFirst` means a NULL is the SMALLER value.)
+   * Pinning the rule here keeps the composite-index build, the seek, and the cursor sig consistent.
+   */
+  private nullsFirstFor(dir: SortDir): boolean {
+    return dir === 'desc';
+  }
+
+  /**
+   * Resolve a client sort spec into the full {@link ResolvedSortKey} list for the keyset path:
+   * each client key with its sign + null rule, then the appended unique `{ id, asc, nullsLast }`
+   * final key (a total order, so the boundary is EXACT). Throws {@link KeysetUnsupportedError} for
+   * a missing `id` field or a `json` sort key (never seekable).
+   */
+  resolveSortKeys(sort: SortKey[]): ResolvedSortKey[] {
+    if (!this.columns.has('id')) {
+      throw new KeysetUnsupportedError('keyset pagination requires an "id" field for the total-order tie-break');
+    }
+    // The keyset path treats `id` as a non-null, unique i32 PK throughout (cursor `id` is a JS number;
+    // the seek skips the null rule on the id branch). Enforce that invariant so a non-i32 id surfaces
+    // as a clean KeysetUnsupportedError (-> 400) rather than a silent mis-seek / mis-serialize.
+    if (this.column('id').type !== 'i32') {
+      throw new KeysetUnsupportedError('keyset pagination requires an i32 "id" field');
+    }
+    const out: ResolvedSortKey[] = [];
+    for (const s of sort) {
+      const col = this.column(s.field); // validates existence
+      if (col.type === 'json') {
+        throw new KeysetUnsupportedError(`keyset pagination cannot sort on json field "${s.field}"`);
+      }
+      out.push({ field: s.field, sign: s.dir === 'desc' ? -1 : 1, nullsFirst: this.nullsFirstFor(s.dir) });
+    }
+    // Append the mandatory unique final tie-break key `id:asc` (nullsLast). If the caller ALREADY
+    // sorts by `id`, the appended key is redundant (a second compare on an equal id never changes the
+    // order) but is kept so `boundaryOf` always emits exactly `sort.length` sortValues (one per client
+    // key) and the cursor `fieldTypes` (also derived from `sort`) stay length-aligned — the appended
+    // id is NOT a sortValues slot. A client `id` key is now seeked with its own sign (see
+    // CompositeSortedIndex.cmpToBoundary), so the duplicate is harmless, not a correctness hazard.
+    out.push({ field: 'id', sign: 1, nullsFirst: false });
+    return out;
+  }
+
+  /** A stable canonical key for a resolved sort spec (composite-index map key + cursor sig material). */
+  static canonicalSortSpec(keys: ResolvedSortKey[]): string {
+    return keys.map((k) => `${k.field}:${k.sign === 1 ? 'a' : 'd'}:${k.nullsFirst ? 'nf' : 'nl'}`).join(',');
+  }
+
+  /** Capture a row's boundary: its per-client-key sort VALUES (null-aware) + the stable PK id. */
+  boundaryOf(row: number, keys: ResolvedSortKey[]): Boundary {
+    const sortValues: BoundaryValue[] = [];
+    // The last key is the appended id; the client keys are keys[0..n-1].
+    for (let k = 0; k < keys.length - 1; k++) {
+      const key = keys[k]!;
+      if (this.isNull(key.field, row)) {
+        sortValues.push(null);
+      } else {
+        sortValues.push(this.column(key.field).at(row) as BoundaryValue);
+      }
+    }
+    const id = this.column('id').at(row) as number;
+    return { sortValues, id };
+  }
+
+  /** Fetch (or lazily build, with an LRU cap) the composite index for a resolved sort spec. */
+  private compositeIndexFor(keys: ResolvedSortKey[]): CompositeSortedIndex {
+    const specKey = Table.canonicalSortSpec(keys);
+    let idx = this.compositeIndexes.get(specKey);
+    if (idx === undefined) {
+      idx = new CompositeSortedIndex();
+      // LRU cap: evict the oldest (first-inserted) spec when over the bound.
+      if (this.compositeIndexes.size >= MAX_COMPOSITE_INDEXES) {
+        const oldest = this.compositeIndexes.keys().next();
+        if (!oldest.done) this.compositeIndexes.delete(oldest.value);
+      }
+      this.compositeIndexes.set(specKey, idx);
+    } else {
+      // Bump recency (Map insertion order = LRU order).
+      this.compositeIndexes.delete(specKey);
+      this.compositeIndexes.set(specKey, idx);
+    }
+    idx.ensureBuilt(this, keys, this.rowCount);
+    return idx;
+  }
+
+  /**
+   * Keyset (seek) pagination: filter -> matchSet, then seek the composite index past the cursor
+   * boundary and walk forward (cursor) / backward (before) applying bitset membership with early
+   * termination. Returns the page's ordered row ids (ALWAYS ascending sort-presentation order) +
+   * the first/last boundaries + has{Next,Previous}Page. Offset/limit are ignored in this mode.
+   */
+  queryKeyset(opts: QueryOptions): KeysetResult {
+    const ks = opts.keyset!;
+    const keys = this.resolveSortKeys(opts.sort ?? []);
+    const matches = this.matchSet(opts);
+    const idx = this.compositeIndexFor(keys);
+
+    const forward = ks.before === undefined; // `before` => backward; else (cursor or first page) => forward
+    const boundary = forward ? (ks.cursor ?? null) : (ks.before ?? null);
+    const cursorBoundary: Boundary | null = boundary === null ? null : { sortValues: boundary.sortValues, id: boundary.id };
+
+    const collected: number[] = [];
+    const { hasMore } = idx.walk(this, keys, matches, cursorBoundary, forward, ks.pageSize, (row) => {
+      collected.push(row);
+    });
+
+    // Backward walk collected rows in DESCENDING order; reverse to ascending presentation order.
+    const rowIds = forward ? collected : collected.slice().reverse();
+
+    const result: KeysetResult = {
+      rowIds,
+      hasNextPage: false,
+      hasPreviousPage: false,
+    };
+    if (rowIds.length > 0) {
+      result.firstBoundary = this.boundaryOf(rowIds[0]!, keys);
+      result.lastBoundary = this.boundaryOf(rowIds[rowIds.length - 1]!, keys);
+    }
+
+    if (forward) {
+      result.hasNextPage = hasMore;
+      // You came from somewhere iff a cursor was supplied (the first page has no predecessor).
+      result.hasPreviousPage = ks.cursor !== undefined;
+    } else {
+      result.hasPreviousPage = hasMore;
+      // A `before` request implies a following page existed (you walked back from it).
+      result.hasNextPage = true;
+    }
+    return result;
   }
 
   /** Build a multi-key comparator that reads column values directly (fallback sort path). */
