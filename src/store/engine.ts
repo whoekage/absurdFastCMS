@@ -255,6 +255,21 @@ export class Engine {
     this.bus.publish(name); // drop ONLY this type's cached responses (frees the old arena's views).
   }
 
+  /**
+   * Remove a content-type entirely (the DROP path): delete its Table + arena + hasRawField slot and
+   * publish so the response cache drops every Buffer view pinning the old arena. Synchronous burst — no
+   * await between the deletes — so a concurrent GET sees `has()===false` atomically (clean 404), never a
+   * torn slot. Throws if not defined (the caller only drops after a confirmed-present DB commit, so an
+   * absent slot signals an engine/registry desync worth surfacing).
+   */
+  dropType(name: string): void {
+    if (!this.tables.has(name)) throw new Error(`content-type "${name}" is not defined (cannot drop)`);
+    this.tables.delete(name);
+    this.arenas.delete(name);
+    this.hasRawField.delete(name);
+    this.bus.publish(name); // ResponseCache.invalidateType drops this type's cached Buffers (frees arena views).
+  }
+
   /** Compute Strapi-style pagination meta from a total count and the query's offset/limit. */
   private paginationMeta(total: number, offset: number, limit: number): PaginationMeta {
     const pageSize = limit === Infinity ? (total === 0 ? 0 : total) : limit;

@@ -330,4 +330,9 @@ export class Registry {
     this.byApiId.set(def.apiId, def);
     return def;
   }
+
+  /** Remove ONE type's def (the drop hook). Returns whether it was present (false signals a desync). */
+  removeType(apiId: string): boolean {
+    return this.byApiId.delete(apiId);
+  }
 }
