@@ -1,10 +1,10 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSql } from '../src/db/client.ts';
-import { runMigrations } from '../src/db/migrate.ts';
+import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres-store.ts';
-import { seedArticleIfAbsent } from '../src/http/server.ts';
+import { createContentType } from '../src/db/content-type-repo.ts';
 import { handleRequest } from '../src/http/router.ts';
+import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 
 /**
  * POSTGRES-STORE SLICE — the boot load path, end-to-end against a REAL Postgres (no mocks), on the
@@ -15,7 +15,8 @@ import { handleRequest } from '../src/http/router.ts';
  * surrogate-pair text, and a filtered+sorted list vs a hand oracle.
  */
 
-const sql = createSql(); // DATABASE_URL from .env.test
+let sql: Sql;
+let db: Awaited<ReturnType<typeof createFileDatabase>>;
 
 interface SeedRow {
   title: string | null;
@@ -36,9 +37,20 @@ const ROWS: SeedRow[] = [
 ];
 
 before(async () => {
-  await runMigrations();
-  await seedArticleIfAbsent(sql);
-  await sql`TRUNCATE ct_article RESTART IDENTITY CASCADE`;
+  db = await createFileDatabase('ps');
+  sql = db.sql;
+  await createContentType(sql, {
+    apiId: 'article',
+    fields: [
+      { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
+      { name: 'body', cmsType: 'text', options: { nullable: false } },
+      { name: 'status', cmsType: 'string', options: { nullable: false } },
+      { name: 'views', cmsType: 'integer', options: { nullable: true } },
+      { name: 'rating', cmsType: 'decimal', options: { precision: 10, scale: 2, nullable: true } },
+      { name: 'active', cmsType: 'boolean', options: { nullable: false } },
+      { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
+    ],
+  });
   for (const r of ROWS) {
     await sql`
       INSERT INTO ct_article (title, body, status, views, rating, active, "publishedAt")
@@ -48,8 +60,9 @@ before(async () => {
 });
 
 after(async () => {
-  await sql`TRUNCATE ct_article RESTART IDENTITY CASCADE`;
-  await sql.end();
+  // Guard so a failing before() (db/sql undefined) surfaces the real error, not a deref of undefined.
+  if (sql) await sql.end();
+  if (db) await dropFileDatabase(db.name);
 });
 
 test('load() builds an engine with every row, PK addressable, NULLs as JSON null', async () => {

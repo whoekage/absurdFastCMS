@@ -1,10 +1,11 @@
 import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSql } from '../src/db/client.ts';
-import { runMigrations } from '../src/db/migrate.ts';
+import type { Sql } from 'postgres';
 import { createContentType } from '../src/db/content-type-repo.ts';
 import { Registry } from '../src/store/registry.ts';
 import { buildEngine } from '../src/db/load.ts';
+import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
+import { cleanCatalog, rawField } from './helpers.ts';
 
 /**
  * LOAD SLICE — generalized loader over a REAL Postgres (no mocks). Multi-type load, i64/decimal/json
@@ -12,54 +13,19 @@ import { buildEngine } from '../src/db/load.ts';
  * (no dirty index after load), empty type -> 0 rows, and the SQL-NULL vs jsonb `'null'` distinction.
  */
 
-const sql = createSql();
-
-async function cleanCatalog(): Promise<void> {
-  const tables = await sql<{ table_name: string }[]>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'ct\\_%'`;
-  for (const { table_name } of tables) await sql.unsafe(`DROP TABLE IF EXISTS "${table_name}" CASCADE`);
-  await sql`DELETE FROM content_type_fields`;
-  await sql`DELETE FROM content_types`;
-}
+let sql: Sql;
+let db: Awaited<ReturnType<typeof createFileDatabase>>;
 
 before(async () => {
-  await runMigrations();
-  await cleanCatalog();
+  db = await createFileDatabase('ld');
+  sql = db.sql;
 });
-beforeEach(cleanCatalog);
+beforeEach(() => cleanCatalog(sql));
 after(async () => {
-  await cleanCatalog();
-  await sql.end();
+  // Guard so a failing before() (db/sql undefined) surfaces the real error, not a deref of undefined.
+  if (sql) await sql.end();
+  if (db) await dropFileDatabase(db.name);
 });
-
-/** Extract the raw bytes of one field from a single-item response Buffer (avoids JSON.parse precision loss). */
-function rawField(buf: Buffer, field: string): string {
-  const s = buf.toString('utf8');
-  const key = `"${field}":`;
-  const start = s.indexOf(key) + key.length;
-  // Read until the next top-level comma or the closing of data. For our test fields the value is a
-  // string or object terminated by `,"` (next key) or `}` — find the matching end heuristically.
-  let depth = 0;
-  let i = start;
-  if (s[i] === '"') {
-    // string value
-    i++;
-    while (i < s.length && s[i] !== '"') {
-      if (s[i] === '\\') i++;
-      i++;
-    }
-    return s.slice(start, i + 1);
-  }
-  while (i < s.length) {
-    const c = s[i]!;
-    if (c === '{' || c === '[') depth++;
-    else if (c === '}' || c === ']') {
-      if (depth === 0) break;
-      depth--;
-    } else if (c === ',' && depth === 0) break;
-    i++;
-  }
-  return s.slice(start, i);
-}
 
 test('multi-type load with i64/decimal/json byte-exact round-trip; warm once; empty type 0 rows', async () => {
   await createContentType(sql, {

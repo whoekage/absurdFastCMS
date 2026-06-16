@@ -7,12 +7,11 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --env-file=.env.test --test --test-concurrency=1",
+    "test": "node --env-file=.env.test --test --test-global-setup=./test/global-setup.ts",
     "bench": "node bench/scan.bench.ts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
-    "db:migrate": "node --env-file=.env src/db/migrate.ts",
-    "db:migrate:test": "node --env-file=.env.test src/db/migrate.ts"
+    "db:migrate": "node --env-file=.env src/db/migrate.ts"
   },
   "dependencies": {
     "kysely": "^0.29.2",
@@ -20,6 +19,8 @@
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0"
   },
   "devDependencies": {
-    "autocannon": "^8.0.0"
+    "@testcontainers/postgresql": "^12.0.2",
+    "autocannon": "^8.0.0",
+    "testcontainers": "^12.0.2"
   }
 }

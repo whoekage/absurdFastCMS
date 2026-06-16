@@ -1,7 +1,7 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import type { Sql } from 'postgres';
 import { createSql } from '../src/db/client.ts';
-import { runMigrations } from '../src/db/migrate.ts';
 import {
   createContentType,
   addField,
@@ -12,6 +12,8 @@ import {
   getContentType,
   getFields,
 } from '../src/db/content-type-repo.ts';
+import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
+import { cleanCatalog, tableExists, physicalColumns } from './helpers.ts';
 import {
   ContentTypeExistsError,
   ContentTypeNotFoundError,
@@ -35,43 +37,22 @@ import {
  * Maps to the blueprint P1..P16.
  */
 
-const sql = createSql(); // DATABASE_URL from .env.test
-
-/** Drop every runtime per-type table and wipe the catalog so each test starts clean. */
-async function cleanCatalog(): Promise<void> {
-  const tables = await sql<{ table_name: string }[]>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'ct\\_%'`;
-  for (const { table_name } of tables) await sql.unsafe(`DROP TABLE IF EXISTS "${table_name}" CASCADE`);
-  await sql`DELETE FROM content_type_fields`;
-  await sql`DELETE FROM content_types`;
-}
-
-/** Read the real columns of a table from information_schema, in ordinal order. */
-async function physicalColumns(table: string): Promise<{ name: string; type: string; nullable: boolean }[]> {
-  const rows = await sql<{ column_name: string; data_type: string; udt_name: string; is_nullable: string; character_maximum_length: number | null; numeric_precision: number | null; numeric_scale: number | null }[]>`
-    SELECT column_name, data_type, udt_name, is_nullable, character_maximum_length, numeric_precision, numeric_scale
-    FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ${table} ORDER BY ordinal_position
-  `;
-  return rows.map((r) => ({ name: r.column_name, type: r.data_type, nullable: r.is_nullable === 'YES' }));
-}
-
-/** Whether a table physically exists. */
-async function tableExists(table: string): Promise<boolean> {
-  const r = await sql`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ${table}`;
-  return r.length > 0;
-}
+let sql: Sql;
+let db: Awaited<ReturnType<typeof createFileDatabase>>;
 
 before(async () => {
-  await runMigrations();
-  await cleanCatalog();
+  db = await createFileDatabase('m');
+  sql = db.sql;
 });
 
 beforeEach(async () => {
-  await cleanCatalog();
+  await cleanCatalog(sql);
 });
 
 after(async () => {
-  await cleanCatalog();
-  await sql.end();
+  // Guard so a failing before() (db/sql undefined) surfaces the real error, not a deref of undefined.
+  if (sql) await sql.end();
+  if (db) await dropFileDatabase(db.name);
 });
 
 // P1 — create -> physical table with system + user cols in sort order; meta == physical. [9,47,60]
@@ -87,7 +68,7 @@ test('P1 create content-type builds a table matching the meta exactly', async ()
   const ct = await getContentType(sql, 'post');
   assert.ok(ct);
   assert.equal(ct!.table_name, 'ct_post');
-  const cols = await physicalColumns('ct_post');
+  const cols = await physicalColumns(sql, 'ct_post');
   // system cols first, in order, then user cols by sort.
   assert.deepEqual(cols.map((c) => c.name), ['id', 'created_at', 'updated_at', 'title', 'views', 'amount']);
   // title is NOT NULL, views nullable, amount nullable.
@@ -113,7 +94,7 @@ test('P2 a failed create leaves NO table and NO meta rows (atomic rollback)', as
   const ct = await getContentType(sql, 'widget');
   const fields = await getFields(sql, ct!.id);
   assert.deepEqual(fields.map((f) => f.name), ['name']);
-  const cols = await physicalColumns('ct_widget');
+  const cols = await physicalColumns(sql, 'ct_widget');
   assert.ok(!cols.some((c) => c.name === 'x'));
 });
 
@@ -125,9 +106,9 @@ test('P2b CREATE TABLE rolls back when a later meta write fails in the same tx',
   await assert.rejects(() => createContentType(sql, { apiId: 'clash', fields: [{ name: 'a', cmsType: 'integer' }] }));
   // No meta rows leaked from the failed tx: neither the content_types row NOR any content_type_fields.
   assert.equal(await getContentType(sql, 'clash'), null);
-  assert.equal((await sql`SELECT 1 FROM content_type_fields`).length, 0, 'no orphan field rows from the rolled-back create');
+  assert.equal((await sql`SELECT 1 FROM content_type_fields WHERE content_type_id IN (SELECT id FROM content_types)`).length, 0, 'no orphan field rows from the rolled-back create');
   // ct_clash is still the pre-seeded one-column table, NOT the user's shape (the CREATE TABLE rolled back).
-  const clashCols = await physicalColumns('ct_clash');
+  const clashCols = await physicalColumns(sql, 'ct_clash');
   assert.deepEqual(clashCols.map((c) => c.name), ['id']);
   await sql.unsafe(`DROP TABLE "ct_clash"`);
 });
@@ -150,7 +131,7 @@ test('P4 a rewrite-class type change is rejected up front; physical type and met
   await sql.unsafe(`INSERT INTO "ct_note" (body) VALUES ('not a number')`);
   // string(varchar) -> integer is a 'rewrite' transition; rejected up front (no cast attempted).
   await assert.rejects(() => changeFieldType(sql, 'note', 'body', 'integer'), TypeChangeForbiddenError);
-  const cols = await physicalColumns('ct_note');
+  const cols = await physicalColumns(sql, 'ct_note');
   assert.equal(cols.find((c) => c.name === 'body')!.type, 'character varying');
   const ct = await getContentType(sql, 'note');
   const f = (await getFields(sql, ct!.id))[0]!;
@@ -161,7 +142,7 @@ test('P4 a rewrite-class type change is rejected up front; physical type and met
 test('P5 rewrite-class type change rejected', async () => {
   await createContentType(sql, { apiId: 'counter', fields: [{ name: 'n', cmsType: 'integer' }] });
   await assert.rejects(() => changeFieldType(sql, 'counter', 'n', 'biginteger'), TypeChangeForbiddenError);
-  const cols = await physicalColumns('ct_counter');
+  const cols = await physicalColumns(sql, 'ct_counter');
   assert.equal(cols.find((c) => c.name === 'n')!.type, 'integer');
 });
 
@@ -169,7 +150,7 @@ test('P5 rewrite-class type change rejected', async () => {
 test('P5b metadata-only type change succeeds', async () => {
   await createContentType(sql, { apiId: 'tag', fields: [{ name: 'label', cmsType: 'string', options: { length: 50 } }] });
   await changeFieldType(sql, 'tag', 'label', 'text');
-  const cols = await physicalColumns('ct_tag');
+  const cols = await physicalColumns(sql, 'ct_tag');
   assert.equal(cols.find((c) => c.name === 'label')!.type, 'text');
   const ct = await getContentType(sql, 'tag');
   assert.equal((await getFields(sql, ct!.id))[0]!.cms_type, 'text');
@@ -181,13 +162,13 @@ test('P6 ADD NOT NULL on a populated table needs a constant default', async () =
   await sql.unsafe(`INSERT INTO "ct_item" (sku) VALUES ('a'), ('b')`);
   // NOT NULL, no default, populated table -> PG 23502 -> mapped error, full rollback.
   await assert.rejects(() => addField(sql, 'item', { name: 'qty', cmsType: 'integer', options: { nullable: false } }), DefaultTypeError);
-  let cols = await physicalColumns('ct_item');
+  let cols = await physicalColumns(sql, 'ct_item');
   assert.ok(!cols.some((c) => c.name === 'qty'));
   const ct = await getContentType(sql, 'item');
   assert.ok(!(await getFields(sql, ct!.id)).some((f) => f.name === 'qty'));
   // With a constant default -> succeeds atomically.
   await addField(sql, 'item', { name: 'qty', cmsType: 'integer', options: { nullable: false, default: 0 } });
-  cols = await physicalColumns('ct_item');
+  cols = await physicalColumns(sql, 'ct_item');
   assert.ok(cols.some((c) => c.name === 'qty' && c.nullable === false));
 });
 
@@ -202,7 +183,7 @@ test('P7 volatile default rejected', async () => {
 test('P8 rename field atomically; reserved + collision rejected', async () => {
   await createContentType(sql, { apiId: 'page', fields: [{ name: 'title', cmsType: 'string' }, { name: 'slug', cmsType: 'string' }] });
   await renameField(sql, 'page', 'title', 'heading');
-  let cols = await physicalColumns('ct_page');
+  let cols = await physicalColumns(sql, 'ct_page');
   assert.ok(cols.some((c) => c.name === 'heading'));
   assert.ok(!cols.some((c) => c.name === 'title'));
   const ct = await getContentType(sql, 'page');
@@ -213,7 +194,7 @@ test('P8 rename field atomically; reserved + collision rejected', async () => {
   await assert.rejects(() => renameField(sql, 'page', 'heading', 'Slug'), FieldExistsError);
   // rename a non-existent field -> FieldNotFoundError.
   await assert.rejects(() => renameField(sql, 'page', 'nope', 'whatever'), FieldNotFoundError);
-  cols = await physicalColumns('ct_page');
+  cols = await physicalColumns(sql, 'ct_page');
   assert.ok(cols.some((c) => c.name === 'heading') && cols.some((c) => c.name === 'slug'));
 });
 
@@ -221,7 +202,7 @@ test('P8 rename field atomically; reserved + collision rejected', async () => {
 test('P9 drop field syncs meta and guards system/non-existent', async () => {
   await createContentType(sql, { apiId: 'doc', fields: [{ name: 'a', cmsType: 'string' }, { name: 'b', cmsType: 'integer' }] });
   await dropField(sql, 'doc', 'b');
-  const cols = await physicalColumns('ct_doc');
+  const cols = await physicalColumns(sql, 'ct_doc');
   assert.ok(!cols.some((c) => c.name === 'b'));
   const ct = await getContentType(sql, 'doc');
   assert.ok(!(await getFields(sql, ct!.id)).some((f) => f.name === 'b'));
@@ -233,9 +214,9 @@ test('P9 drop field syncs meta and guards system/non-existent', async () => {
 test('P10 drop content-type removes everything atomically', async () => {
   await createContentType(sql, { apiId: 'temp', fields: [{ name: 'x', cmsType: 'integer' }] });
   await dropContentType(sql, 'temp');
-  assert.equal(await tableExists('ct_temp'), false);
+  assert.equal(await tableExists(sql, 'ct_temp'), false);
   assert.equal(await getContentType(sql, 'temp'), null);
-  assert.equal((await sql`SELECT 1 FROM content_type_fields`).length, 0);
+  assert.equal((await sql`SELECT 1 FROM content_type_fields WHERE content_type_id IN (SELECT id FROM content_types)`).length, 0);
   await assert.rejects(() => dropContentType(sql, 'temp'), ContentTypeNotFoundError);
 });
 
@@ -247,7 +228,7 @@ test('P11 enumeration CHECK round-trips and an injection value is inert', async 
   await assert.rejects(() => sql.unsafe(`INSERT INTO "ct_ticket" (status) VALUES ('closed')`));
   // the injection-y member is a legal VALUE (stored, checked as a literal) — never executed: articles survives.
   await sql.unsafe(`INSERT INTO "ct_ticket" (status) VALUES ('a''); DROP TABLE articles;--')`);
-  assert.equal(await tableExists('articles'), true);
+  assert.equal(await tableExists(sql, 'articles'), true);
   const rows = await sql`SELECT status FROM "ct_ticket" ORDER BY id`;
   assert.equal(rows.length, 2);
 });
@@ -272,7 +253,7 @@ test('P13 concurrent schema changes on one type serialize', async () => {
   for (const r of results) {
     if (r.status === 'rejected') assert.ok(r.reason instanceof SchemaChangeConflictError, `unexpected: ${r.reason}`);
   }
-  const cols = await physicalColumns('ct_conc');
+  const cols = await physicalColumns(sql, 'ct_conc');
   // Whatever serialization order, the meta and physical agree on the set of columns.
   const ct = await getContentType(sql, 'conc');
   const fieldNames = (await getFields(sql, ct!.id)).map((f) => f.name).sort();
@@ -324,7 +305,7 @@ test('P14 postgres.js parsing contract for the new pg types', async () => {
 // P15 — empty content-type (zero user fields) -> table with only system columns. [55]
 test('P15 empty content-type creates a system-only table', async () => {
   await createContentType(sql, { apiId: 'bare', fields: [] });
-  const cols = await physicalColumns('ct_bare');
+  const cols = await physicalColumns(sql, 'ct_bare');
   assert.deepEqual(cols.map((c) => c.name), ['id', 'created_at', 'updated_at']);
   const ct = await getContentType(sql, 'bare');
   assert.equal((await getFields(sql, ct!.id)).length, 0);
@@ -357,20 +338,20 @@ test('P17 injection identifiers rejected at the real entry points; articles + ca
     InvalidIdentifierError,
   );
   // nothing leaked: no ct_ table, no content_types row, articles intact.
-  assert.equal(await tableExists('ct_safe'), false);
+  assert.equal(await tableExists(sql, 'ct_safe'), false);
   assert.equal(await getContentType(sql, 'safe'), null);
   assert.equal((await sql`SELECT 1 FROM content_types`).length, 0);
-  assert.equal(await tableExists('articles'), true);
+  assert.equal(await tableExists(sql, 'articles'), true);
 
   // addField / renameField with a malicious target name -> rejected, the type untouched.
   await createContentType(sql, { apiId: 'host', fields: [{ name: 'title', cmsType: 'string' }] });
   await assert.rejects(() => addField(sql, 'host', { name: 'bad"; DROP TABLE articles;--', cmsType: 'string' }), InvalidIdentifierError);
   await assert.rejects(() => renameField(sql, 'host', 'title', 'bad" --'), InvalidIdentifierError);
   await assert.rejects(() => dropField(sql, 'host', 'bad" --'), InvalidIdentifierError);
-  assert.equal(await tableExists('articles'), true);
+  assert.equal(await tableExists(sql, 'articles'), true);
   const ct = await getContentType(sql, 'host');
   assert.deepEqual((await getFields(sql, ct!.id)).map((f) => f.name), ['title']);
-  const cols = await physicalColumns('ct_host');
+  const cols = await physicalColumns(sql, 'ct_host');
   assert.deepEqual(cols.map((c) => c.name), ['id', 'created_at', 'updated_at', 'title']);
 });
 
@@ -381,7 +362,7 @@ test('P18 case-variant duplicate field names rejected at create', async () => {
     DuplicateFieldError,
   );
   // rejected before any DDL: no table, no rows.
-  assert.equal(await tableExists('ct_dupct'), false);
+  assert.equal(await tableExists(sql, 'ct_dupct'), false);
   assert.equal(await getContentType(sql, 'dupct'), null);
 });
 
@@ -410,12 +391,12 @@ test('P19 enum value-set change rejected; meta + physical CHECK stay consistent'
 test('P20 injection-y default is inert and round-trips verbatim', async () => {
   const evil = "x'); DROP TABLE articles;--";
   await createContentType(sql, { apiId: 'def', fields: [{ name: 'note', cmsType: 'string', options: { default: evil } }] });
-  assert.equal(await tableExists('articles'), true);
+  assert.equal(await tableExists(sql, 'articles'), true);
   // a row that relies on the default bakes the EXACT literal (no SQL executed from it).
   await sql.unsafe(`INSERT INTO "ct_def" (id) VALUES (DEFAULT)`);
   const [row] = await sql<{ note: string }[]>`SELECT note FROM "ct_def"`;
   assert.equal(row!.note, evil);
-  assert.equal(await tableExists('articles'), true);
+  assert.equal(await tableExists(sql, 'articles'), true);
 });
 
 // P21 — non-integer constant defaults round-trip PHYSICALLY through the real addField DDL path: pins
@@ -466,7 +447,7 @@ test('P23 a held lock makes a competing schema change reject with SchemaChangeCo
   // advisoryKey is derived from the table name; hold that exact xact lock in a separate transaction.
   const key = advisoryKey(ct!.table_name);
   // Open a holder tx on a dedicated connection that grabs the advisory lock and parks.
-  const holder = createSql();
+  const holder = createSql(db.url);
   let release: () => void = () => {};
   let acquired: () => void = () => {};
   const parked = new Promise<void>((resolve) => { release = resolve; });

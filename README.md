@@ -99,10 +99,9 @@ Requires **Node.js ≥ 24** (for native TypeScript type-stripping) and **Docker*
 
 ```bash
 npm install
-npm run db:up           # start Postgres 18 (host port 5673; creates absurd_dev + absurd_test)
+npm run db:up           # start Postgres 18 for DEV (host port 5673; creates absurd_dev)
 npm run db:migrate      # apply migrations to the dev database (.env)
-npm run db:migrate:test # apply migrations to the test database (.env.test)
-npm test                # node --test, mock-free (runs against absurd_test)
+npm test                # node --test, mock-free; Testcontainers owns the test Postgres (see below)
 npm run bench           # engine scan benchmark (in-memory seed, no DB)
 ```
 
@@ -112,8 +111,15 @@ loads its in-memory Engine from Postgres at boot via `PostgresStore`, then serve
 Database workflow:
 
 - `npm run db:generate` — generate a SQL migration from `src/db/schema.ts` (never hand-write migrations)
-- `npm run db:migrate` / `db:migrate:test` — apply migrations programmatically to dev / test
-- `npm run db:down` — stop the Postgres container
+- `npm run db:migrate` — apply migrations programmatically to the dev database
+- `npm run db:down` — stop the dev Postgres container
+
+The **test** schema is NOT applied via a script. `npm test` runs `test/global-setup.ts`, which (by default)
+boots a reusable Testcontainers Postgres (`postgres:18-alpine`), builds a golden template `absurd_golden`
+once via the migration runner, and clones a fresh per-file database from it for each DB test file. To run
+against an external/compose Postgres instead, set `TEST_DATABASE_URL=postgres://<superuser>@host:port/<db>`
+(admin/superuser-capable; must NOT point at `absurd_golden`). On that escape-hatch the external server will
+accrue `absurd_golden` plus transient `t_*` per-file databases that it does not auto-reap.
 
 ## Roadmap
 

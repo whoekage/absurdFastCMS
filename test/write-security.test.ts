@@ -1,12 +1,11 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import net from 'node:net';
-import { createSql } from '../src/db/client.ts';
-import { runMigrations } from '../src/db/migrate.ts';
+import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres-store.ts';
-import { seedArticleIfAbsent } from '../src/http/server.ts';
-import { createContentType, getContentType, dropContentType } from '../src/db/content-type-repo.ts';
-import { createServer, type ListenToken } from '../src/http/app.ts';
+import { createContentType } from '../src/db/content-type-repo.ts';
+import type { ListenToken } from '../src/http/app.ts';
+import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
+import { tableExists, startTestServer } from './helpers.ts';
 
 /**
  * WRITE-SECURITY SLICE — injection via field name, mass-assignment, jsonb byte-exact through load+
@@ -15,52 +14,41 @@ import { createServer, type ListenToken } from '../src/http/app.ts';
  * never an identifier; values are bound params.
  */
 
-const sql = createSql();
+let sql: Sql;
+let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let token: ListenToken;
 let base: string;
 let close: (t: ListenToken) => void;
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, () => {
-      const addr = srv.address();
-      if (addr && typeof addr === 'object') {
-        const { port } = addr;
-        srv.close(() => resolve(port));
-      } else srv.close(() => reject(new Error('no port')));
-    });
-    srv.on('error', reject);
-  });
-}
-
-async function tableExists(table: string): Promise<boolean> {
-  const r = await sql`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ${table}`;
-  return r.length > 0;
-}
-
 before(async () => {
-  await runMigrations();
-  await seedArticleIfAbsent(sql);
-  await sql`TRUNCATE ct_article RESTART IDENTITY CASCADE`;
+  db = await createFileDatabase('sec');
+  sql = db.sql;
+  await createContentType(sql, {
+    apiId: 'article',
+    fields: [
+      { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
+      { name: 'body', cmsType: 'text', options: { nullable: false } },
+      { name: 'status', cmsType: 'string', options: { nullable: false } },
+      { name: 'views', cmsType: 'integer', options: { nullable: true } },
+      { name: 'rating', cmsType: 'decimal', options: { precision: 10, scale: 2, nullable: true } },
+      { name: 'active', cmsType: 'boolean', options: { nullable: false } },
+      { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
+    ],
+  });
+  await createContentType(sql, { apiId: 'doc', fields: [{ name: 'blob', cmsType: 'json', options: { nullable: false } }] });
   await sql`INSERT INTO ct_article (title, body, status, views, rating, active, "publishedAt")
             VALUES ('Seed', 'b1', 'published', 1, 1.0, true, '2021-01-01T00:00:00.000Z')`;
-  if (await getContentType(sql, 'doc')) await dropContentType(sql, 'doc');
-  await createContentType(sql, { apiId: 'doc', fields: [{ name: 'blob', cmsType: 'json', options: { nullable: false } }] });
-  const store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadWithRegistry();
-  const server = createServer(engine, store, registry);
+  const server = await startTestServer(sql);
   close = server.close;
-  const port = await freePort();
-  token = await server.listen(port);
-  base = `http://127.0.0.1:${port}`;
+  token = server.token;
+  base = server.base;
 });
 
 after(async () => {
   if (token) close(token);
-  await sql`TRUNCATE ct_article RESTART IDENTITY CASCADE`;
-  await dropContentType(sql, 'doc');
-  await sql.end();
+  // Guard so a failing before() (db/sql undefined) surfaces the real error, not a deref of undefined.
+  if (sql) await sql.end();
+  if (db) await dropFileDatabase(db.name);
 });
 
 test('injection via field name -> 400 unknown field, before any SQL; ct_article survives', async () => {
@@ -74,7 +62,7 @@ test('injection via field name -> 400 unknown field, before any SQL; ct_article 
   const res = await fetch(`${base}/article`, { method: 'POST', body: JSON.stringify(body) });
   assert.equal(res.status, 400);
   assert.match((await res.json()).error, /unknown field/);
-  assert.equal(await tableExists('ct_article'), true);
+  assert.equal(await tableExists(sql, 'ct_article'), true);
 });
 
 test('mass-assignment: id / created_at / updated_at are rejected (400)', async () => {

@@ -1,13 +1,12 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import net from 'node:net';
-import { createSql } from '../src/db/client.ts';
-import { runMigrations } from '../src/db/migrate.ts';
-import { PostgresStore } from '../src/db/postgres-store.ts';
+import type { Sql } from 'postgres';
 import { seedArticleIfAbsent } from '../src/http/server.ts';
-import { createContentType, getContentType, dropContentType } from '../src/db/content-type-repo.ts';
-import { createServer, type ListenToken } from '../src/http/app.ts';
+import { createContentType } from '../src/db/content-type-repo.ts';
+import type { ListenToken } from '../src/http/app.ts';
 import type { Engine } from '../src/store/engine.ts';
+import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
+import { startTestServer } from './helpers.ts';
 
 /**
  * WRITE-PATH SLICE — POST/PUT/DELETE end-to-end over a REAL uWS server backed by a REAL Postgres
@@ -16,27 +15,12 @@ import type { Engine } from '../src/store/engine.ts';
  * through the wire. Plus strict-validation 400s, 404s, per-type cache isolation, and no corrupted state.
  */
 
-const sql = createSql(); // DATABASE_URL from .env.test
+let sql: Sql;
+let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let token: ListenToken;
 let base: string;
 let close: (t: ListenToken) => void;
 let engine: Engine; // held so the per-type-isolation test can OBSERVE the response cache directly.
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, () => {
-      const addr = srv.address();
-      if (addr && typeof addr === 'object') {
-        const { port } = addr;
-        srv.close(() => resolve(port));
-      } else {
-        srv.close(() => reject(new Error('no port')));
-      }
-    });
-    srv.on('error', reject);
-  });
-}
 
 async function seedRows(): Promise<void> {
   await sql`TRUNCATE ct_article RESTART IDENTITY CASCADE`;
@@ -47,28 +31,25 @@ async function seedRows(): Promise<void> {
 }
 
 before(async () => {
-  await runMigrations();
+  db = await createFileDatabase('wr');
+  sql = db.sql;
   await seedArticleIfAbsent(sql);
   // A SECOND content-type to prove per-type cache isolation on an article write.
-  if (await getContentType(sql, 'widget')) await dropContentType(sql, 'widget');
   await createContentType(sql, { apiId: 'widget', fields: [{ name: 'label', cmsType: 'string', options: { nullable: false } }] });
   await sql`INSERT INTO ct_widget (label) VALUES ('w1')`;
   await seedRows();
-  const store = new PostgresStore(sql);
-  const loaded = await store.loadWithRegistry();
-  engine = loaded.engine;
-  const server = createServer(engine, store, loaded.registry);
+  const server = await startTestServer(sql);
+  engine = server.engine;
   close = server.close;
-  const port = await freePort();
-  token = await server.listen(port);
-  base = `http://127.0.0.1:${port}`;
+  token = server.token;
+  base = server.base;
 });
 
 after(async () => {
   if (token) close(token);
-  await sql`TRUNCATE ct_article RESTART IDENTITY CASCADE`;
-  await dropContentType(sql, 'widget');
-  await sql.end();
+  // Guard so a failing before() (db/sql undefined) surfaces the real error, not a deref of undefined.
+  if (sql) await sql.end();
+  if (db) await dropFileDatabase(db.name);
 });
 
 const j = (body: unknown) => ({ method: 'POST', body: JSON.stringify(body) });
@@ -172,15 +153,11 @@ test('POST with an over-length string -> a clean 400 (length guard, not a PG 220
 });
 
 test('system-fields-only content-type: POST {} -> 201 via DEFAULT VALUES, GET sees it, DELETE removes it', async () => {
-  if (await getContentType(sql, 'blank')) await dropContentType(sql, 'blank');
   await createContentType(sql, { apiId: 'blank', fields: [] });
   // Rebuild a server over a registry that includes `blank` (fresh load picks up the new type).
-  const store = new PostgresStore(sql);
-  const loaded = await store.loadWithRegistry();
-  const server = createServer(loaded.engine, store, loaded.registry);
-  const port = await freePort();
-  const tk = await server.listen(port);
-  const b = `http://127.0.0.1:${port}`;
+  const server = await startTestServer(sql);
+  const tk = server.token;
+  const b = server.base;
   try {
     const res = await fetch(`${b}/blank`, j({}));
     const payload = await res.json();
@@ -197,7 +174,6 @@ test('system-fields-only content-type: POST {} -> 201 via DEFAULT VALUES, GET se
     assert.equal((await fetch(`${b}/blank/${created.id}`)).status, 404);
   } finally {
     server.close(tk);
-    await dropContentType(sql, 'blank');
   }
 });
 

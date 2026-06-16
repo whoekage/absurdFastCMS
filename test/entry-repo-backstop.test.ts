@@ -1,11 +1,11 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSql } from '../src/db/client.ts';
-import { runMigrations } from '../src/db/migrate.ts';
+import type { Sql } from 'postgres';
 import { Registry } from '../src/store/registry.ts';
 import { DetachedTable, Engine } from '../src/store/engine.ts';
 import { insertEntry, EntryWriteError } from '../src/db/entry-repo.ts';
-import { createContentType, getContentType, dropContentType } from '../src/db/content-type-repo.ts';
+import { createContentType } from '../src/db/content-type-repo.ts';
+import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 
 /**
  * Pins two backstops the validator normally front-runs, against REAL Postgres (no mocks):
@@ -14,19 +14,21 @@ import { createContentType, getContentType, dropContentType } from '../src/db/co
  *    {@link EntryWriteError} whose message leaks NO SQL / constraint / column detail.
  */
 
-const sql = createSql();
+let sql: Sql;
+let db: Awaited<ReturnType<typeof createFileDatabase>>;
 
 before(async () => {
-  await runMigrations();
-  if (await getContentType(sql, 'gadget')) await dropContentType(sql, 'gadget');
+  db = await createFileDatabase('erb');
+  sql = db.sql;
   await createContentType(sql, { apiId: 'gadget', fields: [{ name: 'code', cmsType: 'string', options: { nullable: false } }] });
   // A real UNIQUE constraint on a user column so a duplicate insert raises 23505 through the repo.
   await sql`ALTER TABLE ct_gadget ADD CONSTRAINT ct_gadget_code_uniq UNIQUE (code)`;
 });
 
 after(async () => {
-  await dropContentType(sql, 'gadget');
-  await sql.end();
+  // Guard so a failing before() (db/sql undefined) surfaces the real error, not a deref of undefined.
+  if (sql) await sql.end();
+  if (db) await dropFileDatabase(db.name);
 });
 
 test('Engine.replaceType throws on a type that is not defined', () => {

@@ -1,11 +1,12 @@
 import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSql } from '../src/db/client.ts';
-import { runMigrations } from '../src/db/migrate.ts';
+import type { Sql } from 'postgres';
 import { createContentType } from '../src/db/content-type-repo.ts';
 import { Registry, RegistryError } from '../src/store/registry.ts';
 import { loadType } from '../src/db/load.ts';
 import { Engine } from '../src/store/engine.ts';
+import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
+import { cleanCatalog } from './helpers.ts';
 
 /**
  * REGISTRY SLICE — Registry.build from the real meta tables (no mocks). Proves the runtime source of
@@ -14,23 +15,18 @@ import { Engine } from '../src/store/engine.ts';
  * (unknown/forward-incompatible meta -> RegistryError, incl. the `time` rejection).
  */
 
-const sql = createSql();
-
-async function cleanCatalog(): Promise<void> {
-  const tables = await sql<{ table_name: string }[]>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'ct\\_%'`;
-  for (const { table_name } of tables) await sql.unsafe(`DROP TABLE IF EXISTS "${table_name}" CASCADE`);
-  await sql`DELETE FROM content_type_fields`;
-  await sql`DELETE FROM content_types`;
-}
+let sql: Sql;
+let db: Awaited<ReturnType<typeof createFileDatabase>>;
 
 before(async () => {
-  await runMigrations();
-  await cleanCatalog();
+  db = await createFileDatabase('reg');
+  sql = db.sql;
 });
-beforeEach(cleanCatalog);
+beforeEach(() => cleanCatalog(sql));
 after(async () => {
-  await cleanCatalog();
-  await sql.end();
+  // Guard so a failing before() (db/sql undefined) surfaces the real error, not a deref of undefined.
+  if (sql) await sql.end();
+  if (db) await dropFileDatabase(db.name);
 });
 
 test('build: system fields prepended in order, engine types 1:1, decimal scale/precision (incl scale 0), index plan, writable/required', async () => {
