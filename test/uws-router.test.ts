@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Engine } from '../src/store/engine.ts';
-import { handleRequest } from '../src/http/router.ts';
+import { handleRequest } from '../src/http/read.router.ts';
 import { type FieldDef } from '../src/store/table.ts';
 
 /**

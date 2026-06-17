@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Engine, DetachedTable } from '../src/store/engine.ts';
 import type { FieldDef, SortKey } from '../src/store/table.ts';
-import { CursorCodec, InvalidCursorError } from '../src/store/cursor-codec.ts';
-import { parseQuery } from '../src/store/query-parser.ts';
+import { CursorCodec, InvalidCursorError } from '../src/store/cursor.codec.ts';
+import { parseQuery } from '../src/store/query.parser.ts';
 
 /**
  * KEYSET ORACLE — the CONTRACT, PURE-RAM, mock-free, NO Postgres. Drives a real Engine + CursorCodec

@@ -1,10 +1,10 @@
 import type { Sql } from 'postgres';
 import type { Engine } from '../store/engine.ts';
 import type { Registry, ContentTypeDef } from '../store/registry.ts';
-import { validateBody, BodyParseError } from '../store/body-parser.ts';
-import { insertEntry, updateEntry, deleteEntry, serializeEntry, EntryWriteError } from '../db/entry-repo.ts';
-import { applyRelationOps } from '../db/relation-repo.ts';
-import { CANONICAL_INT, JSON_CT, errorResponse, type CoreResponse } from './router.ts';
+import { validateBody, BodyParseError } from '../store/body.parser.ts';
+import { insertEntry, updateEntry, deleteEntry, serializeEntry, EntryWriteError } from '../db/entry.repository.ts';
+import { applyRelationOps } from '../db/relation.repository.ts';
+import { CANONICAL_INT, JSON_CT, errorResponse, type CoreResponse } from './read.router.ts';
 
 /**
  * The Postgres int4 serial PK range upper bound. CANONICAL_INT accepts arbitrarily long digit runs, so

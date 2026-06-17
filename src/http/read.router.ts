@@ -1,6 +1,6 @@
 import type { Engine } from '../store/engine.ts';
-import { parseQuery, QueryParseError } from '../store/query-parser.ts';
-import { InvalidCursorError } from '../store/cursor-codec.ts';
+import { parseQuery, QueryParseError } from '../store/query.parser.ts';
+import { InvalidCursorError } from '../store/cursor.codec.ts';
 
 /**
  * uWS-MIGRATION SLICE 0 — the framework-agnostic HTTP request CORE.

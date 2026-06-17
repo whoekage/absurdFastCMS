@@ -1,6 +1,6 @@
 import postgres from 'postgres';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { runMigrations } from '../src/db/migrate.ts';
+import { runMigrations } from '../src/db/migration.runner.ts';
 import { config } from '../src/config.ts';
 
 /**

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import postgres from 'postgres';
 import type { Sql } from 'postgres';
-import { createSql } from '../src/db/client.ts';
+import { createSql } from '../src/db/database.client.ts';
 import { config } from '../src/config.ts';
 
 /**

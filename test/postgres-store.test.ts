@@ -1,9 +1,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { PostgresStore } from '../src/db/postgres-store.ts';
-import { createContentType } from '../src/db/content-type-repo.ts';
-import { handleRequest } from '../src/http/router.ts';
+import { PostgresStore } from '../src/db/postgres.store.ts';
+import { createContentType } from '../src/db/content-type.repository.ts';
+import { handleRequest } from '../src/http/read.router.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 
 /**

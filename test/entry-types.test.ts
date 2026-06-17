@@ -1,8 +1,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { createContentType } from '../src/db/content-type-repo.ts';
-import type { ListenToken } from '../src/http/app.ts';
+import { createContentType } from '../src/db/content-type.repository.ts';
+import type { ListenToken } from '../src/http/uws.adapter.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { rawField, startTestServer } from './helpers.ts';
 

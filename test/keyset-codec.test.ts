@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CursorCodec, InvalidCursorError, type CursorPayload, type SigInput, type SortFieldType } from '../src/store/cursor-codec.ts';
+import { CursorCodec, InvalidCursorError, type CursorPayload, type SigInput, type SortFieldType } from '../src/store/cursor.codec.ts';
 
 /**
  * KEYSET cursor codec — PURE-RAM, mock-free, NO Postgres. Drives CursorCodec directly: lossless

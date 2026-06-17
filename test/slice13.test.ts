@@ -5,7 +5,7 @@ import {
   ResponseCache,
   InProcessChangeBus,
   queryKey,
-} from '../src/store/response-cache.ts';
+} from '../src/store/response.cache.ts';
 import { type FieldDef, type QueryOptions } from '../src/store/table.ts';
 
 /**

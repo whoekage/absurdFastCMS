@@ -1,10 +1,10 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { createContentType, addRelation, dropContentType } from '../src/db/content-type-repo.ts';
+import { createContentType, addRelation, dropContentType } from '../src/db/content-type.repository.ts';
 import { Registry } from '../src/store/registry.ts';
-import { buildEngine, rebuildType, loadAllRelations, loadType } from '../src/db/load.ts';
-import { PostgresStore } from '../src/db/postgres-store.ts';
+import { buildEngine, rebuildType, loadAllRelations, loadType } from '../src/db/engine.loader.ts';
+import { PostgresStore } from '../src/db/postgres.store.ts';
 import { Engine } from '../src/store/engine.ts';
 import { Bitset } from '../src/store/bitset.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';

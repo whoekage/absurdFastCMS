@@ -9,7 +9,7 @@ import {
   I64Column,
   JsonColumn,
 } from '../src/store/column.ts';
-import { parseQuery, QueryParseError } from '../src/store/query-parser.ts';
+import { parseQuery, QueryParseError } from '../src/store/query.parser.ts';
 import { Bitset } from '../src/store/bitset.ts';
 
 /**

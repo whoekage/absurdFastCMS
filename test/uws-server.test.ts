@@ -2,8 +2,8 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { Engine } from '../src/store/engine.ts';
-import { createServer, type ListenToken } from '../src/http/app.ts';
-import { handleRequest } from '../src/http/router.ts';
+import { createServer, type ListenToken } from '../src/http/uws.adapter.ts';
+import { handleRequest } from '../src/http/read.router.ts';
 import { type FieldDef } from '../src/store/table.ts';
 
 /**

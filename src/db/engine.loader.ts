@@ -1,6 +1,6 @@
 import type { Sql } from 'postgres';
 import { Engine, DetachedTable, type EngineOptions } from '../store/engine.ts';
-import { CursorCodec } from '../store/cursor-codec.ts';
+import { CursorCodec } from '../store/cursor.codec.ts';
 import { Relation } from '../store/relation.ts';
 import type { Table } from '../store/table.ts';
 import { quoteIdent, validateIdentifier, inverseKind } from './ddl.ts';

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseQuery, QueryParseError } from '../src/store/query-parser.ts';
+import { parseQuery, QueryParseError } from '../src/store/query.parser.ts';
 import type { FieldDef } from '../src/store/table.ts';
 
 /**

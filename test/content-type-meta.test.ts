@@ -1,7 +1,7 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { createSql } from '../src/db/client.ts';
+import { createSql } from '../src/db/database.client.ts';
 import {
   createContentType,
   addField,
@@ -11,7 +11,7 @@ import {
   dropContentType,
   getContentType,
   getFields,
-} from '../src/db/content-type-repo.ts';
+} from '../src/db/content-type.repository.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog, tableExists, physicalColumns } from './helpers.ts';
 import {

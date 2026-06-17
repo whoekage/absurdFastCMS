@@ -2,8 +2,8 @@ import type { Sql } from 'postgres';
 import type { Engine, EngineOptions } from '../store/engine.ts';
 import { Registry } from '../store/registry.ts';
 import type { Store } from '../store/store.ts';
-import { buildEngine } from './load.ts';
-import { createSql } from './client.ts';
+import { buildEngine } from './engine.loader.ts';
+import { createSql } from './database.client.ts';
 
 /**
  * {@link Store} backed by Postgres (the source of truth). `load()` builds the content-type

@@ -1,7 +1,7 @@
 import type { Sql } from 'postgres';
 import type { Engine } from '../store/engine.ts';
 import type { Registry, ContentTypeDef } from '../store/registry.ts';
-import { loadType, rebuildType } from '../db/load.ts';
+import { loadType, rebuildType } from '../db/engine.loader.ts';
 import {
   createContentType,
   addField,
@@ -10,7 +10,7 @@ import {
   dropField,
   dropContentType,
   type FieldSpec,
-} from '../db/content-type-repo.ts';
+} from '../db/content-type.repository.ts';
 import {
   ContentTypeExistsError,
   ContentTypeNotFoundError,
@@ -26,8 +26,8 @@ import {
   SchemaChangeConflictError,
   DefaultTypeError,
 } from '../db/ddl.ts';
-import { UnknownCmsTypeError, TypeOptionError, EnumValueError, type CmsType, type FieldOptions } from '../db/type-catalog.ts';
-import { JSON_CT, errorResponse, type CoreResponse } from './router.ts';
+import { UnknownCmsTypeError, TypeOptionError, EnumValueError, type CmsType, type FieldOptions } from '../db/type.catalog.ts';
+import { JSON_CT, errorResponse, type CoreResponse } from './read.router.ts';
 
 /**
  * STEP 5 — the CONTENT-TYPE BUILDER HTTP core, the async counterpart to the read {@link handleRequest}

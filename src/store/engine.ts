@@ -2,7 +2,7 @@ import { Table, type FieldDef, type FilterNode, type QueryOptions, type KeysetOp
 import { Bitset } from './bitset.ts';
 import { RawJson } from './column.ts';
 import { Relation } from './relation.ts';
-import { QueryParseError, type RelationParseContext, type PopulateNode, type PopulatePlan } from './query-parser.ts';
+import { QueryParseError, type RelationParseContext, type PopulateNode, type PopulatePlan } from './query.parser.ts';
 import type { RelationKind } from '../db/ddl.ts';
 import {
   CursorCodec,
@@ -10,7 +10,7 @@ import {
   type CursorPayload,
   type SigInput,
   type SortFieldType,
-} from './cursor-codec.ts';
+} from './cursor.codec.ts';
 import {
   ResponseCache,
   InProcessChangeBus,
@@ -18,7 +18,7 @@ import {
   filterCanonical,
   type ChangeBus,
   type ResponseCacheOptions,
-} from './response-cache.ts';
+} from './response.cache.ts';
 
 /**
  * The OUTPUT layer's per-table arena: every row's response JSON bytes, packed.

@@ -7,7 +7,7 @@ import {
   dropContentType,
   getContentType,
   getRelations,
-} from '../src/db/content-type-repo.ts';
+} from '../src/db/content-type.repository.ts';
 import { Registry } from '../src/store/registry.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog, tableExists, physicalColumns } from './helpers.ts';
@@ -289,7 +289,7 @@ test('R17 createContentType({apiId: content_type_relations}) -> ReservedTableNam
 test('R18 dropping a TARGETED type -> DependentTypesError; the type + its inbound link survive', async () => {
   await makePair();
   await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  await assert.rejects(() => (async () => { const { dropContentType } = await import('../src/db/content-type-repo.ts'); return dropContentType(sql, 'author'); })(), DependentTypesError);
+  await assert.rejects(() => (async () => { const { dropContentType } = await import('../src/db/content-type.repository.ts'); return dropContentType(sql, 'author'); })(), DependentTypesError);
   assert.ok(await tableExists(sql, 'ct_author'));
   assert.ok(await tableExists(sql, 'book_authors_lnk'));
 });
@@ -297,7 +297,7 @@ test('R18 dropping a TARGETED type -> DependentTypesError; the type + its inboun
 // --- R19: owner-drop cascade -------------------------------------------------------------------
 
 test('R19 dropping the OWNER drops its link tables + both meta rows; the target survives', async () => {
-  const { dropContentType } = await import('../src/db/content-type-repo.ts');
+  const { dropContentType } = await import('../src/db/content-type.repository.ts');
   await makePair();
   await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
   await dropContentType(sql, 'book');
@@ -309,7 +309,7 @@ test('R19 dropping the OWNER drops its link tables + both meta rows; the target 
 });
 
 test('R19b a self-referential owner drops its own link table without a self-DependentTypesError', async () => {
-  const { dropContentType } = await import('../src/db/content-type-repo.ts');
+  const { dropContentType } = await import('../src/db/content-type.repository.ts');
   await createContentType(sql, { apiId: 'comment', fields: [{ name: 'body', cmsType: 'text' }] });
   const row = await addRelation(sql, 'comment', { field: 'parent', kind: 'manyToOne', target: 'comment', inverseField: 'children' });
   await dropContentType(sql, 'comment');

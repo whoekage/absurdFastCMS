@@ -1,5 +1,5 @@
 import type { Sql } from 'postgres';
-import { resolveType, classifyTypeChange, type CmsType, type FieldOptions, type ResolvedType } from './type-catalog.ts';
+import { resolveType, classifyTypeChange, type CmsType, type FieldOptions, type ResolvedType } from './type.catalog.ts';
 import {
   validateFieldName,
   deriveTableName,

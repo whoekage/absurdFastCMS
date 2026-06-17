@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler, DummyDriver, sql, type CompiledQuery } from 'kysely';
 import type { Sql } from 'postgres';
-import type { ResolvedType } from './type-catalog.ts';
+import type { ResolvedType } from './type.catalog.ts';
 
 /**
  * Identifier safety + the Kysely COMPILE-ONLY DDL builders + the one atomic transactional applier.

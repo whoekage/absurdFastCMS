@@ -1,6 +1,6 @@
 import { coerceDate, coerceDecimal, coerceI64, type ColumnType, type ScanOp } from './column.ts';
 import type { FieldDef, FilterNode, Predicate, QueryOptions, RawKeysetOptions, SortKey } from './table.ts';
-import type { SortDir } from './sorted-index.ts';
+import type { SortDir } from './sorted.index.ts';
 
 /**
  * API-VERTICAL SLICE 2 — the Strapi v5 query parser.

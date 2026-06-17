@@ -10,8 +10,8 @@ import {
   type ContentTypeRow,
   type FieldRow,
   type RelationRow,
-} from '../db/content-type-repo.ts';
-import type { CmsType } from '../db/type-catalog.ts';
+} from '../db/content-type.repository.ts';
+import type { CmsType } from '../db/type.catalog.ts';
 
 /**
  * THE RAM SOURCE OF TRUTH at runtime. Built at boot from `content_types` + `content_type_fields`, the

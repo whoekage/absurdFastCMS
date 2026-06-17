@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Engine } from '../src/store/engine.ts';
-import { queryKey } from '../src/store/response-cache.ts';
+import { queryKey } from '../src/store/response.cache.ts';
 import { type FieldDef, type FilterNode, type Predicate } from '../src/store/table.ts';
 import {
   parseQuery,
   parseParams,
   splitKey,
   QueryParseError,
-} from '../src/store/query-parser.ts';
+} from '../src/store/query.parser.ts';
 
 /**
  * API-VERTICAL SLICE 2 — the Strapi v5 query parser, wired end-to-end.

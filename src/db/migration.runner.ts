@@ -31,7 +31,7 @@ export async function runMigrations(url = config.databaseUrl): Promise<void> {
   }
 }
 
-// Run directly: `node --env-file=.env src/db/migrate.ts`
+// Run directly: `node --env-file=.env src/db/migration.runner.ts`
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await runMigrations();
   console.log('migrations applied');

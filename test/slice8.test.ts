@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Table, type FieldDef } from '../src/store/table.ts';
 import { StringColumn } from '../src/store/column.ts';
-import { SubstringIndex } from '../src/store/substring-index.ts';
+import { SubstringIndex } from '../src/store/substring.index.ts';
 
 /**
  * Slice 8: trigram (3-gram) substring accelerator (gated, build-on-publish).

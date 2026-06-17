@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { runMigrations } from '../src/db/migrate.ts';
+import { runMigrations } from '../src/db/migration.runner.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { startTestServer, tableExists } from './helpers.ts';
 

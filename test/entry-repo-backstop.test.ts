@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { Registry } from '../src/store/registry.ts';
 import { DetachedTable, Engine } from '../src/store/engine.ts';
-import { insertEntry, EntryWriteError } from '../src/db/entry-repo.ts';
-import { createContentType } from '../src/db/content-type-repo.ts';
+import { insertEntry, EntryWriteError } from '../src/db/entry.repository.ts';
+import { createContentType } from '../src/db/content-type.repository.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 
 /**

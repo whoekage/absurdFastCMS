@@ -2,7 +2,7 @@ import type { ColumnType } from '../store/column.ts';
 
 /**
  * The SINGLE source of the `cms_type -> { pgType, engineType, params }` mapping. Both the DDL
- * generator (src/db/ddl.ts) and the meta writer (src/db/content-type-repo.ts) derive every per-type
+ * generator (src/db/ddl.ts) and the meta writer (src/db/content-type.repository.ts) derive every per-type
  * decision from here, so the rendered Postgres column and the `content_type_fields` row can never
  * diverge. This module renders a pg TYPE LITERAL string (e.g. `numeric(10,2)`) that the Kysely
  * builder drops in via its `sql\`\`` escape hatch — it never speaks SQL itself, and never touches a

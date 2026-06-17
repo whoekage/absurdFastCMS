@@ -1,12 +1,12 @@
 import type { Sql } from 'postgres';
 import { Engine } from '../store/engine.ts';
 import type { FieldDef } from '../store/table.ts';
-import { PostgresStore } from '../db/postgres-store.ts';
-import { runMigrations } from '../db/migrate.ts';
-import { createContentType, getContentType, type FieldSpec } from '../db/content-type-repo.ts';
+import { PostgresStore } from '../db/postgres.store.ts';
+import { runMigrations } from '../db/migration.runner.ts';
+import { createContentType, getContentType, type FieldSpec } from '../db/content-type.repository.ts';
 import { ContentTypeExistsError } from '../db/ddl.ts';
-import { createServer } from './app.ts';
-import { cursorCodecFromEnv } from '../db/load.ts';
+import { createServer } from './uws.adapter.ts';
+import { cursorCodecFromEnv } from '../db/engine.loader.ts';
 import { config } from '../config.ts';
 
 /**

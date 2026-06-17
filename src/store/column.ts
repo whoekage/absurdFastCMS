@@ -1,6 +1,6 @@
 import { Bitset } from './bitset.ts';
-import { SubstringIndex } from './substring-index.ts';
-import { DECIMAL_MAX_SAFE_PRECISION } from '../db/type-catalog.ts';
+import { SubstringIndex } from './substring.index.ts';
+import { DECIMAL_MAX_SAFE_PRECISION } from '../db/type.catalog.ts';
 
 export type ColumnType =
   | 'i32'

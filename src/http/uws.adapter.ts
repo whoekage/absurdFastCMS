@@ -1,11 +1,11 @@
 import uWS from 'uWebSockets.js';
 import type { Engine } from '../store/engine.ts';
 import type { Registry } from '../store/registry.ts';
-import type { PostgresStore } from '../db/postgres-store.ts';
-import { rebuildType } from '../db/load.ts';
-import { handleRequest, errorResponse, type CoreResponse } from './router.ts';
-import { handleWrite, type WriteContext } from './write.ts';
-import { handleContentTypeRequest, type ContentTypeContext } from './content-type-api.ts';
+import type { PostgresStore } from '../db/postgres.store.ts';
+import { rebuildType } from '../db/engine.loader.ts';
+import { handleRequest, errorResponse, type CoreResponse } from './read.router.ts';
+import { handleWrite, type WriteContext } from './write.handler.ts';
+import { handleContentTypeRequest, type ContentTypeContext } from './content-type.controller.ts';
 
 /**
  * uWS-MIGRATION SLICE 1 — the uWebSockets.js HTTP adapter, a THIN transport shim over the

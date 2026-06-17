@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { handleRequest } from '../src/http/router.ts';
+import { handleRequest } from '../src/http/read.router.ts';
 import { Engine } from '../src/store/engine.ts';
-import { CursorCodec } from '../src/store/cursor-codec.ts';
+import { CursorCodec } from '../src/store/cursor.codec.ts';
 import type { FieldDef } from '../src/store/table.ts';
 
 /**

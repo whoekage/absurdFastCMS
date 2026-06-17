@@ -1,14 +1,14 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { createContentType, addRelation } from '../src/db/content-type-repo.ts';
+import { createContentType, addRelation } from '../src/db/content-type.repository.ts';
 import { Registry } from '../src/store/registry.ts';
-import { buildEngine, rebuildType } from '../src/db/load.ts';
+import { buildEngine, rebuildType } from '../src/db/engine.loader.ts';
 import { Engine } from '../src/store/engine.ts';
-import { CursorCodec } from '../src/store/cursor-codec.ts';
+import { CursorCodec } from '../src/store/cursor.codec.ts';
 import { Table } from '../src/store/table.ts';
-import { queryKey } from '../src/store/response-cache.ts';
-import { handleRequest } from '../src/http/router.ts';
+import { queryKey } from '../src/store/response.cache.ts';
+import { handleRequest } from '../src/http/read.router.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog } from './helpers.ts';
 

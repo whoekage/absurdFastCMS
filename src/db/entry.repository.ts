@@ -2,7 +2,7 @@ import type { Sql } from 'postgres';
 import { RawJson } from '../store/column.ts';
 import type { ContentTypeDef, RegistryField } from '../store/registry.ts';
 import { quoteIdent } from './ddl.ts';
-import { assertTableName } from './load.ts';
+import { assertTableName } from './engine.loader.ts';
 
 /**
  * The GENERIC write repository — Postgres is the SOURCE OF TRUTH, so each create/update/delete commits

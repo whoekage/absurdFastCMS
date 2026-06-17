@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Engine } from '../src/store/engine.ts';
 import type { FieldDef } from '../src/store/table.ts';
-import { CursorCodec } from '../src/store/cursor-codec.ts';
-import { parseQuery } from '../src/store/query-parser.ts';
+import { CursorCodec } from '../src/store/cursor.codec.ts';
+import { parseQuery } from '../src/store/query.parser.ts';
 
 /**
  * The ADDITIVE guarantee: offset/page responses are BYTE-IDENTICAL before and after the keyset
