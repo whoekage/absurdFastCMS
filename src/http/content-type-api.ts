@@ -157,7 +157,7 @@ async function syncCreate(ctx: ContentTypeContext, apiId: string): Promise<Conte
  */
 async function syncSchema(ctx: ContentTypeContext, apiId: string): Promise<ContentTypeDef> {
   const def = await ctx.registry().rebuildType(ctx.sql, apiId);
-  await rebuildType(ctx.sql, ctx.engine(), def);
+  await rebuildType(ctx.sql, ctx.engine(), def, ctx.registry());
   return def;
 }
 

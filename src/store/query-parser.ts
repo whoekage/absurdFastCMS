@@ -29,14 +29,24 @@ export class QueryParseError extends Error {
   }
 }
 
-/** A single relation to populate (single-hop; `depth` is reserved for simple nested populate). */
-export interface PopulateEntry {
+/**
+ * One relation to populate, with an optional nested sub-plan (Relations Slice 5). `children` empty =
+ * leaf (a depth-1 frontier relation, expanded at most one hop). A NESTED `populate` value (e.g.
+ * `populate[author][populate][books]`) yields the recursive `children`, which the EXECUTION-time
+ * resolver validates + expands against the TARGET type. The `*` wildcard is the sentinel field name,
+ * expanded at execution to every declared relation of the current type (depth-1).
+ *
+ * A recursive NODE (not a flat `{field,depth}`) is required so depth-2 records WHICH sub-relation to
+ * expand — a single integer depth cannot. Relation NAMES stay UNvalidated at parse time (they are not
+ * in the column schema); the plan is resolved against the registered relations at EXECUTION.
+ */
+export interface PopulateNode {
   field: string;
-  depth: number;
+  children: PopulateNode[];
 }
 
 /** The optional populate plan: which relation fields to expand. Empty when `populate` is absent. */
-export type PopulatePlan = PopulateEntry[];
+export type PopulatePlan = PopulateNode[];
 
 /** The parser's full structured output. `where` is omitted when there are no filters. */
 export interface ParsedQuery {
@@ -119,6 +129,53 @@ export interface SchemaEntry {
   precision?: number;
 }
 export type Schema = Map<string, SchemaEntry>;
+
+/** Relations Slice 4: max RELATION HOPS in a single filter chain (`a.b.c`). A deeper chain -> 400.
+ * Counts relation hops ONLY, NOT `$and`/`$or`/`$not` nesting. The sole terminator for a self-
+ * referential / cyclic relation filter (resolveTarget returns the same-shaped context each hop). */
+export const MAX_RELATION_HOPS = 3;
+
+/**
+ * Relations Slice 5: max literal `[populate]` NESTING levels in a populate query key. INDEPENDENT of
+ * the execution-time populate DEPTH cap (engine `POPULATE_DEPTH_CAP`): this bounds the PARSER recursion
+ * over the URL string so a pathologically deep `populate[a][populate][a][populate]...` key fails fast as
+ * a clean 400 (QueryParseError) instead of blowing the call stack (RangeError -> unhandled 500 / DoS).
+ * Set above the execution cap so any query that COULD be expanded still parses; anything deeper is junk.
+ */
+export const MAX_POPULATE_NESTING = 8;
+
+/**
+ * Relations Slice 4 — the parse-time context the Engine supplies so the parser can (i) tell a
+ * RELATION field from a scalar field on the current type and (ii) recurse a relation sub-filter
+ * against the TARGET type's schema. Scalar-only callers pass a `FieldDef[]` (the legacy overload),
+ * which becomes a context with no relations (a relation key then keeps 400ing as "unknown field").
+ */
+export interface RelationParseContext {
+  /** The current type's scalar fields (the whitelist the leaf parser validates against). */
+  fields: FieldDef[];
+  /** Relation field name -> target apiId, for THIS type. Empty for a scalar-only caller. */
+  relations: Map<string, string>;
+  /** Resolve a target type's context for a deeper hop, or undefined if the type is absent. */
+  resolveTarget(apiId: string): RelationParseContext | undefined;
+}
+
+/** Build the scalar {@link Schema} (lookup map) from a context's field list. */
+function schemaFromFields(fields: FieldDef[]): Schema {
+  const schema: Schema = new Map<string, SchemaEntry>();
+  for (const f of fields) schema.set(f.name, { type: f.type, scale: f.scale, precision: f.precision });
+  return schema;
+}
+
+/** True if every key of `node` is a real leaf-operator token (an op-shaped value, not a nested
+ * field object and not a logical combinator). Used to REJECT a relation value like
+ * `filters[author][$eq]=5` / `[$null]=true`. A logical combinator (`$and`/`$or`/`$not`) is NOT
+ * op-shaped — it is valid Strapi syntax INSIDE a relation sub-filter and must flow through to
+ * `parseFilterObject`, which dispatches it against the TARGET schema. */
+function isOpShaped(node: { [k: string]: ParamNode }): boolean {
+  const keys = Object.keys(node);
+  if (keys.length === 0) return false;
+  return keys.every((k) => k in OP_MAP);
+}
 
 /**
  * Split a bracket key like `filters[$and][0][status][$eq]` into its path segments
@@ -344,30 +401,79 @@ function parseLeafOp(
 /**
  * A field-level filter object `{ $eq: 1, $gt: 0 }` (multiple ops on one field AND together) or the
  * Strapi short form `filters[field]=value` (bare value = `$eq`). Produces one leaf or an AND group.
+ *
+ * Relations Slice 4: precedence is SCALAR-FIRST (registry guarantees disjoint names — a relation
+ * emits no FieldDef). If `field` is not a scalar but IS a relation on the current type, recurse the
+ * sub-filter against the TARGET type's schema and emit a `{ relation, sub }` leaf (EXISTS). A key
+ * that is neither -> the existing `unknown field` 400. `depth` counts relation hops; `path` is the
+ * dotted prefix for error attribution (empty at the top level so scalar messages stay byte-identical).
  */
-function parseFieldFilters(schema: Schema, field: string, node: ParamNode): FilterNode {
-  if (typeof node === 'string') {
-    // Short form: `filters[field]=value` means `$eq`.
-    return { leaf: parseLeafOp(schema, field, '$eq', node) };
+function parseFieldFilters(
+  ctx: RelationParseContext,
+  schema: Schema,
+  field: string,
+  node: ParamNode,
+  depth: number,
+  path: string,
+): FilterNode {
+  // (1) SCALAR — the existing path, byte-unchanged for scalar-only callers.
+  if (schema.has(field)) {
+    if (typeof node === 'string') {
+      // Short form: `filters[field]=value` means `$eq`.
+      return { leaf: parseLeafOp(schema, field, '$eq', node) };
+    }
+    if (Array.isArray(node)) {
+      throw new QueryParseError(`filter on field "${field}" must be an operator object, got an array`);
+    }
+    const opKeys = Object.keys(node);
+    if (opKeys.length === 0) throw new QueryParseError(`filter on field "${field}" is empty`);
+    const leaves: FilterNode[] = opKeys.map((opToken) => ({
+      leaf: parseLeafOp(schema, field, opToken, (node as { [k: string]: ParamNode })[opToken]!),
+    }));
+    return leaves.length === 1 ? leaves[0]! : { op: 'and', children: leaves };
   }
-  if (Array.isArray(node)) {
-    throw new QueryParseError(`filter on field "${field}" must be an operator object, got an array`);
+
+  // (2) RELATION — recurse the sub-filter against the TARGET type's schema.
+  const targetApiId = ctx.relations.get(field);
+  if (targetApiId !== undefined) {
+    if (depth + 1 > MAX_RELATION_HOPS) {
+      throw new QueryParseError(`relation filter too deep (max ${MAX_RELATION_HOPS} hops) at "${path}${field}"`);
+    }
+    // A relation needs a nested FIELD object. Reject the short string form, an array, and an op-shaped
+    // value (`[$eq]=5`, `[$null]=true` — `$null`-on-relation is out of scope) with a relation message.
+    if (typeof node === 'string' || Array.isArray(node) || isOpShaped(node)) {
+      throw new QueryParseError(
+        `relation "${path}${field}" must be filtered by a nested field, e.g. filters[${field}][<field>][$eq]`,
+      );
+    }
+    const targetCtx = ctx.resolveTarget(targetApiId);
+    if (targetCtx === undefined) {
+      // Declared but the target type is absent (a transient engine/registry desync) — clean 400, not a 500.
+      throw new QueryParseError(`relation "${path}${field}" target type unavailable`);
+    }
+    const targetSchema = schemaFromFields(targetCtx.fields);
+    const sub = parseFilterObject(targetCtx, targetSchema, node, depth + 1, `${path}${field}.`);
+    return { relation: field, sub };
   }
-  const opKeys = Object.keys(node);
-  if (opKeys.length === 0) throw new QueryParseError(`filter on field "${field}" is empty`);
-  const leaves: FilterNode[] = opKeys.map((opToken) => ({
-    leaf: parseLeafOp(schema, field, opToken, (node as { [k: string]: ParamNode })[opToken]!),
-  }));
-  return leaves.length === 1 ? leaves[0]! : { op: 'and', children: leaves };
+
+  // (3) NEITHER — the existing 'unknown field "<field>"' 400 (preserved verbatim).
+  throw new QueryParseError(`unknown field "${field}"`);
 }
 
 /**
  * Recursively parse a filters object into a {@link FilterNode}. Handles the logical combinators
  * `$and` / `$or` (arrays of sub-filter objects) and `$not` (a single sub-filter object), and field
  * keys (each a field-level operator object). Multiple sibling keys at one level AND together
- * (Strapi's implicit-AND of co-located conditions).
+ * (Strapi's implicit-AND of co-located conditions). The logical recursions keep the SAME ctx/schema/
+ * depth/path (still on the current type — only a relation hop bumps depth and extends path).
  */
-function parseFilterObject(schema: Schema, node: ParamNode): FilterNode {
+function parseFilterObject(
+  ctx: RelationParseContext,
+  schema: Schema,
+  node: ParamNode,
+  depth: number,
+  path: string,
+): FilterNode {
   if (typeof node === 'string' || Array.isArray(node)) {
     throw new QueryParseError('filters must be an object of fields / logical operators');
   }
@@ -380,14 +486,14 @@ function parseFilterObject(schema: Schema, node: ParamNode): FilterNode {
     if (key === '$and' || key === '$or') {
       const list = asOrderedList(obj[key]!);
       if (list.length === 0) throw new QueryParseError(`${key} must be a non-empty array of filters`);
-      const sub = list.map((el) => parseFilterObject(schema, el));
+      const sub = list.map((el) => parseFilterObject(ctx, schema, el, depth, path));
       children.push({ op: key === '$and' ? 'and' : 'or', children: sub });
     } else if (key === '$not') {
-      children.push({ op: 'not', children: [parseFilterObject(schema, obj[key]!)] });
+      children.push({ op: 'not', children: [parseFilterObject(ctx, schema, obj[key]!, depth, path)] });
     } else if (key.startsWith('$')) {
       throw new QueryParseError(`unknown logical operator "${key}"`);
     } else {
-      children.push(parseFieldFilters(schema, key, obj[key]!));
+      children.push(parseFieldFilters(ctx, schema, key, obj[key]!, depth, path));
     }
   }
   return children.length === 1 ? children[0]! : { op: 'and', children };
@@ -536,34 +642,45 @@ function parseFields(schema: Schema, node: ParamNode): string[] {
 
 /**
  * `populate=author` / `populate=author,tags` / `populate[0]=author` / `populate[author]=...` ->
- * a flat single-hop plan. A simple `populate[rel][populate]=sub` bumps `depth` to 2 (the deepest
- * "simple" case we support); anything richer is accepted as depth 1 on the named relation.
- * Relation NAMES are not in the column schema, so they are not whitelisted here (the populate plan
- * is resolved against the table's registered Relations at execution time).
+ * a recursive {@link PopulatePlan}. The object form `populate[rel][populate]=<sub>` recurses into
+ * the named relation's `children` (a nested sub-plan), so `populate[author][populate][books]` ->
+ * `{field:'author',children:[{field:'books',children:[]}]}` and `populate[author][populate]=*` ->
+ * `{field:'author',children:[{field:'*',children:[]}]}` (the `*` resolved against author's TARGET
+ * type at execution). Relation NAMES are not in the column schema, so they are NOT whitelisted here —
+ * the plan is validated + expanded against the table's registered Relations at execution time. Depth
+ * beyond the execution cap is silently truncated at execution (documented). The `nesting` counter
+ * bounds parser recursion over the literal `[populate]` levels ({@link MAX_POPULATE_NESTING}) so a
+ * crafted over-deep query key 400s cleanly rather than overflowing the stack (RangeError -> 500 / DoS).
  */
-function parsePopulate(node: ParamNode): PopulatePlan {
+function parsePopulate(node: ParamNode, nesting = 0): PopulatePlan {
+  if (nesting > MAX_POPULATE_NESTING) {
+    throw new QueryParseError(`populate nested too deep (max ${MAX_POPULATE_NESTING} levels)`);
+  }
   if (typeof node === 'string') {
-    if (node === '*') return [{ field: '*', depth: 1 }];
+    if (node === '*') return [{ field: '*', children: [] }];
     return node
       .split(',')
       .filter((s) => s !== '')
-      .map((field) => ({ field, depth: 1 }));
+      .map((field) => ({ field, children: [] }));
   }
   if (Array.isArray(node)) {
-    return node.map((el) => ({ field: leafString(el, 'populate entry'), depth: 1 }));
+    return node.map((el) => ({ field: leafString(el, 'populate entry'), children: [] }));
   }
   const obj = node as { [k: string]: ParamNode };
   const keys = Object.keys(obj);
   // Index-shaped object `populate[0]=author` behaves like an array of names.
   const indexed = keys.length > 0 && keys.every((k, i) => String(i) === k);
   if (indexed) {
-    return asOrderedList(obj).map((el) => ({ field: leafString(el, 'populate entry'), depth: 1 }));
+    return asOrderedList(obj).map((el) => ({ field: leafString(el, 'populate entry'), children: [] }));
   }
+  // Object form: each key is a relation; a nested `populate` value yields its children recursively.
   return keys.map((field) => {
     const v = obj[field]!;
-    let depth = 1;
-    if (typeof v !== 'string' && !Array.isArray(v) && 'populate' in v) depth = 2;
-    return { field, depth };
+    let children: PopulateNode[] = [];
+    if (typeof v !== 'string' && !Array.isArray(v) && 'populate' in v) {
+      children = parsePopulate(v.populate!, nesting + 1); // recurse: populate[rel][populate][sub] / [populate]=*
+    }
+    return { field, children };
   });
 }
 
@@ -581,9 +698,16 @@ function parsePopulate(node: ParamNode): PopulatePlan {
  * tree). Unknown TOP-LEVEL keys (anything other than filters/sort/pagination/fields/populate) are
  * rejected.
  */
-export function parseQuery(fields: FieldDef[], input: string | { [k: string]: ParamNode }): ParsedQuery {
-  const schema: Schema = new Map<string, SchemaEntry>();
-  for (const f of fields) schema.set(f.name, { type: f.type, scale: f.scale, precision: f.precision });
+export function parseQuery(
+  ctxOrFields: FieldDef[] | RelationParseContext,
+  input: string | { [k: string]: ParamNode },
+): ParsedQuery {
+  // Legacy overload: a bare FieldDef[] becomes a context with NO relations (a relation key then keeps
+  // 400ing as "unknown field"), so every existing scalar-only caller / test stays byte-identical.
+  const ctx: RelationParseContext = Array.isArray(ctxOrFields)
+    ? { fields: ctxOrFields, relations: new Map(), resolveTarget: () => undefined }
+    : ctxOrFields;
+  const schema: Schema = schemaFromFields(ctx.fields);
 
   const params = typeof input === 'string' ? parseParams(input) : input;
 
@@ -597,7 +721,7 @@ export function parseQuery(fields: FieldDef[], input: string | { [k: string]: Pa
   for (const key of Object.keys(params)) {
     switch (key) {
       case 'filters':
-        where = parseFilterObject(schema, params[key]!);
+        where = parseFilterObject(ctx, schema, params[key]!, 0, '');
         break;
       case 'sort': {
         const s = parseSort(params[key]!);

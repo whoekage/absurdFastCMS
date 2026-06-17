@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler, DummyDriver, sql, type CompiledQuery } from 'kysely';
 import type { Sql } from 'postgres';
 import type { ResolvedType } from './type-catalog.ts';
@@ -43,7 +44,7 @@ export const TABLE_PREFIX = 'ct_';
 /** System columns the generator injects; a user cannot define a field with one of these names. */
 export const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(['id', 'created_at', 'updated_at']);
 /** Tables/api_ids a user type may not collide with. */
-export const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['content_types', 'content_type_fields', '_migrations', 'articles']);
+export const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['content_types', 'content_type_fields', 'content_type_relations', '_migrations', 'articles']);
 
 // --- typed error classes (deterministic; never leak a raw PG error) ----------------------------
 
@@ -153,6 +154,39 @@ export class DuplicateDataError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'DuplicateDataError';
+  }
+}
+export class UnknownRelationKindError extends Error {
+  readonly value: unknown;
+  constructor(value: unknown) {
+    super(`unknown relation kind ${JSON.stringify(value)} (expected oneToOne|oneToMany|manyToOne|manyToMany)`);
+    this.name = 'UnknownRelationKindError';
+    this.value = value;
+  }
+}
+
+// --- relation kinds (a CLOSED set; relations are NOT scalar CmsTypes — they never touch resolveType) --
+
+export type RelationKind = 'oneToOne' | 'oneToMany' | 'manyToOne' | 'manyToMany';
+export const RELATION_KINDS: ReadonlySet<string> = new Set<RelationKind>(['oneToOne', 'oneToMany', 'manyToOne', 'manyToMany']);
+
+/** Closed-set validate a relation kind; the value is NEVER interpolated into SQL (it only selects a fixed template). */
+export function validateRelationKind(value: unknown): RelationKind {
+  if (typeof value !== 'string' || !RELATION_KINDS.has(value)) throw new UnknownRelationKindError(value);
+  return value as RelationKind;
+}
+
+/** The inverse cardinality stored on the inverse meta row (owner kind -> inverse kind). */
+export function inverseKind(kind: RelationKind): RelationKind {
+  switch (kind) {
+    case 'oneToMany':
+      return 'manyToOne';
+    case 'manyToOne':
+      return 'oneToMany';
+    case 'oneToOne':
+      return 'oneToOne';
+    case 'manyToMany':
+      return 'manyToMany';
   }
 }
 
@@ -363,6 +397,85 @@ export function compileDropTable(tableName: string): CompiledQuery {
   return compiler.schema.dropTable(tableName).compile();
 }
 
+// --- relation link-table name + DDL ------------------------------------------------------------
+
+const LINK_SUFFIX = '_lnk';
+/** Hex chars of the stable hash suffix on overflow (>=8 for collision-resistance over a small catalog). */
+const LINK_HASH_HEX = 10;
+
+/**
+ * Resolve the physical link-table name for (ownerApiId, fieldName). Both inputs are ALREADY validated
+ * identifiers (ownerApiId via deriveTableName's gate, fieldName via validateFieldName) BEFORE calling.
+ * base = `${ownerApiId}_${fieldName}_lnk`; if it fits in 63 bytes, use it verbatim. On overflow, build a
+ * STABLE name = truncatedPrefix + '_' + sha256(owner + '\0' + field)[:LINK_HASH_HEX], sized so the WHOLE
+ * result is <= 63 bytes. The NUL separator makes ('a','bc') vs ('ab','c') hash distinctly. The FINAL name
+ * is re-run through validateIdentifier (allowlist + 63-byte gate) and refused if it would collide with a
+ * reserved table or the ct_ prefix. The CALLER STORES this verbatim in content_type_relations.link_table;
+ * the loader/drop path read it from meta and NEVER re-derive.
+ */
+export function deriveLinkTableName(ownerApiId: string, fieldName: string): string {
+  const base = `${ownerApiId}_${fieldName}${LINK_SUFFIX}`;
+  let name: string;
+  if (Buffer.byteLength(base, 'utf8') <= MAX_IDENTIFIER_BYTES) {
+    name = base;
+  } else {
+    const hash = createHash('sha256').update(`${ownerApiId}\0${fieldName}`).digest('hex').slice(0, LINK_HASH_HEX);
+    const tail = `_${hash}`; // separator + hash
+    const room = MAX_IDENTIFIER_BYTES - Buffer.byteLength(tail, 'utf8');
+    // Truncate the prefix on a BYTE boundary (ASCII-only here, so chars == bytes); reserve room for tail.
+    name = base.slice(0, room) + tail;
+  }
+  validateIdentifier(name); // allowlist + 63-byte gate, belt-and-suspenders
+  const lower = name.toLowerCase();
+  if (lower.startsWith(TABLE_PREFIX) || RESERVED_TABLE_NAMES.has(lower)) throw new ReservedTableNameError(name);
+  return name;
+}
+
+/**
+ * CREATE TABLE for a relation link table: id serial PK, owner_id/related_id integer NOT NULL with
+ * ON DELETE CASCADE FKs to the (validated, quoted) owner/target ct_ tables, ord double precision, plus
+ * the per-kind UNIQUE constraint(s). Compile-only -> { sql, parameters }; executed via tx.unsafe in the
+ * same runSchemaTx as the meta INSERTs. ownerTable/targetTable MUST already be deriveTableName output.
+ * NO `IF NOT EXISTS` (non-idempotent by design like compileCreateTable): a pre-existing table -> 42P07
+ * -> whole-tx rollback.
+ *
+ * Per-kind UNIQUE map (the cardinality contract): manyToMany -> UNIQUE(owner_id, related_id);
+ * oneToMany -> UNIQUE(related_id); manyToOne -> UNIQUE(owner_id); oneToOne -> both.
+ */
+export function compileCreateLinkTable(linkTable: string, ownerTable: string, targetTable: string, kind: RelationKind): CompiledQuery {
+  validateIdentifier(linkTable);
+  // Kysely's column `.references('table.column')` takes a STRING it parses + QUOTES itself; ownerTable/
+  // targetTable are already validated identifiers (allowlist, no `.`/quote), so the `table.id` form is
+  // unambiguous and safe. `.onDelete('cascade')` renders the FK action — no hand-built SQL string.
+  let b = compiler.schema
+    .createTable(linkTable)
+    .addColumn('id', 'serial', (cb) => cb.primaryKey().notNull())
+    .addColumn('owner_id', sql`integer`, (cb) => cb.notNull().references(`${ownerTable}.id`).onDelete('cascade'))
+    .addColumn('related_id', sql`integer`, (cb) => cb.notNull().references(`${targetTable}.id`).onDelete('cascade'))
+    .addColumn('ord', sql`double precision`);
+  // Constraint names: short, derived from the resolved link name; cap so they never exceed 63 bytes.
+  const cap = (suffix: string): string => {
+    const room = MAX_IDENTIFIER_BYTES - suffix.length;
+    const nm = `${linkTable.slice(0, room)}${suffix}`;
+    return validateIdentifier(nm);
+  };
+  switch (kind) {
+    case 'manyToMany':
+      b = b.addUniqueConstraint(cap('_ow_re_uq'), ['owner_id', 'related_id']);
+      break;
+    case 'oneToMany':
+      b = b.addUniqueConstraint(cap('_re_uq'), ['related_id']);
+      break;
+    case 'manyToOne':
+      b = b.addUniqueConstraint(cap('_ow_uq'), ['owner_id']);
+      break;
+    case 'oneToOne':
+      b = b.addUniqueConstraint(cap('_ow_uq'), ['owner_id']).addUniqueConstraint(cap('_re_uq'), ['related_id']);
+      break;
+  }
+  return b.compile();
+}
+
 // --- the single atomic transactional applier ---------------------------------------------------
 
 /** Advisory-lock key derived from a table name (stable 31-bit hash). Serializes changes per type. */
@@ -384,7 +497,7 @@ interface PgError extends Error {
 /** Fallback: pull a known unique-index name out of a 23505 DETAIL line when `constraint_name` is absent. */
 function extractConstraint(detail: string | undefined): string | undefined {
   if (detail === undefined) return undefined;
-  for (const name of ['ctf_type_name_lower_uq', 'ctf_type_sort_uq', 'content_types_api_id_lower_uq', 'content_types_table_name_lower_uq']) {
+  for (const name of ['ctf_type_name_lower_uq', 'ctf_type_sort_uq', 'ctr_type_field_lower_uq', 'content_types_api_id_lower_uq', 'content_types_table_name_lower_uq']) {
     if (detail.includes(name)) return name;
   }
   return undefined;
@@ -420,6 +533,8 @@ export async function runSchemaTx<T>(sql: Sql, tableName: string, work: (tx: Sql
         // => a racing DUPLICATE FIELD; ctf_type_sort_uq => a lost-update on `sort` (retryable conflict).
         const constraint = pg.constraint_name ?? extractConstraint(pg.detail);
         if (constraint === 'ctf_type_name_lower_uq') throw new FieldExistsError(constraint);
+        // ctr_type_field_lower_uq => a racing DUPLICATE RELATION field on the same type.
+        if (constraint === 'ctr_type_field_lower_uq') throw new FieldExistsError(constraint);
         if (constraint === 'ctf_type_sort_uq') throw new SchemaChangeConflictError(`schema change on ${tableName} conflicted (concurrent sort race); retry`);
         // content_types_api_id_lower_uq / content_types_table_name_lower_uq (and any unknown) -> type exists.
         throw new ContentTypeExistsError(tableName);

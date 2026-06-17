@@ -1,41 +1,21 @@
 import type { Sql } from 'postgres';
 import { Engine, DetachedTable, type EngineOptions } from '../store/engine.ts';
 import { CursorCodec } from '../store/cursor-codec.ts';
+import { Relation } from '../store/relation.ts';
 import type { Table } from '../store/table.ts';
-import { quoteIdent } from './ddl.ts';
-import type { ContentTypeDef, ColumnDescriptor, Registry } from '../store/registry.ts';
+import { quoteIdent, validateIdentifier, inverseKind } from './ddl.ts';
+import type { ContentTypeDef, ColumnDescriptor, Registry, RelationMeta } from '../store/registry.ts';
+import { config } from '../config.ts';
 
 /** Rows pulled per cursor batch — bounds peak memory so a multi-million-row table never buffers whole. */
 const LOAD_BATCH = 5000;
 
 /**
- * The DEV-ONLY default HMAC secret for the keyset cursor codec. Production MUST set `CURSOR_SECRET`
- * (.env / .env.test); this constant only keeps a local dev/test run working without extra config.
- * Documented as insecure: rotating it (or setting the real secret) invalidates outstanding cursors
- * with a 400, never a 500.
- */
-export const DEV_CURSOR_SECRET = 'absurdFastCMS-dev-only-cursor-secret-do-not-use-in-prod';
-
-/**
- * Build the keyset cursor codec from `CURSOR_SECRET`, falling back to the documented dev default.
- * The dev default is a SOURCE-PUBLISHED constant, so a deploy that forgets `CURSOR_SECRET` would let
- * anyone forge a valid cursor. To make a prod misconfig LOUD rather than silent: outside an explicit
- * dev/test env we emit a one-time warning that the insecure dev secret is active (the design chose a
- * dev default over fail-closed, but the operator must be able to see it).
+ * Build the keyset cursor codec from the validated config.
+ * Uses `CURSOR_SECRET` if set, otherwise falls back to the documented dev default.
  */
 export function cursorCodecFromEnv(): CursorCodec {
-  const secret = process.env.CURSOR_SECRET;
-  if (secret === undefined || secret === '') {
-    const env = process.env.NODE_ENV;
-    if (env !== 'development' && env !== 'test') {
-      console.warn(
-        '[cursor] CURSOR_SECRET is not set; falling back to the INSECURE source-published dev secret. ' +
-        'Set CURSOR_SECRET in production — keyset cursors are forgeable otherwise.',
-      );
-    }
-    return new CursorCodec(DEV_CURSOR_SECRET);
-  }
-  return new CursorCodec(secret);
+  return new CursorCodec(config.cursorSecret);
 }
 
 /**
@@ -115,12 +95,90 @@ export async function loadType(sql: Sql, engine: Engine, def: ContentTypeDef): P
 }
 
 /**
- * Boot: define + load EVERY type from the registry into a fresh Engine. Empty registry => empty engine
- * (no error). Sequential per-type loads keep the source-of-truth-defines-correctness contract simple.
+ * Load the edges of ONE owner relation (an `isOwner=true` meta) into the engine's relation store,
+ * building the forward {@link Relation} and, for a two-way relation, the inverse Relation from the SAME
+ * edge set swapped. The single source of truth for boot phase-2 AND the per-write refresh — both paths
+ * call exactly this, so the SELECT, the PK->dense mapping, the dangling-skip, and the inverse
+ * construction can never drift.
+ *
+ * Resolves BOTH endpoint Tables from the CURRENT engine (so after a {@link Engine.replaceType} it reads
+ * the NEW Table + NEW dense numbering). Edges are DENSE ROW ids, not PKs: each owner_id/related_id is
+ * mapped via `rowIdByEq('id', pk)`. A pk that maps to undefined (a dangling edge — should not happen
+ * given the link FK + ON DELETE CASCADE) is SKIPPED on BOTH the forward and inverse direction with a
+ * diagnostic, never linked. Always builds + stores a Relation even with zero edges (presence is driven
+ * by the META, not the edge count).
+ */
+async function loadOwnerRelation(sql: Sql, engine: Engine, ownerApiId: string, meta: RelationMeta): Promise<void> {
+  if (!meta.isOwner) return; // inverse rows are produced by their partner owner row's swap — never double-load.
+
+  // Defensive endpoint presence (phase ordering guarantees this in the normal case; a desync must not
+  // crash boot/rebuild — skip + diagnostic instead).
+  if (!engine.has(ownerApiId) || !engine.has(meta.targetApiId)) {
+    console.warn(`relation load: skipping ${ownerApiId}.${meta.field} — endpoint table missing`);
+    return;
+  }
+
+  const ownerTable = engine.table(ownerApiId);
+  const targetTable = engine.table(meta.targetApiId); // === ownerTable when self-referential (correct).
+
+  // Defense-in-depth: re-validate the link-table identifier before interpolation. Link tables are
+  // `<owner>_<field>_lnk` (NOT ct_-prefixed), so use validateIdentifier — not assertTableName/CT_TABLE_RE.
+  validateIdentifier(meta.linkTable);
+  const rows = await sql.unsafe<{ owner_id: number; related_id: number }[]>(
+    `SELECT owner_id, related_id FROM ${quoteIdent(meta.linkTable)} ORDER BY owner_id`,
+  );
+
+  const fwd: [number, number][] = [];
+  const inv: [number, number][] = [];
+  const twoWay = meta.inverseField !== undefined;
+  for (const { owner_id, related_id } of rows) {
+    // owner_id/related_id arrive as JS numbers (postgres.js `integer` -> number), matching the i32 `id`
+    // eq key — passed through, never String()/BigInt()-coerced.
+    const o = ownerTable.rowIdByEq('id', owner_id);
+    const r = targetTable.rowIdByEq('id', related_id);
+    if (o === undefined || r === undefined) {
+      console.warn(`relation load: dangling edge in ${meta.linkTable} (owner_id=${owner_id}, related_id=${related_id})`);
+      continue; // NEVER link(undefined); skip both forward AND inverse so they stay consistent.
+    }
+    fwd.push([o, r]);
+    if (twoWay) inv.push([r, o]); // swap the dense rows for the inverse direction.
+  }
+
+  engine.setRelation(ownerApiId, meta.field, Relation.fromEdges(ownerTable, targetTable, fwd), meta.targetApiId, meta.kind);
+  if (twoWay) {
+    // Inverse: BOTH the Table args AND the edge orientation are swapped together. The inverse's TARGET
+    // is the owner type (so a two-way filter via the inverse field resolves back to the owner schema).
+    // Its KIND is the inverse cardinality (manyToOne -> oneToMany, etc.) so populate via the inverse
+    // field dispatches to-many vs to-one correctly (the headline two-way correctness point).
+    engine.setRelation(meta.targetApiId, meta.inverseField!, Relation.fromEdges(targetTable, ownerTable, inv), ownerApiId, inverseKind(meta.kind));
+  }
+}
+
+/**
+ * Load (or re-derive) relations across the WHOLE registry. The simplest-correct strategy: re-derive ALL
+ * owner relations. Used by {@link buildEngine} phase-2 (boot) and by {@link rebuildType} (after a
+ * replaceType) — re-deriving everything trivially covers "every relation whose owner OR target was
+ * rebuilt" incl. inverses, self-refs, and both-endpoint cases, with no affected-set predicate to get
+ * wrong. Cost O(sum of all link-table rows) per call; acceptable for v1 (catalogs are small).
+ */
+export async function loadAllRelations(sql: Sql, engine: Engine, registry: Registry): Promise<void> {
+  for (const def of registry.all()) {
+    for (const meta of def.relations) {
+      if (meta.isOwner) await loadOwnerRelation(sql, engine, def.apiId, meta);
+    }
+  }
+}
+
+/**
+ * Boot: define + load EVERY type from the registry into a fresh Engine, THEN load relation edges.
+ * Empty registry => empty engine (no error). TWO-PHASE: phase 1 registers every `ct_` Table (each with
+ * its warmed eq-on-id index) so a relation can resolve a FORWARD reference to a later type; phase 2
+ * loads the edges strictly AFTER, mapping every PK -> dense row against the now-complete table set.
  */
 export async function buildEngine(sql: Sql, registry: Registry, opts?: EngineOptions): Promise<Engine> {
   const engine = new Engine(opts);
-  for (const def of registry.all()) await loadType(sql, engine, def);
+  for (const def of registry.all()) await loadType(sql, engine, def); // PHASE 1: all ct_ Tables + warm eq-on-id.
+  await loadAllRelations(sql, engine, registry); // PHASE 2: edges, strictly after every Table exists.
   return engine;
 }
 
@@ -132,8 +190,15 @@ export async function buildEngine(sql: Sql, registry: Registry, opts?: EngineOpt
  *
  * SEAM: a future surgical single-row append would replace this full re-stream; the per-type blast
  * radius (vs the old whole-engine reload) is the locked-in win here.
+ *
+ * RELATIONS: a {@link Relation} pins LIVE owner/related Table refs + dense rows captured at build, so it
+ * CANNOT survive a replaceType of either endpoint (the new Table renumbers densely). After the atomic
+ * swap we re-derive ALL relations against the now-current Tables (ordering matters — the swap MUST come
+ * first so `rowIdByEq` reads the new numbering). Re-deriving everything is the simplest-correct option:
+ * it covers the written type as owner, as target, the inverse registered on the target, and self-refs.
  */
-export async function rebuildType(sql: Sql, engine: Engine, def: ContentTypeDef): Promise<void> {
+export async function rebuildType(sql: Sql, engine: Engine, def: ContentTypeDef, registry: Registry): Promise<void> {
   const detached = await buildDetached(sql, def);
-  engine.replaceType(def.apiId, detached);
+  engine.replaceType(def.apiId, detached); // 1. new Table installed (new dense ids).
+  await loadAllRelations(sql, engine, registry); // 2. re-derive ALL relations against the current Tables.
 }

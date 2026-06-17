@@ -24,9 +24,12 @@ export function freePort(): Promise<number> {
 
 /** Clean-start each test: drop every runtime per-type table + wipe the catalog (never the static `articles`). */
 export async function cleanCatalog(sql: Sql): Promise<void> {
+  // Drop link tables FIRST (not ct_-prefixed; the ct_ sweep below misses them). Read names from meta.
+  const links = await sql<{ link_table: string }[]>`SELECT DISTINCT link_table FROM content_type_relations`;
+  for (const { link_table } of links) await sql.unsafe(`DROP TABLE IF EXISTS "${link_table}" CASCADE`);
   const tables = await sql<{ table_name: string }[]>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'ct\\_%'`;
   for (const { table_name } of tables) await sql.unsafe(`DROP TABLE IF EXISTS "${table_name}" CASCADE`);
-  await sql`TRUNCATE content_type_fields, content_types RESTART IDENTITY CASCADE`;
+  await sql`TRUNCATE content_type_relations, content_type_fields, content_types RESTART IDENTITY CASCADE`;
 }
 
 /** Whether a table physically exists. */

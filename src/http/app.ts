@@ -225,7 +225,7 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
         // that is the future DDL hook, NOT this per-entry-write path. The def is guaranteed present: the
         // write core resolved it via registry.get(type) before any SQL ran.
         const def = registry.get(type)!;
-        await rebuildType(store.sql, current, def);
+        await rebuildType(store.sql, current, def, registry);
       },
     };
     // CONTENT-TYPE BUILDER (runtime DDL over HTTP) — registered BEFORE the data `/:type` routes. The

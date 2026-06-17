@@ -125,11 +125,27 @@ export class KeysetUnsupportedError extends Error {
  *
  * NOTE (Slice 0): `not` is a *pure structural* complement here. Null-aware SQL
  * semantics (e.g. `$ne` excluding nulls) arrive in Slice 1 at the leaf operators.
+ *
+ * The 4th arm (Relations Slice 4) is a RELATION leaf — `{ relation, sub }` — an EXISTS join: owner
+ * rows that have AT LEAST ONE related row matching the `sub` tree (evaluated on the TARGET table).
+ * It is structurally disjoint from the other arms (no `leaf`, no `op`). The Table is standalone and
+ * cannot reach the target Table / Relation store itself, so {@link scanTree} resolves this arm via an
+ * Engine-supplied {@link RelationResolver}; without one a relation leaf is a programming error (throw).
  */
 export type FilterNode =
   | { leaf: Predicate }
   | { op: 'and' | 'or'; children: FilterNode[] }
-  | { op: 'not'; children: [FilterNode] };
+  | { op: 'not'; children: [FilterNode] }
+  | { relation: string; sub: FilterNode };
+
+/**
+ * The cross-table seam for a relation leaf, supplied by the Engine (which owns every Table + the
+ * relation store). Given a relation FIELD on the current owner type and the `sub` tree to evaluate on
+ * the TARGET type, it returns an OWNER-sized Bitset of owners with >=1 matching related row (EXISTS).
+ * The owner apiId is NOT a parameter — the Engine binds it in the closure, keeping the Table ignorant
+ * of api_ids. The Table only ever invokes (never constructs) this.
+ */
+export type RelationResolver = (relField: string, sub: FilterNode) => Bitset;
 
 function isRangeOp(op: ScanOp): boolean {
   return op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte';
@@ -556,7 +572,20 @@ export class Table {
    *  - or   : union all children into one accumulator; the empty OR is the identity (no rows).
    *  - not  : evaluate the child, then structurally complement over [0, rowCount).
    */
-  scanTree(node: FilterNode): Bitset {
+  scanTree(node: FilterNode, resolve?: RelationResolver): Bitset {
+    // RELATION leaf (checked first; the arm is structurally disjoint so order is safe). The Engine
+    // supplies the resolver — already OWNER-sized (EXISTS over the target). A standalone Table with
+    // no resolver is a programming error: NEVER silently match-all (a leak) or match-none (a dropped
+    // filter), throw instead. The Engine ALWAYS supplies one on the read path.
+    if ('relation' in node) {
+      if (resolve === undefined) {
+        throw new Error(
+          `relation leaf "${node.relation}" requires a RelationResolver (Table is standalone; the Engine supplies it)`,
+        );
+      }
+      return resolve(node.relation, node.sub);
+    }
+
     if ('leaf' in node) {
       const out = new Bitset(this.rowCount);
       this.fillPredicate(node.leaf, out);
@@ -564,12 +593,12 @@ export class Table {
     }
 
     if (node.op === 'not') {
-      return this.scanTree(node.children[0]).not(this.rowCount);
+      return this.scanTree(node.children[0], resolve).not(this.rowCount);
     }
 
     if (node.op === 'or') {
       const acc = new Bitset(this.rowCount); // empty OR = no rows
-      for (const child of node.children) acc.or(this.scanTree(child));
+      for (const child of node.children) acc.or(this.scanTree(child, resolve));
       return acc;
     }
 
@@ -594,8 +623,9 @@ export class Table {
     }
 
     // Bitset combiner: evaluate every child, then intersect cheapest-first (smallest count
-    // narrows the accumulator fastest). Identical results to the probe path above.
-    const evaluated = node.children.map((c) => this.scanTree(c));
+    // narrows the accumulator fastest). Identical results to the probe path above. A relation child
+    // is non-leaf, so tryProbeAnd bails on it (above) and it is resolved here via `resolve`.
+    const evaluated = node.children.map((c) => this.scanTree(c, resolve));
     evaluated.sort((a, b) => a.count() - b.count());
     const acc = evaluated[0]!;
     for (let i = 1; i < evaluated.length; i++) acc.and(evaluated[i]!);
@@ -755,13 +785,13 @@ export class Table {
    * flat implicit-AND `filters` list. This is the single place tree-vs-flat is decided, so `query`
    * and the Engine's `total` count stay consistent.
    */
-  matchSet(opts: QueryOptions): Bitset {
-    if (opts.where !== undefined) return this.scanTree(opts.where);
+  matchSet(opts: QueryOptions, resolve?: RelationResolver): Bitset {
+    if (opts.where !== undefined) return this.scanTree(opts.where, resolve);
     return this.scan(opts.filters ?? []);
   }
 
-  query(opts: QueryOptions = {}): number[] {
-    const matches = this.matchSet(opts);
+  query(opts: QueryOptions = {}, resolve?: RelationResolver): number[] {
+    const matches = this.matchSet(opts, resolve);
     const offset = opts.offset ?? 0;
     const limit = opts.limit ?? Infinity;
     const sort = opts.sort ?? [];
@@ -887,10 +917,10 @@ export class Table {
    * termination. Returns the page's ordered row ids (ALWAYS ascending sort-presentation order) +
    * the first/last boundaries + has{Next,Previous}Page. Offset/limit are ignored in this mode.
    */
-  queryKeyset(opts: QueryOptions): KeysetResult {
+  queryKeyset(opts: QueryOptions, resolve?: RelationResolver): KeysetResult {
     const ks = opts.keyset!;
     const keys = this.resolveSortKeys(opts.sort ?? []);
-    const matches = this.matchSet(opts);
+    const matches = this.matchSet(opts, resolve);
     const idx = this.compositeIndexFor(keys);
 
     const forward = ks.before === undefined; // `before` => backward; else (cursor or first page) => forward

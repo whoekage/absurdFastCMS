@@ -3,6 +3,7 @@ import type { Engine } from '../store/engine.ts';
 import type { Registry, ContentTypeDef } from '../store/registry.ts';
 import { validateBody, BodyParseError } from '../store/body-parser.ts';
 import { insertEntry, updateEntry, deleteEntry, serializeEntry, EntryWriteError } from '../db/entry-repo.ts';
+import { applyRelationOps } from '../db/relation-repo.ts';
 import { CANONICAL_INT, JSON_CT, errorResponse, type CoreResponse } from './router.ts';
 
 /**
@@ -73,17 +74,29 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
 
   try {
     if (method === 'POST') {
-      const data = validateBody(def, body, 'create');
-      const row = await insertEntry(ctx.sql, def, data);
-      await ctx.rebuild(type);
+      const { data, relationOps } = validateBody(def, body, 'create');
+      // ONE tx: INSERT scalars RETURNING id, then apply the relation ops with that id. A FK 23503 on a
+      // non-existent related id rolls the WHOLE tx back -> no orphan ct_ row, no partial link write.
+      const row = await ctx.sql.begin(async (tx) => {
+        const r = await insertEntry(tx, def, data);
+        await applyRelationOps(tx, def, Number(r['id']), relationOps);
+        return r;
+      });
+      await ctx.rebuild(type); // AFTER commit: re-derive the CSR so reads (both directions) reflect the edges.
       return writeOk(201, def, row);
     }
 
     if (method === 'PUT') {
       const id = parseId(idRaw);
       if (id === null) return errorResponse(404, 'not found');
-      const data = validateBody(def, body, 'update');
-      const row = await updateEntry(ctx.sql, def, id, data);
+      const { data, relationOps } = validateBody(def, body, 'update');
+      // ONE tx: update scalars (also confirms the row exists), then apply relation ops on the URL id.
+      const row = await ctx.sql.begin(async (tx) => {
+        const r = await updateEntry(tx, def, id, data);
+        if (r === null) return null; // missing owner -> abort the tx, do NO link work.
+        await applyRelationOps(tx, def, id, relationOps);
+        return r;
+      });
       if (row === null) return errorResponse(404, 'not found');
       await ctx.rebuild(type);
       return writeOk(200, def, row);
@@ -92,7 +105,8 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
     if (method === 'DELETE') {
       const id = parseId(idRaw);
       if (id === null) return errorResponse(404, 'not found');
-      const row = await deleteEntry(ctx.sql, def, id);
+      // Single statement; ON DELETE CASCADE prunes this owner's link rows. Wrap for symmetry.
+      const row = await ctx.sql.begin((tx) => deleteEntry(tx, def, id));
       if (row === null) return errorResponse(404, 'not found');
       await ctx.rebuild(type);
       return writeOk(200, def, row);

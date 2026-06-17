@@ -1,6 +1,7 @@
 import postgres from 'postgres';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { runMigrations } from '../src/db/migrate.ts';
+import { config } from '../src/config.ts';
 
 /**
  * node:test --test-global-setup hook. Boots ONE Postgres (Testcontainers, reusable) OR uses an external
@@ -26,7 +27,7 @@ const GOLDEN_LOCK_KEY = 0x60_1d_e2_60;
 let container: StartedPostgreSqlContainer | undefined;
 
 function reuseEnabled(): boolean {
-  return process.env.TESTCONTAINERS_REUSE_ENABLE !== 'false';
+  return config.testcontainersReuse;
 }
 
 function goldenUrlFrom(adminUri: string): string {
@@ -36,8 +37,8 @@ function goldenUrlFrom(adminUri: string): string {
 }
 
 export async function globalSetup(): Promise<void> {
-  // Blank/whitespace TEST_DATABASE_URL counts as UNSET so the container path stays the default.
-  const external = process.env.TEST_DATABASE_URL?.trim() || undefined;
+  // Use TEST_DATABASE_URL from config if available (external/compose pg).
+  const external = config.testDatabaseUrl;
   let adminUri: string;
 
   if (external) {

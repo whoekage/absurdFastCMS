@@ -78,6 +78,17 @@ export class Relation {
   }
 
   /**
+   * Build a FRESH Relation from a complete edge set — the per-write re-derivation seam. The CSR is
+   * append-only (no edge deletion), so a write that changes edges (connect/disconnect/set, or a
+   * cascade) re-reads the full edge set from Postgres and constructs a new Relation to swap in,
+   * mirroring the engine's per-type Table rebuild. A thin, intent-revealing alias for the edge-list
+   * constructor.
+   */
+  static fromEdges(owner: Table, related: Table, edges: [number, number][]): Relation {
+    return new Relation(owner, related, edges);
+  }
+
+  /**
    * Add one explicit edge `ownerRow -> relatedRow`. Append-only; marks the CSR dirty so the
    * next query rebuilds. Adding the same pair twice records two edges (a duplicate posting),
    * which is harmless for EXISTS semantics — the owner still matches on the first hit.
@@ -169,6 +180,24 @@ export class Relation {
         }
       }
     }
+    return out;
+  }
+
+  /**
+   * The RELATED row ids of an owner's CSR slice — postings only, NO materialization. This is the
+   * byte-splice populate primitive (vs {@link materializeRelated} which allocates objects): the
+   * populate assembler walks these row ids and splices each related row's pre-serialized arena
+   * bytes, never building an intermediate object. Row ids are in CSR/insertion order (EXISTS never
+   * needs them sorted; presentation order via the link `ord` column is a later concern). An owner
+   * with no related rows (or out of range) returns an empty array.
+   */
+  relatedRows(ownerRow: number): number[] {
+    this.ensureBuilt();
+    if (ownerRow < 0 || ownerRow >= this.builtOwnerCount) return [];
+    const start = this.offsets[ownerRow]!;
+    const end = this.offsets[ownerRow + 1]!;
+    const out = new Array<number>(end - start);
+    for (let i = start; i < end; i++) out[i - start] = this.postings[i]!;
     return out;
   }
 

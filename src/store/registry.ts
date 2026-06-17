@@ -1,13 +1,15 @@
 import type { Sql } from 'postgres';
 import type { ColumnType } from './column.ts';
 import type { FieldDef } from './table.ts';
-import { deriveTableName, validateIdentifier } from '../db/ddl.ts';
+import { deriveTableName, validateIdentifier, RELATION_KINDS, type RelationKind } from '../db/ddl.ts';
 import {
   listContentTypes,
   getContentType,
   getFields,
+  getRelations,
   type ContentTypeRow,
   type FieldRow,
+  type RelationRow,
 } from '../db/content-type-repo.ts';
 import type { CmsType } from '../db/type-catalog.ts';
 
@@ -102,6 +104,25 @@ export interface IndexPlan {
   sorted: string[];
 }
 
+/**
+ * One relation declared on this content-type SIDE — METADATA ONLY (this slice). The edge data lives in
+ * `linkTable`; loading edges into the CSR / building Relation objects is the NEXT slice. The read arena
+ * is byte-identical with or without relations (a relation emits NO ct_ column and NO FieldDef).
+ */
+export interface RelationMeta {
+  /** API key on this side. */
+  field: string;
+  kind: RelationKind;
+  targetApiId: string;
+  /** true => this side emitted the link-table DDL. */
+  isOwner: boolean;
+  /** present => two-way (the partner field on the target). */
+  inverseField?: string;
+  /** the resolved physical link-table name (read verbatim from meta, never re-derived). */
+  linkTable: string;
+  sort: number;
+}
+
 /** A content-type fully resolved for the runtime — the unit the registry hands to every consumer. */
 export interface ContentTypeDef {
   /** The canonical stored api_id (the engine + registry key). */
@@ -122,6 +143,18 @@ export interface ContentTypeDef {
   /** Positional coercion plan, parallel to `fields`. */
   columnPlan: ColumnDescriptor[];
   indexPlan: IndexPlan;
+  /**
+   * Relations declared on this type, in `sort` order — METADATA ONLY (no edges loaded, no Relation
+   * objects built this slice). NOT folded into fields/fieldDefs/columnPlan/writable: the read arena stays
+   * byte-identical. NOTE (deferred): `schemaVersion` (engine trackSchema) intentionally does NOT bump on
+   * a relation declaration in this slice — relations emit no FieldDef / no ct_ column, so the unpopulated
+   * read arena, sort, and keyset cursors are unchanged and plain cursors stay valid. TODO slice 4/5
+   * (populate + relational filtering): fold the relation set into the schema-shape hash / populated-
+   * response cache key so a relation add/drop invalidates populated cursors / cached envelopes.
+   */
+  relations: RelationMeta[];
+  /** O(1) relation lookup by this side's field name. */
+  relationsByField: Map<string, RelationMeta>;
 }
 
 /** Map a positive number out of a jsonb `params` object, or undefined (presence check; 0 is valid). */
@@ -247,8 +280,38 @@ function buildIndexPlan(fields: RegistryField[]): IndexPlan {
   return { eq, sorted };
 }
 
-/** Assemble a full {@link ContentTypeDef} from a content_types row + its user field rows. */
-function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[]): ContentTypeDef {
+/**
+ * Build a {@link RelationMeta} from a relation row, re-validating identifiers + kind (defense-in-depth,
+ * fail LOUD via {@link RegistryError}). NO edges loaded, NO Relation object built.
+ */
+function buildRelation(apiId: string, row: RelationRow): RelationMeta {
+  try {
+    validateIdentifier(row.field_name);
+  } catch {
+    throw new RegistryError(apiId, String(row.field_name), 'invalid relation field identifier');
+  }
+  try {
+    validateIdentifier(row.link_table);
+  } catch {
+    throw new RegistryError(apiId, row.field_name, 'invalid link_table identifier');
+  }
+  if (!RELATION_KINDS.has(row.kind)) {
+    throw new RegistryError(apiId, row.field_name, `unknown relation kind "${row.kind}"`);
+  }
+  const meta: RelationMeta = {
+    field: row.field_name,
+    kind: row.kind as RelationKind,
+    targetApiId: row.target_api_id,
+    isOwner: row.is_owner,
+    linkTable: row.link_table,
+    sort: row.sort,
+  };
+  if (row.inverse_field !== null) meta.inverseField = row.inverse_field;
+  return meta;
+}
+
+/** Assemble a full {@link ContentTypeDef} from a content_types row + its user field rows + relation rows. */
+function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[], relationRows: RelationRow[]): ContentTypeDef {
   // Re-derive the table name (re-validates the api_id identifier — defense-in-depth) rather than
   // trusting the stored table_name verbatim.
   const tableName = deriveTableName(ct.api_id);
@@ -270,6 +333,11 @@ function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[]): ContentTypeDef {
   const columnPlan = fields.map(descriptorFor);
   const indexPlan = buildIndexPlan(fields);
 
+  // Relations are METADATA ONLY here: built from meta (already sort-ordered by getRelations), NOT folded
+  // into fields/fieldDefs/columnPlan/writable — the read arena stays byte-identical.
+  const relations = relationRows.map((r) => buildRelation(ct.api_id, r));
+  const relationsByField = new Map<string, RelationMeta>(relations.map((r) => [r.field, r]));
+
   return {
     apiId: ct.api_id,
     tableName,
@@ -281,6 +349,8 @@ function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[]): ContentTypeDef {
     requiredOnCreate,
     columnPlan,
     indexPlan,
+    relations,
+    relationsByField,
   };
 }
 
@@ -312,7 +382,8 @@ export class Registry {
     const types = await listContentTypes(sql);
     for (const ct of types) {
       const fieldRows = await getFields(sql, ct.id);
-      reg.byApiId.set(ct.api_id, buildDef(ct, fieldRows));
+      const relationRows = await getRelations(sql, ct.id);
+      reg.byApiId.set(ct.api_id, buildDef(ct, fieldRows, relationRows));
     }
     return reg;
   }
@@ -326,7 +397,8 @@ export class Registry {
     const ct = await getContentType(sql, apiId);
     if (ct === null) throw new RegistryError(apiId, '', 'content-type not found on rebuild');
     const fieldRows = await getFields(sql, ct.id);
-    const def = buildDef(ct, fieldRows);
+    const relationRows = await getRelations(sql, ct.id);
+    const def = buildDef(ct, fieldRows, relationRows);
     this.byApiId.set(def.apiId, def);
     return def;
   }

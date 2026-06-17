@@ -1,6 +1,9 @@
 import { coerceI64, coerceDecimal, formatDecimal } from './column.ts';
-import type { ContentTypeDef, RegistryField } from './registry.ts';
+import type { ContentTypeDef, RegistryField, RelationMeta } from './registry.ts';
 import { SYSTEM_COLUMN_NAMES } from './registry.ts';
+
+/** The Postgres int4 PK upper bound — a related id must be a positive int4 (mirrors {@link write.ts}). */
+const MAX_INT4 = 2147483647;
 
 /**
  * The WRITE-side counterpart to the query parser: validate + coerce a request body against a content-
@@ -27,16 +30,38 @@ export class BodyParseError extends Error {
 
 export type WriteMode = 'create' | 'update';
 
-export function validateBody(def: ContentTypeDef, raw: unknown, mode: WriteMode): Record<string, unknown> {
+/**
+ * One validated relation mutation parsed off the body. `field` is the relation API key (a Map-lookup key
+ * ONLY — it NEVER becomes a SQL identifier; the link table + columns are resolved from the relation meta
+ * by the link-mutation layer). `ids` are deduped, validated positive int4s. `set` REPLACES the owner's
+ * related set ([] clears); `connect` ADDS (cardinality maintained); `disconnect` REMOVES specific edges.
+ */
+export interface RelationOp {
+  field: string;
+  op: 'set' | 'connect' | 'disconnect';
+  ids: number[];
+}
+
+/** The split body: scalar `data` (byte-identical to the pre-relations return) + the relation ops. */
+export interface ParsedBody {
+  data: Record<string, unknown>;
+  relationOps: RelationOp[];
+}
+
+export function validateBody(def: ContentTypeDef, raw: unknown, mode: WriteMode): ParsedBody {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new BodyParseError('request body must be a JSON object');
   }
   const obj = raw as Record<string, unknown>;
 
+  const relationOps: RelationOp[] = [];
   for (const key of Object.keys(obj)) {
     if (key === 'id') throw new BodyParseError('`id` is server-assigned and cannot be set');
     if (SYSTEM_COLUMN_NAMES.has(key)) throw new BodyParseError(`unknown field "${key}"`);
-    if (!def.writableByName.has(key)) throw new BodyParseError(`unknown field "${key}"`);
+    if (def.writableByName.has(key)) continue; // scalar -> handled by the coerce loop below.
+    const meta = def.relationsByField.get(key);
+    if (meta === undefined) throw new BodyParseError(`unknown field "${key}"`); // SAME message as before.
+    parseRelationValue(meta, obj[key], relationOps);
   }
 
   const out: Record<string, unknown> = {};
@@ -55,11 +80,79 @@ export function validateBody(def: ContentTypeDef, raw: unknown, mode: WriteMode)
     for (const req of def.requiredOnCreate) {
       if (!(req in out)) throw new BodyParseError(`missing required field "${req}"`);
     }
-  } else if (Object.keys(out).length === 0) {
-    throw new BodyParseError('update body has no writable fields');
+  } else if (Object.keys(out).length === 0 && relationOps.length === 0) {
+    throw new BodyParseError('update body has no writable or relation fields');
   }
 
-  return out;
+  return { data: out, relationOps };
+}
+
+/**
+ * Parse one relation field value into 0..2 {@link RelationOp}s appended to `out`. Grammar:
+ *   - bare `id` (number) or `[ids]` (array) -> shorthand for `set`;
+ *   - `{ set | connect | disconnect: id|[ids] }` -> the explicit ops; `set` is MUTUALLY EXCLUSIVE with
+ *     connect/disconnect; connect + disconnect together is allowed (emitted disconnect-THEN-connect so a
+ *     connect wins any overlap, matching Strapi);
+ *   - `null` / any other primitive / an object with an unknown key -> 400.
+ * A to-one (oneToOne / manyToOne) accepts at most ONE id for set/connect (disconnect of >1 is allowed,
+ * extras are no-ops). `meta.kind` is ALREADY this side's cardinality: the owning row stores `spec.kind`,
+ * the inverse row stores `inverseKind(spec.kind)` (content-type-repo) — so it needs NO further flip here.
+ */
+function parseRelationValue(meta: RelationMeta, value: unknown, out: RelationOp[]): void {
+  const field = meta.field;
+  const isToOne = meta.kind === 'oneToOne' || meta.kind === 'manyToOne';
+
+  if (value === null) {
+    throw new BodyParseError(`relation field "${field}" cannot be null (use set: [] to clear)`);
+  }
+  if (typeof value === 'number' || Array.isArray(value)) {
+    out.push({ field, op: 'set', ids: normalizeIds(meta, isToOne, 'set', value) });
+    return;
+  }
+  if (typeof value !== 'object') {
+    throw new BodyParseError(`relation field "${field}" must be an id, array of ids, or a {set|connect|disconnect} object`);
+  }
+
+  const o = value as Record<string, unknown>;
+  for (const k of Object.keys(o)) {
+    if (k !== 'set' && k !== 'connect' && k !== 'disconnect') throw new BodyParseError(`relation field "${field}" has an invalid value`);
+  }
+  const hasSet = 'set' in o;
+  const hasConnect = 'connect' in o;
+  const hasDisconnect = 'disconnect' in o;
+  if (!hasSet && !hasConnect && !hasDisconnect) throw new BodyParseError(`relation field "${field}" must specify set, connect, or disconnect`);
+  if (hasSet && (hasConnect || hasDisconnect)) throw new BodyParseError(`relation field "${field}": set cannot be combined with connect/disconnect`);
+
+  if (hasSet) {
+    out.push({ field, op: 'set', ids: relIds(meta, isToOne, 'set', field, o.set) });
+    return;
+  }
+  // disconnect THEN connect (deterministic; a connect wins any overlapping id).
+  if (hasDisconnect) out.push({ field, op: 'disconnect', ids: relIds(meta, isToOne, 'disconnect', field, o.disconnect) });
+  if (hasConnect) out.push({ field, op: 'connect', ids: relIds(meta, isToOne, 'connect', field, o.connect) });
+}
+
+/** Validate an op's value is an id or array of ids, then normalize (else a 400 naming the op). */
+function relIds(meta: RelationMeta, isToOne: boolean, op: 'set' | 'connect' | 'disconnect', field: string, raw: unknown): number[] {
+  if (typeof raw !== 'number' && !Array.isArray(raw)) {
+    throw new BodyParseError(`relation field "${field}": ${op} must be an id or array of ids`);
+  }
+  return normalizeIds(meta, isToOne, op, raw);
+}
+
+/** Validate every id (positive int4 integer), dedup (first-seen order), and apply the to-one cap. */
+function normalizeIds(meta: RelationMeta, isToOne: boolean, op: 'set' | 'connect' | 'disconnect', raw: unknown): number[] {
+  const arr = Array.isArray(raw) ? raw : [raw];
+  for (const v of arr) {
+    if (typeof v !== 'number' || !Number.isInteger(v) || v <= 0 || v > MAX_INT4) {
+      throw new BodyParseError(`relation field "${meta.field}": ids must be positive integers`);
+    }
+  }
+  const ids = [...new Set(arr as number[])];
+  if (isToOne && (op === 'set' || op === 'connect') && ids.length > 1) {
+    throw new BodyParseError(`relation field "${meta.field}" is to-one and accepts at most one id`);
+  }
+  return ids;
 }
 
 /** Type-check + coerce one non-null value against its engine field. Coerce throws become 400s here. */
