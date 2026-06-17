@@ -1,5 +1,6 @@
 import { Table, type FieldDef, type QueryOptions, type KeysetOptions } from './table.ts';
 import { RawJson } from './column.ts';
+import { Relation } from './relation.ts';
 import {
   CursorCodec,
   InvalidCursorError,
@@ -179,6 +180,18 @@ export class Engine {
   private readonly schemaVersions = new Map<string, number>();
   private readonly schemaShapes = new Map<string, string>();
 
+  /**
+   * RELATION STORE: the in-memory CSR {@link Relation} per declared OWNER-side relation, keyed by
+   * `ownerApiId + "\u0000" + field` (NUL-joined — api_ids/fields pass `validateIdentifier` and never
+   * contain NUL, so `(a,bc)` and `(ab,c)` can never alias). Populated by the loader (boot phase-2 +
+   * per-write refresh); NOT consulted by the unpopulated read path (respond/assemble/respondById) this
+   * slice — stored for the next slices (relational filtering, populate). A Relation references LIVE
+   * owner/related Table objects + dense rows captured at build, so it CANNOT survive a replaceType of
+   * either endpoint (the dense numbering changes) — the loader re-derives on every replaceType, and
+   * {@link dropType} purges every Relation touching a dropped type.
+   */
+  private readonly relations = new Map<string, Relation>();
+
   constructor(opts: EngineOptions = {}) {
     this.bus = opts.bus ?? new InProcessChangeBus();
     this.cache = new ResponseCache(this.bus, opts.cache);
@@ -206,6 +219,33 @@ export class Engine {
   /** The current schema version for a type (field-shape counter); 0 if unknown. */
   schemaVersion(name: string): number {
     return this.schemaVersions.get(name) ?? 0;
+  }
+
+  /** NUL-joined relation key (collision-free: validated api_ids/fields never contain NUL). */
+  private static relKey(apiId: string, field: string): string {
+    return apiId + '\u0000' + field;
+  }
+
+  /**
+   * Install (or overwrite) the {@link Relation} for `(ownerApiId, field)`. Last-write-wins (NO
+   * "already defined" guard, unlike {@link registerDetached}) — both the boot phase and the per-write
+   * refresh call this, and a re-derive simply replaces the prior entry that referenced the now-stale
+   * Table. Does NOT bump schemaVersion or publish on the bus: a relation load/refresh touches ONLY this
+   * Map, so the unpopulated read arena and plain keyset cursors stay valid.
+   */
+  setRelation(ownerApiId: string, field: string, rel: Relation): void {
+    this.relations.set(Engine.relKey(ownerApiId, field), rel);
+  }
+
+  /**
+   * The current {@link Relation} for `(ownerApiId, field)`, or undefined for an unknown type / unknown
+   * field / a scalar field. NEVER throws (mirrors {@link Registry.get} / {@link has} — a probe the next
+   * slices branch on, e.g. `engine.relation(t, f)?.ownersMatching(bs)`). Returns the stored LIVE
+   * reference (no copy); its owner/related are the Tables currently installed (the invariant the
+   * loader's refresh maintains).
+   */
+  relation(ownerApiId: string, field: string): Relation | undefined {
+    return this.relations.get(Engine.relKey(ownerApiId, field));
   }
 
   /** Define a content-type by name + field schema, creating its Table and output arena. */
@@ -332,12 +372,21 @@ export class Engine {
    */
   dropType(name: string): void {
     if (!this.tables.has(name)) throw new Error(`content-type "${name}" is not defined (cannot drop)`);
+    const dropped = this.tables.get(name)!; // capture BEFORE the delete for the endpoint scan below.
     this.tables.delete(name);
     this.arenas.delete(name);
     this.hasRawField.delete(name);
     // Drop the schema-shape memo but KEEP the version counter: a re-created type with the same name
     // must bump past any version an old cursor was signed under (so a stale cursor never re-validates).
     this.schemaShapes.delete(name);
+    // Purge every relation referencing the dropped type: by KEY (forward relations X owns + inverses
+    // keyed on X) AND by stored ENDPOINT object (a SURVIVING partner's two-way inverse that points back
+    // at X — keyed on the partner, so missed by the key scan). Deleting from a Map while iterating its
+    // own iterator is safe in V8.
+    const prefix = name + '\u0000';
+    for (const [k, rel] of this.relations) {
+      if (k.startsWith(prefix) || rel.owner === dropped || rel.related === dropped) this.relations.delete(k);
+    }
     this.bus.publish(name); // ResponseCache.invalidateType drops this type's cached Buffers (frees arena views).
   }
 
