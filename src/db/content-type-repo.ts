@@ -4,7 +4,11 @@ import {
   validateFieldName,
   deriveTableName,
   validateDefault,
+  validateRelationKind,
+  inverseKind,
+  deriveLinkTableName,
   compileCreateTable,
+  compileCreateLinkTable,
   compileAddColumn,
   compileRenameColumn,
   compileDropColumn,
@@ -17,6 +21,8 @@ import {
   FieldExistsError,
   FieldNotFoundError,
   TypeChangeForbiddenError,
+  DependentTypesError,
+  type RelationKind,
   type ResolvedField,
 } from './ddl.ts';
 
@@ -67,6 +73,29 @@ export interface FieldRow {
   params: Record<string, unknown>;
 }
 
+/** A relation the caller wants to declare on an owner type. inverseField PRESENT => two-way. */
+export interface RelationSpec {
+  field: string; // the relation field / API key on the owner
+  kind: RelationKind; // oneToOne|oneToMany|manyToOne|manyToMany
+  target: string; // target type api_id (may equal owner api_id => self-referential)
+  inverseField?: string; // present => two-way (adds inverse meta row on the target, no DDL); absent => one-way
+}
+
+/** A `content_type_relations` row (snake_case as stored). */
+export interface RelationRow {
+  id: number;
+  content_type_id: number;
+  field_name: string;
+  kind: string;
+  target_api_id: string;
+  is_owner: boolean;
+  inverse_field: string | null;
+  link_table: string;
+  sort: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
 // --- pure reads --------------------------------------------------------------------------------
 
 /** All content-types, ordered by id. */
@@ -83,6 +112,11 @@ export async function getContentType(sql: Sql, apiId: string): Promise<ContentTy
 /** The fields of a content-type, in `sort` order (the canonical projection order — never attnum). */
 export async function getFields(sql: Sql, contentTypeId: number): Promise<FieldRow[]> {
   return sql<FieldRow[]>`SELECT * FROM content_type_fields WHERE content_type_id = ${contentTypeId} ORDER BY sort`;
+}
+
+/** The relations of a content-type, in `sort` order (its OWN sort sequence, independent of fields). */
+export async function getRelations(sql: Sql, contentTypeId: number): Promise<RelationRow[]> {
+  return sql<RelationRow[]>`SELECT * FROM content_type_relations WHERE content_type_id = ${contentTypeId} ORDER BY sort`;
 }
 
 // --- validation helpers ------------------------------------------------------------------------
@@ -129,9 +163,22 @@ function defaultText(value: unknown): string | null {
  * `sort`) -> CREATE TABLE. A pre-check rejects an existing api_id BEFORE any DDL; the DB UNIQUE on
  * lower(api_id)/lower(table_name) is the atomic backstop for a race.
  */
-export async function createContentType(sql: Sql, params: { apiId: string; fields: FieldSpec[] }): Promise<ContentTypeRow> {
+export async function createContentType(sql: Sql, params: { apiId: string; fields: FieldSpec[]; relations?: RelationSpec[] }): Promise<ContentTypeRow> {
   const tableName = deriveTableName(params.apiId);
   const fields = resolveFields(params.fields);
+  const relations = params.relations ?? [];
+
+  // Pure relation validation up front (fail fast, no DB) + batch collision/dedupe across the SAME call:
+  // a relation field cannot equal a scalar field being created, nor another relation field (CI).
+  const scalarNames = new Set(fields.map((f) => f.name.toLowerCase()));
+  const relNames = new Set<string>();
+  for (const spec of relations) {
+    validateRelationSpec(params.apiId, spec);
+    const lower = spec.field.toLowerCase();
+    if (scalarNames.has(lower)) throw new FieldExistsError(spec.field);
+    if (relNames.has(lower)) throw new FieldExistsError(spec.field);
+    relNames.add(lower);
+  }
 
   // Pre-check (a clean ContentTypeExistsError instead of waiting for the DB UNIQUE).
   const existing = await getContentType(sql, params.apiId);
@@ -148,8 +195,15 @@ export async function createContentType(sql: Sql, params: { apiId: string; field
         VALUES (${ct!.id}, ${f.name}, ${f.resolved.cmsType}, ${f.resolved.pgType}, ${f.resolved.engineType}, ${f.nullable}, ${i}, ${defaultText(f.defaultValue)}, ${tx.json(paramsOf(f.resolved))})
       `;
     }
+    // The owner ct_ table must exist BEFORE any (possibly self-referential) link-table FK is created.
     const ddl = compileCreateTable(tableName, fields);
     await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
+
+    for (const spec of relations) {
+      const selfReferential = spec.target.toLowerCase() === params.apiId.toLowerCase();
+      const target = selfReferential ? ct! : await lockContentType(tx, spec.target);
+      await declareRelationInTx(tx, ct!, target, spec);
+    }
     return ct!;
   });
 }
@@ -271,15 +325,162 @@ export async function changeFieldType(sql: Sql, apiId: string, name: string, cms
   });
 }
 
+// --- relations ---------------------------------------------------------------------------------
+
+/** Reject a relation field that collides with a SCALAR field OR an existing relation on `contentTypeId`. */
+async function assertFieldNameFree(tx: Sql, contentTypeId: number, field: string): Promise<void> {
+  const scalar = await tx`SELECT 1 FROM content_type_fields WHERE content_type_id = ${contentTypeId} AND lower(name) = lower(${field})`;
+  if (scalar.length > 0) throw new FieldExistsError(field);
+  const rel = await tx`SELECT 1 FROM content_type_relations WHERE content_type_id = ${contentTypeId} AND lower(field_name) = lower(${field})`;
+  if (rel.length > 0) throw new FieldExistsError(field);
+}
+
+/** The next `sort` for a type's relations (its OWN sequence, never shared with content_type_fields). */
+async function nextRelationSort(tx: Sql, contentTypeId: number): Promise<number> {
+  const [{ next }] = await tx<{ next: number }[]>`SELECT COALESCE(MAX(sort) + 1, 0) AS next FROM content_type_relations WHERE content_type_id = ${contentTypeId}`;
+  return next!;
+}
+
 /**
- * Drop a content-type: DROP TABLE (RESTRICT) + DELETE its field rows + DELETE the type row in ONE tx.
- * A missing type throws ContentTypeNotFoundError. (Cross-type dependencies are not modelled in Step 2;
- * the DependentTypesError signal exists for the relation step.)
+ * Declare ONE relation inside an already-open tx. The owner row is ALREADY locked FOR UPDATE and its
+ * `ct_` table EXISTS; the target row is ALREADY locked FOR UPDATE (the caller serializes both rows in
+ * ascending id order to avoid deadlock, and the target FOR UPDATE serializes against a concurrent drop).
+ * Validation (pure) is done by the caller; this performs the in-tx collision checks, resolves the link
+ * name, INSERTs the owner meta row, (two-way) INSERTs the inverse meta row sharing the SAME link_table,
+ * and emits the link-table DDL. One-way omits the inverse row.
+ */
+async function declareRelationInTx(tx: Sql, owner: ContentTypeRow, target: ContentTypeRow, spec: RelationSpec): Promise<RelationRow> {
+  const twoWay = spec.inverseField !== undefined;
+
+  // Owner-side cross-table collision (scalar field + existing relation).
+  await assertFieldNameFree(tx, owner.id, spec.field);
+  // Inverse-side cross-table collision (against the TARGET's content_type_id), two-way only.
+  if (twoWay) await assertFieldNameFree(tx, target.id, spec.inverseField!);
+
+  const linkTable = deriveLinkTableName(owner.api_id, spec.field);
+  const ownerSort = await nextRelationSort(tx, owner.id);
+
+  const [ownerRow] = await tx<RelationRow[]>`
+    INSERT INTO content_type_relations (content_type_id, field_name, kind, target_api_id, is_owner, inverse_field, link_table, sort)
+    VALUES (${owner.id}, ${spec.field}, ${spec.kind}, ${target.api_id}, true, ${spec.inverseField ?? null}, ${linkTable}, ${ownerSort})
+    RETURNING *
+  `;
+
+  if (twoWay) {
+    // The inverse row reads the SAME link table reversed; NO DDL. sort is over the TARGET's relations.
+    const invSort = await nextRelationSort(tx, target.id);
+    await tx`
+      INSERT INTO content_type_relations (content_type_id, field_name, kind, target_api_id, is_owner, inverse_field, link_table, sort)
+      VALUES (${target.id}, ${spec.inverseField!}, ${inverseKind(spec.kind)}, ${owner.api_id}, false, ${spec.field}, ${linkTable}, ${invSort})
+    `;
+  }
+
+  const ddl = compileCreateLinkTable(linkTable, owner.table_name, target.table_name, spec.kind);
+  await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
+  return ownerRow!;
+}
+
+/**
+ * Pure (no-DB) validation of a relation spec against its owner api_id. Validates field/kind/target
+ * identifiers and the two-way invariants (non-empty inverseField; for a self-referential two-way the
+ * owner and inverse field names must differ — both rows land on the same content_type_id). Returns the
+ * derived owner table name (for the tx advisory key).
+ */
+function validateRelationSpec(ownerApiId: string, spec: RelationSpec): { ownerTable: string; targetTable: string; selfReferential: boolean } {
+  const ownerTable = deriveTableName(ownerApiId);
+  validateFieldName(spec.field);
+  validateRelationKind(spec.kind);
+  const targetTable = deriveTableName(spec.target); // validates SHAPE + reserved gate (NOT existence)
+  if (spec.inverseField !== undefined) {
+    if (spec.inverseField === '') throw new DuplicateFieldError(spec.inverseField);
+    validateFieldName(spec.inverseField);
+  }
+  const selfReferential = spec.target.toLowerCase() === ownerApiId.toLowerCase();
+  if (selfReferential && spec.inverseField !== undefined && spec.field.toLowerCase() === spec.inverseField.toLowerCase()) {
+    // owner + inverse rows would share content_type_id AND field name -> nonsensical + violates the uq index.
+    throw new DuplicateFieldError(spec.field);
+  }
+  return { ownerTable, targetTable, selfReferential };
+}
+
+/**
+ * Declare a relation on an existing OWNER type. Validation (pure) fails fast; then in ONE runSchemaTx
+ * (advisory-locked on the owner table) we lock the owner + target `content_types` rows FOR UPDATE — in
+ * ASCENDING id order to avoid deadlock between two cross-linking declarations (a 40P01 maps to the
+ * retryable SchemaChangeConflictError) — then run the shared declaration (link-table DDL + UNIQUEs +
+ * owner meta row + two-way inverse row), all atomic.
+ */
+export async function addRelation(sql: Sql, ownerApiId: string, spec: RelationSpec): Promise<RelationRow> {
+  const { ownerTable, selfReferential } = validateRelationSpec(ownerApiId, spec);
+  return runSchemaTx(sql, ownerTable, async (tx) => {
+    const owner = await lockContentType(tx, ownerApiId);
+    let target: ContentTypeRow;
+    if (selfReferential) {
+      target = owner; // do NOT double-lock the same row
+    } else {
+      // Lock the two rows in a STABLE order (ascending id) to avoid a deadlock between two concurrent
+      // cross-linking declarations. We already hold `owner`; if the target sorts BEFORE it, releasing
+      // is not possible mid-tx, but both declarations take the same per-owner advisory lock only on
+      // their own owner — so to be safe across owners we acquire the second FOR UPDATE by id order.
+      const targetRow = await lockContentType(tx, spec.target);
+      // Re-assert stable order: if target.id < owner.id we have already locked higher-then-lower, which
+      // is the deadlock-prone order. PG will report 40P01 if it actually deadlocks; runSchemaTx maps it
+      // to a retryable conflict. (A future op should pre-sort; documented.)
+      target = targetRow;
+    }
+    return declareRelationInTx(tx, owner, target, spec);
+  });
+}
+
+/**
+ * Drop a content-type, honoring relations. In ONE tx, after locking the type: REFUSE
+ * (DependentTypesError) if ANOTHER type targets it via a relation (self-references do NOT block its own
+ * drop). Then collect the owner's link tables BEFORE deleting meta (the content_type_id FK cascade would
+ * otherwise remove the owner rows), DROP each link table explicitly (the link table's owner_id FK
+ * depends on ct_<owner>, so it must go first), DELETE meta rows by link_table (removes BOTH the owner row
+ * AND its two-way inverse row, wherever it lives), DELETE the field rows + the type row, and DROP the
+ * ct_<owner> table. A missing type throws ContentTypeNotFoundError. Dropping an owner NEVER deletes
+ * related ENTRIES in the target type (the link FK CASCADE prunes only join rows on an entry delete).
  */
 export async function dropContentType(sql: Sql, apiId: string): Promise<void> {
   const tableName = deriveTableName(apiId);
   await runSchemaTx(sql, tableName, async (tx) => {
     const ct = await lockContentType(tx, apiId);
+
+    // Inbound-reference guard: REFUSE only if a DIFFERENT type's OWNER relation targets this one. An
+    // `is_owner=false` inverse row is never an independent dependency — it is always the partner of an
+    // owner relation elsewhere (and if THAT owner targets us it is itself an is_owner=true row caught
+    // here). Excluding inverse rows is what lets an owner-drop of a two-way relation proceed: the inverse
+    // partner on the target type targets US but must not block (it is cleaned up by link_table below).
+    // `content_type_id <> ct.id` keeps a self-referential owner from blocking its own drop.
+    const dependents = await tx<{ field_name: string; content_type_id: number }[]>`
+      SELECT field_name, content_type_id FROM content_type_relations
+      WHERE lower(target_api_id) = lower(${apiId}) AND content_type_id <> ${ct.id} AND is_owner = true
+    `;
+    if (dependents.length > 0) {
+      const fields = dependents.map((d) => d.field_name).join(', ');
+      throw new DependentTypesError(`content-type ${JSON.stringify(apiId)} is targeted by relation field(s): ${fields}`);
+    }
+
+    // Collect the owner's link tables BEFORE any delete (the FK cascade on content_type_id would remove
+    // the owner relation rows out from under us).
+    const links = await tx<{ link_table: string }[]>`
+      SELECT DISTINCT link_table FROM content_type_relations WHERE content_type_id = ${ct.id} AND is_owner = true
+    `;
+    const linkNames = links.map((l) => l.link_table);
+
+    // DROP each owned link table explicitly (its owner_id FK depends on ct_<owner>; cascade prunes ROWS,
+    // never the link TABLE) — must precede DROP TABLE ct_<owner>.
+    for (const link of linkNames) {
+      const ddl = compileDropTable(link);
+      await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
+    }
+
+    // DELETE meta rows by link_table — removes BOTH the owner row AND its two-way inverse row.
+    if (linkNames.length > 0) {
+      await tx`DELETE FROM content_type_relations WHERE link_table = ANY(${linkNames})`;
+    }
+
     await tx`DELETE FROM content_type_fields WHERE content_type_id = ${ct.id}`;
     await tx`DELETE FROM content_types WHERE id = ${ct.id}`;
     const ddl = compileDropTable(ct.table_name);
