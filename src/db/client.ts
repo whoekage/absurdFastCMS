@@ -1,5 +1,6 @@
 import postgres from 'postgres';
 import type { Sql } from 'postgres';
+import { config } from '../config.ts';
 
 /**
  * Open a postgres.js client to `DATABASE_URL` (dev from .env, test from .env.test — the env-file the
@@ -9,7 +10,6 @@ import type { Sql } from 'postgres';
  * postgres.js is the only DB layer: the boot load streams rows with `.cursor()`, writes are
  * parameterized template queries, and migrations run raw SQL files — no ORM in the stack.
  */
-export function createSql(url = process.env.DATABASE_URL): Sql {
-  if (!url) throw new Error('DATABASE_URL is not set (launch with --env-file=.env or .env.test)');
+export function createSql(url = config.databaseUrl): Sql {
   return postgres(url, { max: 4, prepare: true });
 }

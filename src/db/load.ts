@@ -4,38 +4,17 @@ import { CursorCodec } from '../store/cursor-codec.ts';
 import type { Table } from '../store/table.ts';
 import { quoteIdent } from './ddl.ts';
 import type { ContentTypeDef, ColumnDescriptor, Registry } from '../store/registry.ts';
+import { config } from '../config.ts';
 
 /** Rows pulled per cursor batch — bounds peak memory so a multi-million-row table never buffers whole. */
 const LOAD_BATCH = 5000;
 
 /**
- * The DEV-ONLY default HMAC secret for the keyset cursor codec. Production MUST set `CURSOR_SECRET`
- * (.env / .env.test); this constant only keeps a local dev/test run working without extra config.
- * Documented as insecure: rotating it (or setting the real secret) invalidates outstanding cursors
- * with a 400, never a 500.
- */
-export const DEV_CURSOR_SECRET = 'absurdFastCMS-dev-only-cursor-secret-do-not-use-in-prod';
-
-/**
- * Build the keyset cursor codec from `CURSOR_SECRET`, falling back to the documented dev default.
- * The dev default is a SOURCE-PUBLISHED constant, so a deploy that forgets `CURSOR_SECRET` would let
- * anyone forge a valid cursor. To make a prod misconfig LOUD rather than silent: outside an explicit
- * dev/test env we emit a one-time warning that the insecure dev secret is active (the design chose a
- * dev default over fail-closed, but the operator must be able to see it).
+ * Build the keyset cursor codec from the validated config.
+ * Uses `CURSOR_SECRET` if set, otherwise falls back to the documented dev default.
  */
 export function cursorCodecFromEnv(): CursorCodec {
-  const secret = process.env.CURSOR_SECRET;
-  if (secret === undefined || secret === '') {
-    const env = process.env.NODE_ENV;
-    if (env !== 'development' && env !== 'test') {
-      console.warn(
-        '[cursor] CURSOR_SECRET is not set; falling back to the INSECURE source-published dev secret. ' +
-        'Set CURSOR_SECRET in production — keyset cursors are forgeable otherwise.',
-      );
-    }
-    return new CursorCodec(DEV_CURSOR_SECRET);
-  }
-  return new CursorCodec(secret);
+  return new CursorCodec(config.cursorSecret);
 }
 
 /**

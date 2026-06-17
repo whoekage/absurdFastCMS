@@ -7,6 +7,7 @@ import { createContentType, getContentType, type FieldSpec } from '../db/content
 import { ContentTypeExistsError } from '../db/ddl.ts';
 import { createServer } from './app.ts';
 import { cursorCodecFromEnv } from '../db/load.ts';
+import { config } from '../config.ts';
 
 /**
  * The PRODUCTION entrypoint: a SINGLE process that migrates, seeds the `article` content-type as a
@@ -139,7 +140,7 @@ export async function start(port: number): Promise<void> {
 
 /** The entrypoint. Run directly: `node --env-file=.env src/http/server.ts [port]`. */
 export function main(): void {
-  const port = Number(process.env.PORT ?? process.argv[2] ?? 3000);
+  const port = config.port(process.argv[2]);
   void start(port);
 }
 

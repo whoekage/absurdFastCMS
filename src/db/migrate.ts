@@ -2,6 +2,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import postgres from 'postgres';
+import { config } from '../config.ts';
 
 /**
  * A tiny, dependency-free SQL migration runner (replaces the Drizzle migrator). Applies every
@@ -11,8 +12,7 @@ import postgres from 'postgres';
  */
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations/', import.meta.url));
 
-export async function runMigrations(url = process.env.DATABASE_URL): Promise<void> {
-  if (!url) throw new Error('DATABASE_URL is not set (launch with --env-file=.env or .env.test)');
+export async function runMigrations(url = config.databaseUrl): Promise<void> {
   const sql = postgres(url, { max: 1, onnotice: () => {} });
   try {
     await sql`CREATE TABLE IF NOT EXISTS _migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;

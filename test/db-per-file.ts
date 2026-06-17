@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import postgres from 'postgres';
 import type { Sql } from 'postgres';
 import { createSql } from '../src/db/client.ts';
+import { config } from '../src/config.ts';
 
 /**
  * Per-FILE database isolation cloned from the golden template. createFileDatabase() opens a short-lived
@@ -22,8 +23,8 @@ export interface FileDatabase {
 }
 
 function adminUrl(): string {
-  // Env-diff from globalSetup (process.env mutation propagates to each test child process).
-  const fromEnv = process.env.ADMIN_DATABASE_URL;
+  // ADMIN_DATABASE_URL is set by globalSetup and propagates to each test child process via env-diff
+  const fromEnv = config.adminDatabaseUrl;
   if (fromEnv) return fromEnv;
   throw new Error(
     'ADMIN_DATABASE_URL not set — --test-global-setup did not run/propagate. ' +
