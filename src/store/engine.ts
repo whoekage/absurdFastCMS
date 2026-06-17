@@ -1,6 +1,8 @@
-import { Table, type FieldDef, type QueryOptions, type KeysetOptions } from './table.ts';
+import { Table, type FieldDef, type FilterNode, type QueryOptions, type KeysetOptions, type RelationResolver } from './table.ts';
+import { Bitset } from './bitset.ts';
 import { RawJson } from './column.ts';
 import { Relation } from './relation.ts';
+import type { RelationParseContext } from './query-parser.ts';
 import {
   CursorCodec,
   InvalidCursorError,
@@ -191,6 +193,16 @@ export class Engine {
    * {@link dropType} purges every Relation touching a dropped type.
    */
   private readonly relations = new Map<string, Relation>();
+  /**
+   * RELATION TARGET CATALOG (Relations Slice 4): a parallel map `relKey(ownerApiId, field) ->
+   * targetApiId`, populated alongside {@link relations} by the loader (which holds the Registry). A
+   * {@link Relation} exposes its owner/related Table OBJECTS but NOT the target's api_id string, so this
+   * map is what lets the Engine (i) tell the query parser which keys are relations + their target type
+   * (see {@link relationParseContext}) and (ii) resolve `(ownerApiId, field) -> targetApiId -> Table` at
+   * execution (see {@link relationResolver}). Kept independent of the Registry object so the Engine stays
+   * standalone; purged in lockstep with {@link relations} on {@link dropType}.
+   */
+  private readonly relationTargets = new Map<string, string>();
 
   constructor(opts: EngineOptions = {}) {
     this.bus = opts.bus ?? new InProcessChangeBus();
@@ -233,8 +245,49 @@ export class Engine {
    * Table. Does NOT bump schemaVersion or publish on the bus: a relation load/refresh touches ONLY this
    * Map, so the unpopulated read arena and plain keyset cursors stay valid.
    */
-  setRelation(ownerApiId: string, field: string, rel: Relation): void {
-    this.relations.set(Engine.relKey(ownerApiId, field), rel);
+  setRelation(ownerApiId: string, field: string, rel: Relation, targetApiId: string): void {
+    const key = Engine.relKey(ownerApiId, field);
+    this.relations.set(key, rel);
+    this.relationTargets.set(key, targetApiId);
+  }
+
+  /**
+   * The PARSE CONTEXT for `name`: its scalar fields PLUS its relation fields (each -> target apiId),
+   * with a resolver to recurse into a target type's own context for a deeper hop. Built fresh from the
+   * relation catalog so the read path (router -> parseQuery) never touches the Registry. `resolveTarget`
+   * recurses through {@link relationParseContext} for the next type; a deeper-than-cap chain is bounded
+   * by the parser's hop cap, so the recursion always terminates (even self-referential).
+   */
+  relationParseContext(name: string): RelationParseContext {
+    const fields = this.fields(name);
+    const relations = new Map<string, string>();
+    const prefix = name + '\u0000';
+    for (const [k, target] of this.relationTargets) {
+      if (k.startsWith(prefix)) relations.set(k.slice(prefix.length), target);
+    }
+    return {
+      fields,
+      relations,
+      resolveTarget: (apiId) => (this.has(apiId) ? this.relationParseContext(apiId) : undefined),
+    };
+  }
+
+  /**
+   * Build the {@link RelationResolver} for an OWNER type: resolve a relation leaf `(relField, sub)` to
+   * an owner-sized Bitset (EXISTS). It scans the TARGET table for `sub` (recursing the NEXT hop's
+   * resolver for a deep chain), then lifts the matching related rows to owners via
+   * {@link Relation.ownersMatching}. A declared-but-unloaded relation (`relation()===undefined`, a
+   * mid-rebuild desync) returns an EMPTY owner bitset — the correct EXISTS over no edges.
+   */
+  private relationResolver(ownerApiId: string): RelationResolver {
+    return (relField, sub) => {
+      const rel = this.relation(ownerApiId, relField);
+      if (rel === undefined) return new Bitset(this.table(ownerApiId).rowCount);
+      const targetApiId = this.relationTargets.get(Engine.relKey(ownerApiId, relField))!;
+      const targetTable = this.table(targetApiId);
+      const relatedBs = targetTable.scanTree(sub, this.relationResolver(targetApiId));
+      return rel.ownersMatching(relatedBs);
+    };
   }
 
   /**
@@ -385,7 +438,12 @@ export class Engine {
     // own iterator is safe in V8.
     const prefix = name + '\u0000';
     for (const [k, rel] of this.relations) {
-      if (k.startsWith(prefix) || rel.owner === dropped || rel.related === dropped) this.relations.delete(k);
+      if (k.startsWith(prefix) || rel.owner === dropped || rel.related === dropped) {
+        this.relations.delete(k);
+        // relationTargets is keyed IDENTICALLY (same relKey) — purge in lockstep so the parse context /
+        // resolver can never see a target for a relation whose Relation object was dropped.
+        this.relationTargets.delete(k);
+      }
     }
     this.bus.publish(name); // ResponseCache.invalidateType drops this type's cached Buffers (frees arena views).
   }
@@ -407,6 +465,15 @@ export class Engine {
    * Byte-identical to `JSON.stringify({ data: pageRows.map(materialize), meta })`.
    */
   respond(name: string, opts: QueryOptions = {}): Buffer {
+    // Relations Slice 4: a relation-filtered response depends on the TARGET type's data, but the bus
+    // only publishes the WRITTEN type (invalidateType drops cached responses keyed under THAT type). A
+    // write to the target would NOT invalidate this owner's relation-filtered entry, so it could be
+    // served STALE. Cheapest correctness-preserving fix this slice: do NOT cache a response whose
+    // filter tree contains a relation leaf (skip get + set). Targeted cross-type invalidation (publish
+    // every type whose relationsByField targets T) is deferred to slice 7.
+    if (opts.where !== undefined && hasRelationLeaf(opts.where)) {
+      return this.assemble(name, opts);
+    }
     // Pass the nested filter TREE (if any) as the 3rd queryKey arg so cache keys canonicalize
     // `$and`/`$or`/`$not` shape — trivially-reordered-but-equivalent trees collapse to one entry.
     const key = queryKey(name, opts, opts.where);
@@ -421,19 +488,24 @@ export class Engine {
   private assemble(name: string, opts: QueryOptions): Buffer {
     const t = this.table(name);
     const arena = this.arena(name);
+    // ONE resolver per respond() call, bound to this owner type, so the page, the total, and (in the
+    // keyset path) the withCount all derive from the IDENTICAL match set. A scalar-only tree never
+    // invokes it (Table.scanTree only calls it on a relation leaf), so a non-relational query is
+    // byte-identical. Deep nesting recurses across types inside the resolver itself.
+    const resolve = this.relationResolver(name);
 
     // Additive third mode: a keyset request takes the seek path. The OFFSET/page branch below is
     // byte-identical to before this slice (no keysetRaw => unchanged code path).
     let rowIds: number[];
     let metaJson: string;
     if (opts.keysetRaw !== undefined) {
-      const { rowIds: ids, metaJson: mj } = this.assembleKeyset(name, t, opts);
+      const { rowIds: ids, metaJson: mj } = this.assembleKeyset(name, t, opts, resolve);
       rowIds = ids;
       metaJson = mj;
     } else {
-      rowIds = t.query(opts);
+      rowIds = t.query(opts, resolve);
       // Total is the FULL match count (tree or flat filters), independent of offset/limit.
-      const total = t.matchSet(opts).count();
+      const total = t.matchSet(opts, resolve).count();
       const offset = opts.offset ?? 0;
       const limit = opts.limit ?? Infinity;
       const meta = { pagination: this.paginationMeta(total, offset, limit) };
@@ -456,7 +528,7 @@ export class Engine {
    * {@link InvalidCursorError} (router maps to 400) for a missing codec, a bad/mismatched cursor, or
    * an unseekable sort (caught + re-thrown as a generic invalid-cursor failure to avoid a 500/leak).
    */
-  private assembleKeyset(name: string, t: Table, opts: QueryOptions): { rowIds: number[]; metaJson: string } {
+  private assembleKeyset(name: string, t: Table, opts: QueryOptions, resolve: RelationResolver): { rowIds: number[]; metaJson: string } {
     if (this.codec === undefined) throw new InvalidCursorError();
     const raw = opts.keysetRaw!;
 
@@ -491,7 +563,7 @@ export class Engine {
       ks.before = this.codec.decode(sig, fieldTypes, raw.beforeToken);
     }
 
-    const result = t.queryKeyset({ ...opts, keyset: ks });
+    const result = t.queryKeyset({ ...opts, keyset: ks }, resolve);
 
     const mint = (boundary: typeof result.firstBoundary): string | null => {
       if (boundary === undefined) return null;
@@ -507,7 +579,7 @@ export class Engine {
       hasPreviousPage: result.hasPreviousPage,
     };
     if (raw.withCount) {
-      const total = t.matchSet(opts).count();
+      const total = t.matchSet(opts, resolve).count();
       meta.total = total;
       meta.pageCount = Math.ceil(total / raw.pageSize);
     }
@@ -553,6 +625,17 @@ export class Engine {
  * interoperable wire form). Each RawJson is spliced at its own field position independently (N json
  * fields all handled), with NO placeholder/string-replace step (collision-free by construction).
  */
+/**
+ * True if a {@link FilterNode} tree contains a RELATION leaf anywhere (Relations Slice 4). Drives the
+ * cache-skip in {@link Engine.respond}: a relation-filtered response depends on a sibling type's data
+ * that the single-type invalidation bus does not cover, so it is not cached this slice.
+ */
+function hasRelationLeaf(node: FilterNode): boolean {
+  if ('relation' in node) return true;
+  if ('leaf' in node) return false;
+  return node.children.some(hasRelationLeaf);
+}
+
 function serializeRow(row: Record<string, unknown>): string {
   let out = '{';
   let first = true;

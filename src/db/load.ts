@@ -144,10 +144,11 @@ async function loadOwnerRelation(sql: Sql, engine: Engine, ownerApiId: string, m
     if (twoWay) inv.push([r, o]); // swap the dense rows for the inverse direction.
   }
 
-  engine.setRelation(ownerApiId, meta.field, Relation.fromEdges(ownerTable, targetTable, fwd));
+  engine.setRelation(ownerApiId, meta.field, Relation.fromEdges(ownerTable, targetTable, fwd), meta.targetApiId);
   if (twoWay) {
-    // Inverse: BOTH the Table args AND the edge orientation are swapped together.
-    engine.setRelation(meta.targetApiId, meta.inverseField!, Relation.fromEdges(targetTable, ownerTable, inv));
+    // Inverse: BOTH the Table args AND the edge orientation are swapped together. The inverse's TARGET
+    // is the owner type (so a two-way filter via the inverse field resolves back to the owner schema).
+    engine.setRelation(meta.targetApiId, meta.inverseField!, Relation.fromEdges(targetTable, ownerTable, inv), ownerApiId);
   }
 }
 

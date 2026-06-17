@@ -88,7 +88,7 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
     // respond call is inside the try too: an InvalidCursorError -> 400, never a 500. The error body
     // is the generic message only (no secret / sig / expected-value leak).
     try {
-      const options = parseQuery(engine.fields(name), query).options;
+      const options = parseQuery(engine.relationParseContext(name), query).options;
       return { status: 200, contentType: JSON_CT, body: engine.respond(name, options) };
     } catch (e) {
       if (e instanceof QueryParseError || e instanceof InvalidCursorError) return errorResponse(400, e.message);
