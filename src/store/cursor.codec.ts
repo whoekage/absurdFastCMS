@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { ColumnType } from './column.ts';
 import { coerceDecimal, coerceI64, formatDecimal } from './column.ts';
-import type { BoundaryValue } from './composite-sorted.index.ts';
+import type { BoundaryValue } from './indexes/composite-sorted.index.ts';
 
 /**
  * A typed, generic invalid-cursor failure. The HTTP layer maps it to 400; the message is

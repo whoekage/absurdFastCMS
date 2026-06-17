@@ -14,14 +14,14 @@ import {
   type RowProbe,
   type ScanOp,
 } from './column.ts';
-import { EqIndex } from './eq.index.ts';
-import { SortedIndex, type SortDir } from './sorted.index.ts';
+import { EqIndex } from './indexes/eq.index.ts';
+import { SortedIndex, type SortDir } from './indexes/sorted.index.ts';
 import {
   CompositeSortedIndex,
   type Boundary,
   type BoundaryValue,
   type ResolvedSortKey,
-} from './composite-sorted.index.ts';
+} from './indexes/composite-sorted.index.ts';
 import type { CursorPayload } from './cursor.codec.ts';
 
 export interface FieldDef {

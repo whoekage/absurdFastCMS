@@ -1,5 +1,5 @@
-import type { Bitset } from './bitset.ts';
-import { I64Column, type Column, type ColumnType, type ScanOp } from './column.ts';
+import type { Bitset } from '../bitset.ts';
+import { I64Column, type Column, type ColumnType, type ScanOp } from '../column.ts';
 
 export type SortDir = 'asc' | 'desc';
 

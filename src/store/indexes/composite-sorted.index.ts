@@ -1,5 +1,5 @@
-import type { Bitset } from './bitset.ts';
-import type { Table } from './table.ts';
+import type { Bitset } from '../bitset.ts';
+import type { Table } from '../table.ts';
 
 /**
  * A scalar boundary value, lossless across the engine's column types:

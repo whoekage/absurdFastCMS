@@ -1,5 +1,5 @@
 import { Bitset } from './bitset.ts';
-import { SubstringIndex } from './substring.index.ts';
+import { SubstringIndex } from './indexes/substring.index.ts';
 import { DECIMAL_MAX_SAFE_PRECISION } from '../db/type.catalog.ts';
 
 export type ColumnType =

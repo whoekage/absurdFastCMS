@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Table, type FieldDef } from '../src/store/table.ts';
 import { TextColumn } from '../src/store/column.ts';
-import { SubstringIndex } from '../src/store/substring.index.ts';
+import { SubstringIndex } from '../src/store/indexes/substring.index.ts';
 
 /**
  * API-Vertical Slice 4 — trigram verification from the off-heap TEXT arena.

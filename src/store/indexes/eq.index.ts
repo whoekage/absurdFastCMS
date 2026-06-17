@@ -1,5 +1,5 @@
-import { Bitset } from './bitset.ts';
-import { buildCsr } from './csr.ts';
+import { Bitset } from '../bitset.ts';
+import { buildCsr } from '../csr.ts';
 
 /**
  * Flat equality index: value -> row ids, built as a CSR (compressed-sparse-row) posting

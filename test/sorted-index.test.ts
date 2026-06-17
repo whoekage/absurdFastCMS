@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Table, type FieldDef } from '../src/store/table.ts';
-import { SortedIndex } from '../src/store/sorted.index.ts';
+import { SortedIndex } from '../src/store/indexes/sorted.index.ts';
 import { NumericColumn } from '../src/store/column.ts';
 
 /**
