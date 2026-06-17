@@ -3,7 +3,7 @@ import { Engine, DetachedTable, type EngineOptions } from '../store/engine.ts';
 import { CursorCodec } from '../store/cursor-codec.ts';
 import { Relation } from '../store/relation.ts';
 import type { Table } from '../store/table.ts';
-import { quoteIdent, validateIdentifier } from './ddl.ts';
+import { quoteIdent, validateIdentifier, inverseKind } from './ddl.ts';
 import type { ContentTypeDef, ColumnDescriptor, Registry, RelationMeta } from '../store/registry.ts';
 import { config } from '../config.ts';
 
@@ -144,11 +144,13 @@ async function loadOwnerRelation(sql: Sql, engine: Engine, ownerApiId: string, m
     if (twoWay) inv.push([r, o]); // swap the dense rows for the inverse direction.
   }
 
-  engine.setRelation(ownerApiId, meta.field, Relation.fromEdges(ownerTable, targetTable, fwd), meta.targetApiId);
+  engine.setRelation(ownerApiId, meta.field, Relation.fromEdges(ownerTable, targetTable, fwd), meta.targetApiId, meta.kind);
   if (twoWay) {
     // Inverse: BOTH the Table args AND the edge orientation are swapped together. The inverse's TARGET
     // is the owner type (so a two-way filter via the inverse field resolves back to the owner schema).
-    engine.setRelation(meta.targetApiId, meta.inverseField!, Relation.fromEdges(targetTable, ownerTable, inv), ownerApiId);
+    // Its KIND is the inverse cardinality (manyToOne -> oneToMany, etc.) so populate via the inverse
+    // field dispatches to-many vs to-one correctly (the headline two-way correctness point).
+    engine.setRelation(meta.targetApiId, meta.inverseField!, Relation.fromEdges(targetTable, ownerTable, inv), ownerApiId, inverseKind(meta.kind));
   }
 }
 

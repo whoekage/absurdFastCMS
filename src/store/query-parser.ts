@@ -29,14 +29,24 @@ export class QueryParseError extends Error {
   }
 }
 
-/** A single relation to populate (single-hop; `depth` is reserved for simple nested populate). */
-export interface PopulateEntry {
+/**
+ * One relation to populate, with an optional nested sub-plan (Relations Slice 5). `children` empty =
+ * leaf (a depth-1 frontier relation, expanded at most one hop). A NESTED `populate` value (e.g.
+ * `populate[author][populate][books]`) yields the recursive `children`, which the EXECUTION-time
+ * resolver validates + expands against the TARGET type. The `*` wildcard is the sentinel field name,
+ * expanded at execution to every declared relation of the current type (depth-1).
+ *
+ * A recursive NODE (not a flat `{field,depth}`) is required so depth-2 records WHICH sub-relation to
+ * expand — a single integer depth cannot. Relation NAMES stay UNvalidated at parse time (they are not
+ * in the column schema); the plan is resolved against the registered relations at EXECUTION.
+ */
+export interface PopulateNode {
   field: string;
-  depth: number;
+  children: PopulateNode[];
 }
 
 /** The optional populate plan: which relation fields to expand. Empty when `populate` is absent. */
-export type PopulatePlan = PopulateEntry[];
+export type PopulatePlan = PopulateNode[];
 
 /** The parser's full structured output. `where` is omitted when there are no filters. */
 export interface ParsedQuery {
@@ -124,6 +134,15 @@ export type Schema = Map<string, SchemaEntry>;
  * Counts relation hops ONLY, NOT `$and`/`$or`/`$not` nesting. The sole terminator for a self-
  * referential / cyclic relation filter (resolveTarget returns the same-shaped context each hop). */
 export const MAX_RELATION_HOPS = 3;
+
+/**
+ * Relations Slice 5: max literal `[populate]` NESTING levels in a populate query key. INDEPENDENT of
+ * the execution-time populate DEPTH cap (engine `POPULATE_DEPTH_CAP`): this bounds the PARSER recursion
+ * over the URL string so a pathologically deep `populate[a][populate][a][populate]...` key fails fast as
+ * a clean 400 (QueryParseError) instead of blowing the call stack (RangeError -> unhandled 500 / DoS).
+ * Set above the execution cap so any query that COULD be expanded still parses; anything deeper is junk.
+ */
+export const MAX_POPULATE_NESTING = 8;
 
 /**
  * Relations Slice 4 — the parse-time context the Engine supplies so the parser can (i) tell a
@@ -623,34 +642,45 @@ function parseFields(schema: Schema, node: ParamNode): string[] {
 
 /**
  * `populate=author` / `populate=author,tags` / `populate[0]=author` / `populate[author]=...` ->
- * a flat single-hop plan. A simple `populate[rel][populate]=sub` bumps `depth` to 2 (the deepest
- * "simple" case we support); anything richer is accepted as depth 1 on the named relation.
- * Relation NAMES are not in the column schema, so they are not whitelisted here (the populate plan
- * is resolved against the table's registered Relations at execution time).
+ * a recursive {@link PopulatePlan}. The object form `populate[rel][populate]=<sub>` recurses into
+ * the named relation's `children` (a nested sub-plan), so `populate[author][populate][books]` ->
+ * `{field:'author',children:[{field:'books',children:[]}]}` and `populate[author][populate]=*` ->
+ * `{field:'author',children:[{field:'*',children:[]}]}` (the `*` resolved against author's TARGET
+ * type at execution). Relation NAMES are not in the column schema, so they are NOT whitelisted here —
+ * the plan is validated + expanded against the table's registered Relations at execution time. Depth
+ * beyond the execution cap is silently truncated at execution (documented). The `nesting` counter
+ * bounds parser recursion over the literal `[populate]` levels ({@link MAX_POPULATE_NESTING}) so a
+ * crafted over-deep query key 400s cleanly rather than overflowing the stack (RangeError -> 500 / DoS).
  */
-function parsePopulate(node: ParamNode): PopulatePlan {
+function parsePopulate(node: ParamNode, nesting = 0): PopulatePlan {
+  if (nesting > MAX_POPULATE_NESTING) {
+    throw new QueryParseError(`populate nested too deep (max ${MAX_POPULATE_NESTING} levels)`);
+  }
   if (typeof node === 'string') {
-    if (node === '*') return [{ field: '*', depth: 1 }];
+    if (node === '*') return [{ field: '*', children: [] }];
     return node
       .split(',')
       .filter((s) => s !== '')
-      .map((field) => ({ field, depth: 1 }));
+      .map((field) => ({ field, children: [] }));
   }
   if (Array.isArray(node)) {
-    return node.map((el) => ({ field: leafString(el, 'populate entry'), depth: 1 }));
+    return node.map((el) => ({ field: leafString(el, 'populate entry'), children: [] }));
   }
   const obj = node as { [k: string]: ParamNode };
   const keys = Object.keys(obj);
   // Index-shaped object `populate[0]=author` behaves like an array of names.
   const indexed = keys.length > 0 && keys.every((k, i) => String(i) === k);
   if (indexed) {
-    return asOrderedList(obj).map((el) => ({ field: leafString(el, 'populate entry'), depth: 1 }));
+    return asOrderedList(obj).map((el) => ({ field: leafString(el, 'populate entry'), children: [] }));
   }
+  // Object form: each key is a relation; a nested `populate` value yields its children recursively.
   return keys.map((field) => {
     const v = obj[field]!;
-    let depth = 1;
-    if (typeof v !== 'string' && !Array.isArray(v) && 'populate' in v) depth = 2;
-    return { field, depth };
+    let children: PopulateNode[] = [];
+    if (typeof v !== 'string' && !Array.isArray(v) && 'populate' in v) {
+      children = parsePopulate(v.populate!, nesting + 1); // recurse: populate[rel][populate][sub] / [populate]=*
+    }
+    return { field, children };
   });
 }
 

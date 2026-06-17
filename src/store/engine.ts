@@ -2,7 +2,8 @@ import { Table, type FieldDef, type FilterNode, type QueryOptions, type KeysetOp
 import { Bitset } from './bitset.ts';
 import { RawJson } from './column.ts';
 import { Relation } from './relation.ts';
-import type { RelationParseContext } from './query-parser.ts';
+import { QueryParseError, type RelationParseContext, type PopulateNode, type PopulatePlan } from './query-parser.ts';
+import type { RelationKind } from '../db/ddl.ts';
 import {
   CursorCodec,
   InvalidCursorError,
@@ -133,6 +134,22 @@ export interface KeysetPaginationMeta {
 
 const HEAD = Buffer.from('{"data":[', 'utf8');
 const COMMA = Buffer.from(',', 'utf8');
+const OPEN_BRACKET = Buffer.from('[', 'utf8');
+const CLOSE_BRACKET = Buffer.from(']', 'utf8');
+const CLOSE_BRACE = Buffer.from('}', 'utf8');
+const NULL_LIT = Buffer.from('null', 'utf8');
+
+/**
+ * Strapi/Payload default + our hard recursion ceiling for populate (Relations Slice 5): at most this
+ * many relation hops below the owner row. depth=1 is the owner's DIRECT relations; depth=2 a
+ * sub-relation; depth 3+ is the FRONTIER (not expanded). This counter is the SOLE terminator for
+ * self-referential / cyclic populate over DATA (counts hops, not distinct types, so a 2-type A->B->A
+ * cycle also stops here). It is INDEPENDENT of MAX_RELATION_HOPS (=3) in query-parser.ts: that bounds
+ * relation-FILTER chain depth (slice 4), a different feature; both are hop counters but decoupled by
+ * design — changing one must not change the other. (Parser-side populate nesting is bounded separately
+ * by MAX_POPULATE_NESTING.)
+ */
+const POPULATE_DEPTH_CAP = 2;
 
 /**
  * The content-type REGISTRY + output facade. Owns named content-types -> {@link Table} instances and
@@ -203,6 +220,13 @@ export class Engine {
    * standalone; purged in lockstep with {@link relations} on {@link dropType}.
    */
   private readonly relationTargets = new Map<string, string>();
+  /**
+   * RELATION KIND CATALOG (Relations Slice 5): parallel to {@link relationTargets}, keyed by the SAME
+   * relKey, holding each relation's cardinality KIND so the populate assembler dispatches to-one
+   * (object/null) vs to-many (array/[]) WITHOUT consulting the Registry — never from edge count.
+   * Purged in lockstep with {@link relations} on {@link dropType}.
+   */
+  private readonly relationKinds = new Map<string, RelationKind>();
 
   constructor(opts: EngineOptions = {}) {
     this.bus = opts.bus ?? new InProcessChangeBus();
@@ -245,10 +269,20 @@ export class Engine {
    * Table. Does NOT bump schemaVersion or publish on the bus: a relation load/refresh touches ONLY this
    * Map, so the unpopulated read arena and plain keyset cursors stay valid.
    */
-  setRelation(ownerApiId: string, field: string, rel: Relation, targetApiId: string): void {
+  setRelation(ownerApiId: string, field: string, rel: Relation, targetApiId: string, kind: RelationKind): void {
     const key = Engine.relKey(ownerApiId, field);
     this.relations.set(key, rel);
     this.relationTargets.set(key, targetApiId);
+    this.relationKinds.set(key, kind);
+  }
+
+  /**
+   * The cardinality KIND of `(ownerApiId, field)`, or undefined for an unknown type / unknown field /
+   * a scalar field (mirrors {@link relation}). The populate assembler reads this to choose object/null
+   * (to-one) vs array/[] (to-many), never inferring from the live edge count.
+   */
+  relationKind(ownerApiId: string, field: string): RelationKind | undefined {
+    return this.relationKinds.get(Engine.relKey(ownerApiId, field));
   }
 
   /**
@@ -443,6 +477,9 @@ export class Engine {
         // relationTargets is keyed IDENTICALLY (same relKey) — purge in lockstep so the parse context /
         // resolver can never see a target for a relation whose Relation object was dropped.
         this.relationTargets.delete(k);
+        // relationKinds is keyed IDENTICALLY too — purge in lockstep (the populate dispatch must never
+        // see a kind for a relation whose Relation object was dropped).
+        this.relationKinds.delete(k);
       }
     }
     this.bus.publish(name); // ResponseCache.invalidateType drops this type's cached Buffers (frees arena views).
@@ -464,28 +501,145 @@ export class Engine {
    *
    * Byte-identical to `JSON.stringify({ data: pageRows.map(materialize), meta })`.
    */
-  respond(name: string, opts: QueryOptions = {}): Buffer {
-    // Relations Slice 4: a relation-filtered response depends on the TARGET type's data, but the bus
-    // only publishes the WRITTEN type (invalidateType drops cached responses keyed under THAT type). A
-    // write to the target would NOT invalidate this owner's relation-filtered entry, so it could be
-    // served STALE. Cheapest correctness-preserving fix this slice: do NOT cache a response whose
-    // filter tree contains a relation leaf (skip get + set). Targeted cross-type invalidation (publish
-    // every type whose relationsByField targets T) is deferred to slice 7.
-    if (opts.where !== undefined && hasRelationLeaf(opts.where)) {
-      return this.assemble(name, opts);
+  /**
+   * Frame ONE owner/related row's object `{...}` with its populated relations spliced in (Relations
+   * Slice 5), pushing no-copy {@link Buffer} views into `parts`. Byte-identical to `JSON.stringify` of
+   * the equivalent hand-built nested object (Strapi v5 flat shape — nested object/array directly under
+   * the field key, no `data/attributes` wrapper). Related bytes are spliced VERBATIM — never parsed /
+   * re-stringified — so i64/decimal/json fragments in a related row survive byte-exact.
+   *
+   *   - Fast path: a row with an EMPTY effective plan (no relations to expand, or past the cap) pushes
+   *     its frozen arena slice UNCHANGED (a complete `{...}`).
+   *   - Re-frame path: strip the trailing `}` (asserted), append each `,"<field>":<related>`, close `}`.
+   *
+   * Termination is by the integer `depth` ALONE (cap {@link POPULATE_DEPTH_CAP}) — no visited set;
+   * self-referential + cyclic populate stop at the frontier. `plan` is already EXECUTION-resolved
+   * (validated, `*`-expanded, children resolved against the target type) for THIS row's type.
+   */
+  private framePopulated(apiId: string, rowId: number, plan: PopulateNode[], depth: number, parts: Buffer[]): void {
+    const slice = this.arena(apiId).rowSlice(rowId);
+    // Fast path: nothing to expand (empty plan, or past the cap) — emit the frozen slice unchanged.
+    if (plan.length === 0 || depth > POPULATE_DEPTH_CAP) {
+      parts.push(slice);
+      return;
     }
-    // Pass the nested filter TREE (if any) as the 3rd queryKey arg so cache keys canonicalize
-    // `$and`/`$or`/`$not` shape — trivially-reordered-but-equivalent trees collapse to one entry.
-    const key = queryKey(name, opts, opts.where);
-    const cached = this.cache.get(key);
-    if (cached !== undefined) return cached;
-    const buf = this.assemble(name, opts);
-    this.cache.set(key, name, buf);
-    return buf;
+    // Re-frame: defensively assert it is a non-empty `{...}` (every type has id/created_at/updated_at,
+    // so a real slice is never `{}` — length > 2 — and its last byte is `}`). A violation is a
+    // serializer/arena desync (a server bug) -> throw (500-class), NEVER emit corrupt JSON.
+    if (slice.length <= 2 || slice[slice.length - 1] !== 0x7d /* } */) {
+      throw new Error(`populate: malformed arena slice for "${apiId}" row ${rowId}`);
+    }
+    parts.push(slice.subarray(0, slice.length - 1)); // owner body, trailing `}` dropped (no copy).
+
+    for (const node of plan) {
+      // Resolve purely by (currentType, field): the getter returns the inverse Relation for an inverse
+      // field too (the loader registered it under the inverse key), so no forward/inverse branch.
+      const rel = this.relation(apiId, node.field);
+      const kind = this.relationKind(apiId, node.field);
+      const targetApiId = this.relationTargets.get(Engine.relKey(apiId, node.field));
+      // Field key escaped exactly like serializeRow emits keys (byte-identity with the JSON.stringify
+      // oracle); leading `,` is always correct (system fields id/created_at/updated_at precede it).
+      parts.push(Buffer.from(`,${JSON.stringify(node.field)}:`, 'utf8'));
+
+      // Declared-but-unloaded relation OR a kind desync (relationTargets has the entry but relationKinds
+      // does not — set/purged in lockstep, so not reachable today): treat as a fail-soft to-one with
+      // zero edges (emit `null`), never 500 and never mis-emit a to-one as `[]`. resolvePopulate already
+      // 400s an unknown field, so a STILL-VALIDATED relation whose kind is absent degrades to null here.
+      const desync = rel === undefined || targetApiId === undefined || kind === undefined;
+      const toOne = kind === 'oneToOne' || kind === 'manyToOne' || desync;
+      const related = desync ? [] : rel!.relatedRows(rowId);
+      // Children expand at depth+1; at/over the cap they are dropped (the frontier => fast path).
+      const childPlan = depth + 1 > POPULATE_DEPTH_CAP ? [] : node.children;
+
+      if (toOne) {
+        if (related.length === 0) {
+          parts.push(NULL_LIT); // present-but-null; the key is always emitted.
+        } else {
+          // UNIQUE(owner_id) enforces a single edge; if data violates it, take the first deterministically.
+          this.framePopulated(targetApiId!, related[0]!, childPlan, depth + 1, parts);
+        }
+      } else {
+        parts.push(OPEN_BRACKET);
+        for (let i = 0; i < related.length; i++) {
+          if (i > 0) parts.push(COMMA);
+          this.framePopulated(targetApiId!, related[i]!, childPlan, depth + 1, parts);
+        }
+        parts.push(CLOSE_BRACKET); // empty => `[]`.
+      }
+    }
+    parts.push(CLOSE_BRACE); // exactly one closing brace, after ALL relation appends.
+  }
+
+  /**
+   * EXECUTION-time resolution of a parsed {@link PopulatePlan} against `apiId`'s relation catalog
+   * (Relations Slice 5): expands the `*` wildcard to every declared relation of THIS type (depth-1),
+   * de-dupes by field (merging children), and VALIDATES every field at its level — an unknown / scalar
+   * populate name throws {@link QueryParseError} (the router maps it to 400). Recurses into each
+   * relation's TARGET type so a nested `*` / unknown is validated + expanded against the target's
+   * relations. Returns the resolved plan (empty when there is nothing to populate).
+   */
+  private resolvePopulate(apiId: string, plan: PopulateNode[]): PopulateNode[] {
+    if (plan.length === 0) return [];
+    // Expand the `*` sentinel to every declared relation of THIS type (deterministic order = the
+    // relationTargets prefix-scan order, same as relationParseContext), depth-1 frontier (children []).
+    const expanded: PopulateNode[] = [];
+    for (const node of plan) {
+      if (node.field === '*') {
+        // The relKey prefix for THIS type (NUL-joined, via the helper so no raw NUL in source).
+        const prefix = Engine.relKey(apiId, '');
+        for (const k of this.relationTargets.keys()) {
+          if (k.startsWith(prefix)) expanded.push({ field: k.slice(prefix.length), children: [] });
+        }
+      } else {
+        expanded.push(node);
+      }
+    }
+    // De-dupe by field (merge children), validate each against THIS type's relations, recurse into target.
+    const byField = new Map<string, PopulateNode>();
+    for (const node of expanded) {
+      const targetApiId = this.relationTargets.get(Engine.relKey(apiId, node.field));
+      if (targetApiId === undefined) {
+        throw new QueryParseError(`unknown populate field "${node.field}" on "${apiId}"`);
+      }
+      const prior = byField.get(node.field);
+      const mergedChildren = prior ? [...prior.children, ...node.children] : node.children;
+      // Recurse: validate + resolve the sub-plan against the TARGET type (`*` there expands the
+      // target's relations). A desync where the target type is absent (has()===false) -> [] (no 500).
+      const resolvedChildren = this.has(targetApiId) ? this.resolvePopulate(targetApiId, mergedChildren) : [];
+      byField.set(node.field, { field: node.field, children: resolvedChildren });
+    }
+    return [...byField.values()];
+  }
+
+  respond(name: string, opts: QueryOptions = {}, populate: PopulatePlan = []): Buffer {
+    // Resolve + VALIDATE the populate plan FIRST so an unknown/scalar name 400s before any byte work
+    // (and even on the otherwise-cached path). An empty effective plan (no populate, or `populate=*` on
+    // a relation-less type) keeps the UNCHANGED, still-cached, byte-identical fast path below.
+    const effPlan = this.resolvePopulate(name, populate);
+    if (effPlan.length === 0) {
+      // Relations Slice 4: a relation-filtered response depends on the TARGET type's data, but the bus
+      // only publishes the WRITTEN type. A write to the target would NOT invalidate this owner's
+      // relation-filtered entry, so it could be served STALE. Cheapest correctness-preserving fix:
+      // do NOT cache a response whose filter tree contains a relation leaf (skip get + set).
+      if (opts.where !== undefined && hasRelationLeaf(opts.where)) {
+        return this.assemble(name, opts, []);
+      }
+      // Pass the nested filter TREE (if any) as the 3rd queryKey arg so cache keys canonicalize
+      // `$and`/`$or`/`$not` shape — trivially-reordered-but-equivalent trees collapse to one entry.
+      const key = queryKey(name, opts, opts.where);
+      const cached = this.cache.get(key);
+      if (cached !== undefined) return cached;
+      const buf = this.assemble(name, opts, []);
+      this.cache.set(key, name, buf);
+      return buf;
+    }
+    // Non-empty populate: the response depends on related types' bytes that the single-type bus cannot
+    // invalidate -> SKIP the cache (get + set), assemble fresh. Cross-type invalidation is slice 7.
+    return this.assemble(name, opts, effPlan);
   }
 
   /** The cold assembly path (always byte-identical to a cache hit, which stored exactly this). */
-  private assemble(name: string, opts: QueryOptions): Buffer {
+  private assemble(name: string, opts: QueryOptions, populate: PopulatePlan = []): Buffer {
     const t = this.table(name);
     const arena = this.arena(name);
     // ONE resolver per respond() call, bound to this owner type, so the page, the total, and (in the
@@ -516,7 +670,10 @@ export class Engine {
     const parts: Buffer[] = [HEAD];
     for (let i = 0; i < rowIds.length; i++) {
       if (i > 0) parts.push(COMMA);
-      parts.push(arena.rowSlice(rowIds[i]!));
+      // No populate: the byte-identical fast path (the frozen slice verbatim). With populate: per-row
+      // re-frame, depth starts at 1 (the owner's DIRECT relations). `populate` is already resolved.
+      if (populate.length === 0) parts.push(arena.rowSlice(rowIds[i]!));
+      else this.framePopulated(name, rowIds[i]!, populate, 1, parts);
     }
     parts.push(tail);
     return Buffer.concat(parts);
@@ -591,13 +748,14 @@ export class Engine {
    * Assemble a SINGLE-item response: `{"data":<row JSON>,"meta":{}}`. Byte-identical to
    * `JSON.stringify({ data: materialize(rowId), meta: {} })`.
    */
-  respondOne(name: string, rowId: number): Buffer {
-    const arena = this.arena(name);
-    return Buffer.concat([
-      Buffer.from('{"data":', 'utf8'),
-      arena.rowSlice(rowId),
-      Buffer.from(',"meta":{}}', 'utf8'),
-    ]);
+  respondOne(name: string, rowId: number, populate: PopulatePlan = []): Buffer {
+    const parts: Buffer[] = [Buffer.from('{"data":', 'utf8')];
+    // No populate: the byte-identical fast path. With populate: the SAME recursive framer as the list
+    // path (depth starts at 1). `populate` is assumed already resolved by the caller (respondById).
+    if (populate.length === 0) parts.push(this.arena(name).rowSlice(rowId));
+    else this.framePopulated(name, rowId, populate, 1, parts);
+    parts.push(Buffer.from(',"meta":{}}', 'utf8'));
+    return Buffer.concat(parts);
   }
 
   /**
@@ -606,9 +764,12 @@ export class Engine {
    * reuses {@link respondOne}. Returns `null` when no row carries that id (the 404 gate). Requires the
    * content-type to have an eq index on `id`.
    */
-  respondById(name: string, id: number): Buffer | null {
+  respondById(name: string, id: number, populate: PopulatePlan = []): Buffer | null {
+    // Resolve + VALIDATE the plan FIRST (unknown/scalar populate name -> 400) for the single-item path
+    // too, BEFORE the id lookup. A populated single-item response is not cached (respondOne is uncached).
+    const eff = this.resolvePopulate(name, populate);
     const rowId = this.table(name).rowIdByEq('id', id);
-    return rowId === undefined ? null : this.respondOne(name, rowId);
+    return rowId === undefined ? null : this.respondOne(name, rowId, eff);
   }
 }
 

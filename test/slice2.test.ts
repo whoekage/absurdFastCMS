@@ -285,14 +285,16 @@ test('parse: offset-based pagination passes through directly', () => {
 });
 
 test('parse: fields and populate', () => {
+  // Relations Slice 5: the populate plan is a recursive {field, children[]} node (children empty =
+  // a depth-1 leaf relation). The previous flat {field, depth} shape is gone.
   const q = parseQuery(FIELDS, 'fields=title,status&populate=author,tags');
   assert.deepEqual(q.populate, [
-    { field: 'author', depth: 1 },
-    { field: 'tags', depth: 1 },
+    { field: 'author', children: [] },
+    { field: 'tags', children: [] },
   ]);
-  // a depth-2 simple nested populate
+  // A nested populate records WHICH sub-relation to expand in `children` (not a single integer depth).
   const q2 = parseQuery(FIELDS, 'populate[author][populate]=profile');
-  assert.deepEqual(q2.populate, [{ field: 'author', depth: 2 }]);
+  assert.deepEqual(q2.populate, [{ field: 'author', children: [{ field: 'profile', children: [] }] }]);
 });
 
 // --- 3. malformed / unknown / type-mismatch are REJECTED --------------------

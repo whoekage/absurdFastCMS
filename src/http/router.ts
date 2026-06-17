@@ -88,8 +88,10 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
     // respond call is inside the try too: an InvalidCursorError -> 400, never a 500. The error body
     // is the generic message only (no secret / sig / expected-value leak).
     try {
-      const options = parseQuery(engine.relationParseContext(name), query).options;
-      return { status: 200, contentType: JSON_CT, body: engine.respond(name, options) };
+      const parsed = parseQuery(engine.relationParseContext(name), query);
+      // Relations Slice 5: the populate plan reaches respond as a 3rd arg; it resolves + validates it
+      // (unknown/scalar populate name -> QueryParseError -> 400) and assembles the nested response.
+      return { status: 200, contentType: JSON_CT, body: engine.respond(name, parsed.options, parsed.populate) };
     } catch (e) {
       if (e instanceof QueryParseError || e instanceof InvalidCursorError) return errorResponse(400, e.message);
       throw e;
@@ -104,10 +106,20 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
     if (!isGet) return errorResponse(405, `method ${req.method} not allowed`);
     if (!CANONICAL_INT.test(idRaw)) return errorResponse(404, `not found`);
     // `id` is the PUBLIC primary key (the Postgres PK), resolved through the eq index — NOT a dense
-    // row position. An id with no matching row is a 404.
-    const body = engine.respondById(name, Number(idRaw));
-    if (body === null) return errorResponse(404, `not found`);
-    return { status: 200, contentType: JSON_CT, body };
+    // row position. An id with no matching row is a 404. Relations Slice 5: the query is now parsed
+    // (it was previously ignored) inside a try so a populate-validation failure maps to 400 (a
+    // malformed query on /:type/:id now 400s where it was silently ignored — acceptable + consistent),
+    // and the populate plan reaches respondById which honors the SAME recursive framing.
+    const query = req.query.startsWith('?') ? req.query.slice(1) : req.query;
+    try {
+      const parsed = parseQuery(engine.relationParseContext(name), query);
+      const body = engine.respondById(name, Number(idRaw), parsed.populate);
+      if (body === null) return errorResponse(404, `not found`);
+      return { status: 200, contentType: JSON_CT, body };
+    } catch (e) {
+      if (e instanceof QueryParseError || e instanceof InvalidCursorError) return errorResponse(400, e.message);
+      throw e;
+    }
   }
 
   // No route match (root, or deeper than /:type/:id).
