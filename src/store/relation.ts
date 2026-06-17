@@ -1,5 +1,6 @@
 import { Bitset } from './bitset.ts';
 import { Table } from './table.ts';
+import { buildCsr } from './csr.ts';
 
 /**
  * A single-hop relation between an OWNER table and a RELATED table, stored as a CSR
@@ -131,25 +132,8 @@ export class Relation {
    */
   private rebuild(): void {
     const ownerCount = this.owner.rowCount;
-    const m = this.edgeOwners.length;
-
-    // 1. Count edges per owner.
-    const counts = new Int32Array(ownerCount);
-    for (let i = 0; i < m; i++) counts[this.edgeOwners[i]!]!++;
-
-    // 2. Prefix-sum into offsets[ownerCount + 1].
-    const offsets = new Int32Array(ownerCount + 1);
-    for (let o = 0; o < ownerCount; o++) offsets[o + 1] = offsets[o]! + counts[o]!;
-
-    // 3. Scatter related ids into postings grouped by owner.
-    const postings = new Int32Array(m);
-    const cursor = offsets.slice(0, ownerCount); // mutable copy of group starts
-    for (let i = 0; i < m; i++) {
-      const o = this.edgeOwners[i]!;
-      postings[cursor[o]!] = this.edgeRelated[i]!;
-      cursor[o]!++;
-    }
-
+    // Group edges by owner row into the CSR owner->related adjacency (the shared counting sort).
+    const { offsets, postings } = buildCsr(this.edgeOwners.length, ownerCount, this.edgeOwners, this.edgeRelated);
     this.offsets = offsets;
     this.postings = postings;
     this.builtOwnerCount = ownerCount;

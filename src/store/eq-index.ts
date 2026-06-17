@@ -1,4 +1,5 @@
 import { Bitset } from './bitset.ts';
+import { buildCsr } from './csr.ts';
 
 /**
  * Flat equality index: value -> row ids, built as a CSR (compressed-sparse-row) posting
@@ -116,36 +117,23 @@ export class EqIndex {
     const rowsBuf = this.pendingRows;
     const n = values.length;
 
-    // 1. Intern every value to a dense code, counting occurrences per code in one pass.
+    // 1. Intern every value to a dense code in one pass (`codeOf.size` = the next code to assign).
     const codeOf = new Map<unknown, number>();
     const codeForRow = new Int32Array(n);
-    let counts: number[] = [];
     for (let i = 0; i < n; i++) {
       const v = values[i];
       let code = codeOf.get(v);
       if (code === undefined) {
-        code = counts.length;
+        code = codeOf.size;
         codeOf.set(v, code);
-        counts.push(0);
       }
       codeForRow[i] = code;
-      counts[code]!++;
     }
-    const c = counts.length;
+    const c = codeOf.size;
 
-    // 2. Prefix-sum the counts into CSR offsets[c + 1].
-    const offsets = new Int32Array(c + 1);
-    for (let k = 0; k < c; k++) offsets[k + 1] = offsets[k]! + counts[k]!;
-
-    // 3. Scatter row ids into postings grouped by code. Walk inserts in order so each group
-    //    comes out ascending in row id for free; `cursor` tracks the next slot per code.
-    const postings = new Int32Array(n);
-    const cursor = offsets.slice(0, c); // mutable copy of group starts
-    for (let i = 0; i < n; i++) {
-      const code = codeForRow[i]!;
-      postings[cursor[code]!] = rowsBuf[i]!;
-      cursor[code]!++;
-    }
+    // 2. Group row ids by code into the CSR (the shared counting sort). Walking inserts in order keeps
+    //    each code's group ascending in row id for free.
+    const { offsets, postings } = buildCsr(n, c, codeForRow, rowsBuf);
 
     this.offsets = offsets;
     this.postings = postings;

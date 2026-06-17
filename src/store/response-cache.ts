@@ -104,11 +104,21 @@ function encodeSort(sort: SortKey[]): string {
  * Anything not in this list (e.g. a re-associated boolean tree) simply misses and re-assembles
  * correctly — the key never produces a FALSE hit.
  */
+/**
+ * The canonical FILTER token of a query: the nested `where` TREE (`'T' + encodeNode`) when present,
+ * else the order-independent flat `filters` encoding. The SINGLE source of this choice so {@link
+ * queryKey} (cache key) and {@link filterCanonical} (cursor signature) can never drift on how a filter
+ * canonicalizes.
+ */
+function canonicalFilterToken(tree: FilterNode | undefined, filters: QueryOptions['filters']): string {
+  return tree !== undefined ? 'T' + encodeNode(tree) : encodeFilters(filters ?? []);
+}
+
 export function queryKey(typeName: string, opts: QueryOptions, tree?: FilterNode): string {
   const offset = opts.offset ?? 0;
   const limit = opts.limit ?? Infinity;
   const limitTok = limit === Infinity ? '*' : String(limit);
-  const filterTok = tree !== undefined ? 'T' + encodeNode(tree) : encodeFilters(opts.filters ?? []);
+  const filterTok = canonicalFilterToken(tree, opts.filters);
   const base =
     JSON.stringify(typeName) +
     '\u0000' + filterTok +
@@ -132,7 +142,7 @@ export function queryKey(typeName: string, opts: QueryOptions, tree?: FilterNode
  * logically-equal-but-reordered filter doesn't spuriously 400, but any value/shape change does.
  */
 export function filterCanonical(opts: QueryOptions): string {
-  return opts.where !== undefined ? 'T' + encodeNode(opts.where) : encodeFilters(opts.filters ?? []);
+  return canonicalFilterToken(opts.where, opts.filters);
 }
 
 // --- change bus (invalidation seam) -----------------------------------------
