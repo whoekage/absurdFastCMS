@@ -1,0 +1,37 @@
+{
+  "name": "@absurd/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "npm run build:js && npm run build:dts",
+    "build:js": "tsup",
+    "build:dts": "tsc -p tsconfig.build.json --noCheck && node scripts/fix-dts-extensions.ts",
+    "prepack": "npm run build",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "test": "node --conditions=source --env-file=.env.test --test --test-global-setup=./test/global-setup.ts"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2"
+  }
+}

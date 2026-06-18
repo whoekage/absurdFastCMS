@@ -18,7 +18,7 @@ deployable sites.
 packages/
   api/        # @absurd/api — the columnar read engine + Strapi-v5 query API + runtime content-type builder
   admin/      # (planned) the content manager / content-type builder GUI
-  sdk/        # (planned) typed JS client for the Strapi-style query + write API
+  sdk/        # @absurd/sdk — typed, isomorphic, zero-dependency JS client for the query + write + Builder API
 apps/
   landing/    # (planned) marketing site
   docs/       # (planned) documentation site
@@ -31,6 +31,9 @@ is a swappable implementation behind an interface — a separate concern, not co
 
 - **[`packages/api`](packages/api/README.md)** — the backend: architecture, query API, content-type
   builder, performance notes, and getting started. **Start here.**
+- **[`packages/sdk`](packages/sdk/README.md)** — `@absurd/sdk`, a typed, isomorphic, zero-dependency
+  JS client covering the full HTTP surface: Strapi-v5 filters/sort/pagination/populate, writes +
+  relation ops, the runtime content-type Builder, and lossless bigint/decimal/json/date wire fidelity.
 
 ## Getting started
 
