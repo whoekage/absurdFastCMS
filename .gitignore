@@ -9,4 +9,7 @@ dist/
 .env
 .env.test
 
+# Local Claude Code workspace (workflows, settings) — not tracked.
+.claude/
+
 .DS_Store
