@@ -1,0 +1,26 @@
+{
+  "name": "@absurd/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --env-file=.env.test --test --test-global-setup=./test/global-setup.ts",
+    "bench": "node bench/scan.bench.ts",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:migrate": "node --env-file=.env src/db/migration.runner.ts"
+  },
+  "dependencies": {
+    "kysely": "^0.29.2",
+    "postgres": "^3.4.9",
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^12.0.2",
+    "autocannon": "^8.0.0",
+    "testcontainers": "^12.0.2"
+  }
+}

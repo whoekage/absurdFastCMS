@@ -1,6 +1,12 @@
+# npm workspaces hoist dependencies to the repo root.
 node_modules/
+
+# Build artifacts and logs (per-workspace dirs are also ignored by their own .gitignore).
 dist/
 *.log
+
+# Environment files live inside each workspace (packages/api/.env, .env.test) and are gitignored there.
 .env
 .env.test
+
 .DS_Store
