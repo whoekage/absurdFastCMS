@@ -6,6 +6,8 @@ import { rebuildType } from '../db/engine.loader.ts';
 import { handleRequest, errorResponse, type CoreResponse } from './read.router.ts';
 import { handleWrite, type WriteContext } from './write.handler.ts';
 import { handleContentTypeRequest, type ContentTypeContext } from './content-type.controller.ts';
+import { listTypes, inspectType } from '../store/inspect.ts';
+import { config } from '../config.ts';
 
 /**
  * uWS-MIGRATION SLICE 1 — the uWebSockets.js HTTP adapter, a THIN transport shim over the
@@ -72,6 +74,20 @@ function writeResponse(res: uWS.HttpResponse, result: CoreResponse): void {
   const body = result.body;
   // Offset-safe view: the engine's Buffer is a subarray of the shared OutputArena ArrayBuffer.
   res.end(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));
+}
+
+/** Serialize an arbitrary value as a pretty JSON response (debug inspector only — not a hot path). */
+function writeJson(res: uWS.HttpResponse, status: number, value: unknown): void {
+  res.writeStatus(statusLine(status));
+  res.writeHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(JSON.stringify(value, null, 2));
+}
+
+/** Parse an optional non-negative integer query param; undefined when absent or unparseable. */
+function toInt(raw: string | null): number | undefined {
+  if (raw === null) return undefined;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 
 /** Reject bodies above this; tests send a few hundred bytes, real CMS writes are small. */
@@ -192,6 +208,26 @@ function handleContentTypeRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, met
 export function createServer(engine: Engine, store?: PostgresStore, registry?: Registry): UwsServer {
   const app = uWS.App();
   const current = engine;
+
+  // DEBUG INSPECTOR (dev-only, read-only) — mounted ONLY when DEBUG_INSPECTOR=1 outside production. The
+  // `debug-inspect` segment contains '-', illegal in an api_id, so it can never shadow a real `/:type`.
+  // Synchronous like the read routes: decode straight off the live engine, emit JSON, never mutate.
+  if (config.debugInspector) {
+    // INDEX: every content-type + row count.
+    app.get('/debug-inspect', (res) => {
+      writeJson(res, 200, listTypes(current));
+    });
+    // ONE type: per-column storage/stats + relations + a decoded row window (?offset=&limit=).
+    app.get('/debug-inspect/:type', (res, req) => {
+      const type = req.getParameter(0) ?? '';
+      const params = new URLSearchParams(req.getQuery() ?? '');
+      const offset = toInt(params.get('offset'));
+      const limit = toInt(params.get('limit'));
+      const result = inspectType(current, type, { offset, limit });
+      if (result === null) writeJson(res, 404, { error: `unknown content-type "${type}"` });
+      else writeJson(res, 200, result);
+    });
+  }
 
   // LIST: /:type  — read everything off `req` synchronously, then delegate to the core.
   app.get('/:type', (res, req) => {

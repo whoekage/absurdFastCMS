@@ -361,6 +361,11 @@ export class Engine {
     return this.tables.has(name);
   }
 
+  /** All defined content-type names (registration order). Read-only introspection seam (debug inspector). */
+  typeNames(): string[] {
+    return [...this.tables.keys()];
+  }
+
   /**
    * The field SCHEMA for a content-type, as a fresh `FieldDef[]` (the whitelist the query parser
    * validates against). Throws on an unknown type — callers gate with {@link has} first.

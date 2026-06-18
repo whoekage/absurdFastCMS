@@ -104,6 +104,22 @@ function getCursorSecret(): string {
 }
 
 /**
+ * Whether the read-only debug inspector route (GET /debug-inspect[...]) is mounted.
+ *
+ * Opt-in via DEBUG_INSPECTOR=1 (or 'true') AND only outside production — so it can be left in .env for
+ * dev and is never exposed by a production deploy even if the var leaks in. Off by default (and in
+ * .env.test, which omits it), so tests and prod never mount it.
+ */
+function getDebugInspector(): boolean {
+  if ('debugInspector' in cache) return cache.debugInspector as boolean;
+
+  const raw = process.env.DEBUG_INSPECTOR;
+  const enabled = (raw === '1' || raw === 'true') && getNodeEnv() !== 'production';
+  cache.debugInspector = enabled;
+  return enabled;
+}
+
+/**
  * Get TEST_DATABASE_URL for test setup (optional).
  * Used by testcontainers to connect to the test database instance.
  */
@@ -166,6 +182,10 @@ export const config = {
   
   get testcontainersReuse(): boolean {
     return getTestcontainersReuse();
+  },
+
+  get debugInspector(): boolean {
+    return getDebugInspector();
   },
 
   // Dev-only constant (always available)
