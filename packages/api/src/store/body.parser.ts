@@ -1,9 +1,21 @@
 import { coerceI64, coerceDecimal, formatDecimal } from './column.ts';
-import type { ContentTypeDef, RegistryField, RelationMeta } from './registry.ts';
+import type { ComponentDef, ContentTypeDef, Registry, RegistryField, RelationMeta } from './registry.ts';
 import { SYSTEM_COLUMN_NAMES } from './registry.ts';
+import type { ComponentFieldKind } from '../db/type.catalog.ts';
 
 /** The Postgres int4 PK upper bound — a related id must be a positive int4 (mirrors {@link write.ts}). */
 const MAX_INT4 = 2147483647;
+
+/**
+ * be-05 COMPONENT — recursive-write guards (documented constants, mirroring engine.ts's POPULATE_DEPTH_CAP):
+ *  - {@link MAX_COMPONENT_DEPTH} caps the NESTING hops (component -> nested component -> ...) so a write can
+ *    never recurse unboundedly. A definition-time reference cycle is ALREADY forbidden (component-type repo),
+ *    so this is the runtime backstop for a legitimately-deep-but-acyclic tree (and a data-driven blowup).
+ *  - {@link MAX_COMPONENT_ENTRY_BYTES} caps a SINGLE component instance's JSON size, so a giant nested blob
+ *    is a clean 400 (not a PG/memory blowup). Measured per-instance on the verbatim object before binding.
+ */
+const MAX_COMPONENT_DEPTH = 10;
+const MAX_COMPONENT_ENTRY_BYTES = 1 << 18; // 256 KiB per component instance
 
 /**
  * The WRITE-side counterpart to the query parser: validate + coerce a request body against a content-
@@ -54,7 +66,14 @@ export interface ParsedBody {
   relationOps: RelationOp[];
 }
 
-export function validateBody(def: ContentTypeDef, raw: unknown, mode: WriteMode): ParsedBody {
+/**
+ * The WRITE-side validator. `registry` is REQUIRED ONLY when `def` declares a component field (the
+ * recursive validator resolves nested {@link ComponentDef}s through it). It is OPTIONAL so every
+ * non-component call site stays unchanged: a 3-arg `validateBody(def, raw, mode)` still compiles, and a
+ * type with NO component field never reaches the registry-dependent arm (byte-identical). A component
+ * field hit WITHOUT a registry is a loud {@link BodyParseError} (a wiring bug, not a client error shape).
+ */
+export function validateBody(def: ContentTypeDef, raw: unknown, mode: WriteMode, registry?: Registry): ParsedBody {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new BodyParseError('request body must be a JSON object');
   }
@@ -77,6 +96,15 @@ export function validateBody(def: ContentTypeDef, raw: unknown, mode: WriteMode)
     if (v === null) {
       if (!def.nullableNames.has(f.name)) throw new BodyParseError(`field "${f.name}" cannot be null`);
       out[f.name] = null;
+      continue;
+    }
+    // be-05 COMPONENT: a component / component-repeatable / dynamiczone field carries an inline component
+    // tree — validate it RECURSIVELY against the referenced component schema(s) (depth/size capped) and
+    // bind the resulting plain JS tree to the jsonb column. Routed here (before `coerce`) because the
+    // recursive walk needs the registry to resolve nested {@link ComponentDef}s; a plain field falls through.
+    if (f.component !== undefined) {
+      if (registry === undefined) throw new BodyParseError(`field "${f.name}" requires the registry to validate a component value`);
+      out[f.name] = coerceComponent(registry, f.name, f.component, v, 0);
       continue;
     }
     out[f.name] = coerce(f, v);
@@ -192,6 +220,133 @@ function coerceMedia(field: RegistryField, multiple: boolean, v: unknown): unkno
     if (!validId(x)) throw new BodyParseError(`media field "${name}" must be a positive integer file id or an array of them`);
   }
   return [...new Set(arr as number[])];
+}
+
+/**
+ * be-05 COMPONENT — the RECURSIVE write validator. A component field's body value is validated field-by-
+ * field against the referenced component schema and rebuilt into a PLAIN JS tree bound verbatim to the
+ * jsonb column (the existing json write path). The walk is the seam where wire fidelity is preserved INSIDE
+ * a component value: each scalar field re-uses the SAME engine-type {@link coerce} (so an i64/decimal field
+ * INSIDE a component still becomes its canonical STRING, a date its Date, a nested json verbatim), each
+ * media field re-uses {@link coerceMedia} (an inline positive-int4 id ref — NO link table), and each nested
+ * component / dynamiczone RECURSES (depth-capped). A scoped-path message names the offending field
+ * (`hero.cta.label`) so a malformed deep value is a precise 400. A monotonic per-write counter assigns each
+ * instance a STABLE server-assigned integer `id` (Strapi parity), stored IN the jsonb (never a column).
+ *
+ *   single (component)            value -> ONE instance object (or null, already handled by the caller).
+ *   component-repeatable          value -> an ORDERED array of instances (input order preserved verbatim).
+ *   dynamiczone                   value -> an ORDERED array of `{__component, ...instance}` blocks; the
+ *                                   `__component` must name an ALLOWED + KNOWN component (else 400).
+ */
+function coerceComponent(
+  registry: Registry,
+  path: string,
+  meta: { kind: ComponentFieldKind; component?: string; components?: readonly string[] },
+  value: unknown,
+  depth: number,
+): unknown {
+  const counter = { next: 1 };
+  return coerceComponentValue(registry, path, meta, value, depth, counter);
+}
+
+/** The recursion-internal arm: shares the per-write instance-id `counter` across the whole tree. */
+function coerceComponentValue(
+  registry: Registry,
+  path: string,
+  meta: { kind: ComponentFieldKind; component?: string; components?: readonly string[] },
+  value: unknown,
+  depth: number,
+  counter: { next: number },
+): unknown {
+  // Depth cap: counts NESTING hops (component -> nested component -> ...). Checked on EVERY recursion arm
+  // (not just the public entry) so a deep tree is bounded. depth 0 is the top-level field; the cap bites
+  // once the walk descends past MAX_COMPONENT_DEPTH nested components.
+  if (depth > MAX_COMPONENT_DEPTH) {
+    throw new BodyParseError(`component nesting too deep at "${path}" (max ${MAX_COMPONENT_DEPTH})`);
+  }
+  if (meta.kind === 'component') {
+    if (!isPlainObject(value)) throw new BodyParseError(`component field "${path}" must be an object`);
+    return coerceComponentInstance(registry, path, meta.component!, value, depth, counter);
+  }
+  if (meta.kind === 'component-repeatable') {
+    if (!Array.isArray(value)) throw new BodyParseError(`component field "${path}" must be an array`);
+    return value.map((entry, i) => {
+      if (!isPlainObject(entry)) throw new BodyParseError(`component field "${path}[${i}]" must be an object`);
+      return coerceComponentInstance(registry, `${path}[${i}]`, meta.component!, entry, depth, counter);
+    });
+  }
+  // dynamiczone: each block names its own component via `__component`, drawn from the allowed-set.
+  if (!Array.isArray(value)) throw new BodyParseError(`dynamic-zone field "${path}" must be an array`);
+  const allowed = new Set(meta.components ?? []);
+  return value.map((block, i) => {
+    const at = `${path}[${i}]`;
+    if (!isPlainObject(block)) throw new BodyParseError(`dynamic-zone block "${at}" must be an object`);
+    const cmp = block['__component'];
+    if (typeof cmp !== 'string') throw new BodyParseError(`dynamic-zone block "${at}" is missing a "__component" string`);
+    if (!allowed.has(cmp)) throw new BodyParseError(`dynamic-zone block "${at}" names component "${cmp}" which is not allowed in this zone`);
+    const inst = coerceComponentInstance(registry, at, cmp, block, depth, counter, '__component');
+    // Re-tag the block with its component name (after the assigned id, before its fields).
+    return { __component: cmp, ...inst };
+  });
+}
+
+/** Whether a value is a plain (non-array, non-null) object — the shape a component instance must be. */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Validate ONE component instance object against the named component's schema. Resolves the
+ * {@link ComponentDef} from the registry (unknown -> 400); rejects an unknown field with a scoped path;
+ * enforces NOT-NULL-without-default presence; size-caps the instance; recurses into nested component fields
+ * and reuses {@link coerce}/{@link coerceMedia} for scalars/media. Assigns a stable integer `id` (first key).
+ * `skipKey` (dynamiczone) skips the wire `__component` discriminator. A wire `id` key is IGNORED on write
+ * (server-assigned), so a client round-tripping a populated value back is accepted (its id is re-assigned).
+ */
+function coerceComponentInstance(
+  registry: Registry,
+  path: string,
+  apiId: string,
+  obj: Record<string, unknown>,
+  depth: number,
+  counter: { next: number },
+  skipKey?: string,
+): Record<string, unknown> {
+  const cdef: ComponentDef | undefined = registry.getComponent(apiId);
+  if (cdef === undefined) throw new BodyParseError(`unknown component "${apiId}" at "${path}"`);
+  // Per-instance size guard: a single oversized blob is a clean 400 before it reaches the bind/jsonb path.
+  if (JSON.stringify(obj).length > MAX_COMPONENT_ENTRY_BYTES) {
+    throw new BodyParseError(`component instance at "${path}" exceeds the maximum size`);
+  }
+
+  const out: Record<string, unknown> = { id: counter.next++ };
+  for (const key of Object.keys(obj)) {
+    if (key === skipKey || key === 'id') continue; // discriminator + server-assigned id are not user fields.
+    const cf = cdef.fieldsByName.get(key);
+    if (cf === undefined) throw new BodyParseError(`unknown field "${path}.${key}"`);
+    const v = obj[key];
+    if (v === null) {
+      if (!cdef.nullableNames.has(key)) throw new BodyParseError(`field "${path}.${key}" cannot be null`);
+      out[key] = null;
+      continue;
+    }
+    if (cf.component !== undefined) {
+      out[key] = coerceComponentValue(registry, `${path}.${key}`, cf.component, v, depth + 1, counter);
+    } else if (cf.media !== undefined) {
+      out[key] = coerceMedia(cf, cf.media.multiple, v);
+    } else {
+      try {
+        out[key] = coerce(cf, v);
+      } catch (e) {
+        // Re-scope the engine-type coerce message to the component path (it only knows the bare field name).
+        throw new BodyParseError(e instanceof BodyParseError ? e.message.replace(`field "${key}"`, `field "${path}.${key}"`) : `field "${path}.${key}" is invalid`);
+      }
+    }
+  }
+  for (const req of cdef.requiredOnCreate) {
+    if (!(req in out)) throw new BodyParseError(`missing required field "${path}.${req}"`);
+  }
+  return out;
 }
 
 /** Type-check + coerce one non-null value against its engine field. Coerce throws become 400s here. */

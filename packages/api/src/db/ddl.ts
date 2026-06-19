@@ -50,7 +50,7 @@ export const TABLE_PREFIX = 'ct_';
 // type cannot declare a column that would collide if it later opted in, and a client cannot spoof one.
 export const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(['id', 'document_id', 'created_at', 'updated_at', 'published_at', 'locale']);
 /** Tables/api_ids a user type may not collide with. */
-export const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['content_types', 'content_type_fields', 'content_type_relations', '_migrations']);
+export const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['content_types', 'content_type_fields', 'content_type_relations', 'component_types', 'component_type_fields', 'files', '_migrations']);
 
 // --- typed error classes (deterministic; never leak a raw PG error) ----------------------------
 
@@ -542,7 +542,7 @@ interface PgError extends Error {
 /** Fallback: pull a known unique-index name out of a 23505 DETAIL line when `constraint_name` is absent. */
 function extractConstraint(detail: string | undefined): string | undefined {
   if (detail === undefined) return undefined;
-  for (const name of ['ctf_type_name_lower_uq', 'ctf_type_sort_uq', 'ctr_type_field_lower_uq', 'content_types_api_id_lower_uq', 'content_types_table_name_lower_uq']) {
+  for (const name of ['ctf_type_name_lower_uq', 'ctf_type_sort_uq', 'ctr_type_field_lower_uq', 'content_types_api_id_lower_uq', 'content_types_table_name_lower_uq', 'cmptf_type_name_lower_uq', 'cmptf_type_sort_uq', 'component_types_api_id_lower_uq']) {
     if (detail.includes(name)) return name;
   }
   return undefined;
@@ -577,10 +577,10 @@ export async function runSchemaTx<T>(sql: Sql, tableName: string, work: (tx: Sql
         // that lost the race. content_types_*_uq => the content-type itself exists; ctf_type_name_lower_uq
         // => a racing DUPLICATE FIELD; ctf_type_sort_uq => a lost-update on `sort` (retryable conflict).
         const constraint = pg.constraint_name ?? extractConstraint(pg.detail);
-        if (constraint === 'ctf_type_name_lower_uq') throw new FieldExistsError(constraint);
+        if (constraint === 'ctf_type_name_lower_uq' || constraint === 'cmptf_type_name_lower_uq') throw new FieldExistsError(constraint);
         // ctr_type_field_lower_uq => a racing DUPLICATE RELATION field on the same type.
         if (constraint === 'ctr_type_field_lower_uq') throw new FieldExistsError(constraint);
-        if (constraint === 'ctf_type_sort_uq') throw new SchemaChangeConflictError(`schema change on ${tableName} conflicted (concurrent sort race); retry`);
+        if (constraint === 'ctf_type_sort_uq' || constraint === 'cmptf_type_sort_uq') throw new SchemaChangeConflictError(`schema change on ${tableName} conflicted (concurrent sort race); retry`);
         // content_types_api_id_lower_uq / content_types_table_name_lower_uq (and any unknown) -> type exists.
         throw new ContentTypeExistsError(tableName);
       }

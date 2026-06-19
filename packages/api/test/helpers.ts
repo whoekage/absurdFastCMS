@@ -30,6 +30,8 @@ export async function cleanCatalog(sql: Sql): Promise<void> {
   const tables = await sql<{ table_name: string }[]>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'ct\\_%'`;
   for (const { table_name } of tables) await sql.unsafe(`DROP TABLE IF EXISTS "${table_name}" CASCADE`);
   await sql`TRUNCATE content_type_relations, content_type_fields, content_types RESTART IDENTITY CASCADE`;
+  // be-05: wipe the component catalog too (component_type_fields cascades from component_types).
+  await sql`TRUNCATE component_type_fields, component_types RESTART IDENTITY CASCADE`;
 }
 
 /** Whether a table physically exists. */

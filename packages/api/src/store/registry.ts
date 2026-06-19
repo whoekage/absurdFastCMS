@@ -11,7 +11,14 @@ import {
   type FieldRow,
   type RelationRow,
 } from '../db/content-type.repository.ts';
-import type { CmsType } from '../db/type.catalog.ts';
+import {
+  listComponentTypes,
+  getComponentType,
+  getComponentFields,
+  type ComponentTypeRow,
+  type ComponentFieldRow,
+} from '../db/component-type.repository.ts';
+import { isComponentFieldKind, type CmsType, type ComponentFieldKind } from '../db/type.catalog.ts';
 
 /**
  * THE RAM SOURCE OF TRUTH at runtime. Built at boot from `content_types` + `content_type_fields`, the
@@ -103,6 +110,15 @@ export interface RegistryField {
    */
   media?: { multiple: boolean };
   /**
+   * be-05 COMPONENT: present iff `cmsType` is a component kind (component / component-repeatable /
+   * dynamiczone). The field IS a plain `json` column in `fields`/`fieldDefs`/`writable` (the inline
+   * component tree, emitted verbatim un-populated) — `field.json` is already true. This only records the
+   * structural intent the recursive write validator + the read populate post-step (next phases) read:
+   * `kind` selects single-vs-array-vs-dynamiczone, `component` is the single ref, `components` the
+   * dynamic-zone allowed-set. Absent for every non-component field.
+   */
+  component?: { kind: ComponentFieldKind; component?: string; components?: readonly string[] };
+  /**
    * i18n: true => the field is localized (each locale variant carries its own value); false => shared
    * across the document's locale variants (write-side fan-out keeps siblings in sync — a later slice).
    * Always true for a user field on a non-i18n type (no variants exist, so it is moot); system fields
@@ -185,6 +201,14 @@ export interface ContentTypeDef {
    * media field => the populate post-step is skipped entirely (byte-identical read path).
    */
   mediaFields: Map<string, { multiple: boolean }>;
+  /**
+   * be-05 COMPONENT: O(1) lookup of this type's component / component-repeatable / dynamiczone fields by
+   * field name -> structural intent. A component field IS a plain json column in `fields`/`writable`, so
+   * this is purely the seam the recursive write validator + read populate post-step (next phases) use to
+   * decide which fields carry inline component trees + against which component schema(s) to validate /
+   * populate. Empty for a type with no component field => that machinery is skipped (byte-identical read).
+   */
+  componentFields: Map<string, { kind: ComponentFieldKind; component?: string; components?: readonly string[] }>;
   /**
    * Model A Draft & Publish opt-in (per-type). When true, a synthesized nullable `published_at` system
    * field is appended to `fields` (after the 3 base system fields, before user fields — matching the DDL
@@ -278,6 +302,16 @@ function buildUserField(apiId: string, row: FieldRow): RegistryField {
   // `field.json` is already true (RETURNING/SELECT ::text cast applies) — correct, no special-case.
   if (cmsType === 'media') {
     field.media = { multiple: params['multiple'] === true };
+  }
+  // be-05 COMPONENT: tag the field with its structural intent from the catalog params. engine_type is
+  // `json` (set above), so `type==='json'` + `field.json===true` already — the column loads/serializes as
+  // RawJson verbatim with NO engine change. This only records kind + the referenced component api_id(s).
+  if (isComponentFieldKind(row.cms_type)) {
+    const kind = row.cms_type as ComponentFieldKind;
+    const c: { kind: ComponentFieldKind; component?: string; components?: readonly string[] } = { kind };
+    if (typeof params['component'] === 'string') c.component = params['component'];
+    if (Array.isArray(params['components'])) c.components = params['components'] as string[];
+    field.component = c;
   }
 
   return field;
@@ -489,6 +523,10 @@ function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[], relationRows: Relat
   const mediaFields = new Map<string, { multiple: boolean }>();
   for (const f of writable) if (f.media !== undefined) mediaFields.set(f.name, f.media);
 
+  // be-05 COMPONENT: index the component fields (a SUBSET of `writable`; each IS a json column).
+  const componentFields = new Map<string, { kind: ComponentFieldKind; component?: string; components?: readonly string[] }>();
+  for (const f of writable) if (f.component !== undefined) componentFields.set(f.name, f.component);
+
   return {
     apiId: ct.api_id,
     tableName,
@@ -503,9 +541,80 @@ function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[], relationRows: Relat
     relations,
     relationsByField,
     mediaFields,
+    componentFields,
     draftPublish: ct.draft_publish,
     i18n: ct.i18n,
   };
+}
+
+/**
+ * be-05 — a COMPONENT type resolved for the runtime: its api_id + its fields (each a {@link RegistryField},
+ * reusing the same builder as a content-type user field). A component has NO physical table / NO engine
+ * presence, so a {@link ComponentDef} carries NO fieldDefs/columnPlan/indexPlan — only the field SHAPE the
+ * recursive write validator + read populate post-step (next phases) walk. `requiredOnCreate` mirrors a
+ * content-type's: a NOT-NULL field with no default must be present in a component instance.
+ */
+export interface ComponentDef {
+  apiId: string;
+  fields: RegistryField[];
+  fieldsByName: Map<string, RegistryField>;
+  nullableNames: ReadonlySet<string>;
+  requiredOnCreate: readonly string[];
+  /** Component / dynamiczone fields nested INSIDE this component (the recursion seam). */
+  componentFields: Map<string, { kind: ComponentFieldKind; component?: string; components?: readonly string[] }>;
+  /** Media fields inside this component (inline id refs; the populate seam). */
+  mediaFields: Map<string, { multiple: boolean }>;
+}
+
+/** Assemble a {@link ComponentDef} from a component_types row + its field rows (reuses buildUserField). */
+function buildComponentDef(cmp: ComponentTypeRow, fieldRows: ComponentFieldRow[]): ComponentDef {
+  // A component field row has no pg_type/engine_type column; buildUserField reads `engine_type`, so adapt:
+  // a scalar's engine intent is re-derived nowhere here — instead we build a FieldRow-shaped object whose
+  // engine_type is `json` for a component/media-multiple field and otherwise resolved from the catalog.
+  const fields = fieldRows.map((r) => buildUserField(cmp.api_id, componentRowToFieldRow(r)));
+  const fieldsByName = new Map<string, RegistryField>(fields.map((f) => [f.name, f]));
+  const nullableNames = new Set<string>(fields.filter((f) => f.nullable).map((f) => f.name));
+  const requiredOnCreate = fields.filter((f) => !f.nullable && !f.hasDefault).map((f) => f.name);
+  const componentFields = new Map<string, { kind: ComponentFieldKind; component?: string; components?: readonly string[] }>();
+  for (const f of fields) if (f.component !== undefined) componentFields.set(f.name, f.component);
+  const mediaFields = new Map<string, { multiple: boolean }>();
+  for (const f of fields) if (f.media !== undefined) mediaFields.set(f.name, f.media);
+  return { apiId: cmp.api_id, fields, fieldsByName, nullableNames, requiredOnCreate, componentFields, mediaFields };
+}
+
+/**
+ * Adapt a {@link ComponentFieldRow} (no pg_type/engine_type) to the {@link FieldRow} shape buildUserField
+ * expects. The engine_type is re-derived from the catalog: a component kind / media-multiple / json is
+ * `json`; otherwise the scalar's resolved engine intent. A component field never has a constant default.
+ */
+function componentRowToFieldRow(r: ComponentFieldRow): FieldRow {
+  const engineType = componentEngineType(r);
+  return {
+    id: r.id,
+    content_type_id: r.component_type_id,
+    name: r.name,
+    cms_type: r.cms_type,
+    pg_type: 'jsonb',
+    engine_type: engineType,
+    nullable: r.nullable,
+    sort: r.sort,
+    default_value: null,
+    params: r.params ?? {},
+    localized: false,
+  };
+}
+
+/** The engine_type for a component field (so buildUserField's KNOWN_COLUMN_TYPES gate passes). */
+function componentEngineType(r: ComponentFieldRow): string {
+  if (isComponentFieldKind(r.cms_type)) return 'json';
+  // media multiple -> json; media single -> i32 (mirrors the catalog).
+  if (r.cms_type === 'media') return (r.params?.['multiple'] === true ? 'json' : 'i32');
+  const m: Record<string, string> = {
+    string: 'string', email: 'string', uid: 'string', enumeration: 'string', uuid: 'string',
+    text: 'text', integer: 'i32', biginteger: 'i64', float: 'f64', decimal: 'decimal',
+    boolean: 'bool', date: 'date', datetime: 'date', time: 'i32', json: 'json', array: 'json',
+  };
+  return m[r.cms_type] ?? 'json';
 }
 
 /**
@@ -514,6 +623,8 @@ function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[], relationRows: Relat
  */
 export class Registry {
   private readonly byApiId = new Map<string, ContentTypeDef>();
+  /** be-05: the parallel component-type store (no engine presence; pure schema for write/populate walks). */
+  private readonly components = new Map<string, ComponentDef>();
 
   /** Is a content-type by this api_id known? (mirrors engine.has — same canonical key). */
   has(apiId: string): boolean {
@@ -530,9 +641,30 @@ export class Registry {
     return [...this.byApiId.values()];
   }
 
+  /** be-05: O(1) component def lookup by api_id, or undefined. */
+  getComponent(apiId: string): ComponentDef | undefined {
+    return this.components.get(apiId);
+  }
+
+  /** be-05: is a component type by this api_id known? */
+  hasComponent(apiId: string): boolean {
+    return this.components.has(apiId);
+  }
+
+  /** be-05: every component def, in build order. */
+  allComponents(): ComponentDef[] {
+    return [...this.components.values()];
+  }
+
   /** Build the WHOLE registry from meta. Empty catalog is valid (an empty registry). */
   static async build(sql: Sql): Promise<Registry> {
     const reg = new Registry();
+    // be-05: build component defs FIRST so a content-type / component referencing one can resolve it.
+    const components = await listComponentTypes(sql);
+    for (const cmp of components) {
+      const fieldRows = await getComponentFields(sql, cmp.id);
+      reg.components.set(cmp.api_id, buildComponentDef(cmp, fieldRows));
+    }
     const types = await listContentTypes(sql);
     for (const ct of types) {
       const fieldRows = await getFields(sql, ct.id);
@@ -540,6 +672,24 @@ export class Registry {
       reg.byApiId.set(ct.api_id, buildDef(ct, fieldRows, relationRows));
     }
     return reg;
+  }
+
+  /**
+   * be-05: rebuild ONE component def fresh from the DB (the per-component create/addField/dropField hook)
+   * and replace the map entry. Throws {@link RegistryError} if the component vanished.
+   */
+  async rebuildComponent(sql: Sql, apiId: string): Promise<ComponentDef> {
+    const cmp = await getComponentType(sql, apiId);
+    if (cmp === null) throw new RegistryError(apiId, '', 'component-type not found on rebuild');
+    const fieldRows = await getComponentFields(sql, cmp.id);
+    const def = buildComponentDef(cmp, fieldRows);
+    this.components.set(def.apiId, def);
+    return def;
+  }
+
+  /** be-05: remove ONE component def (the drop hook). Returns whether it was present. */
+  removeComponent(apiId: string): boolean {
+    return this.components.delete(apiId);
   }
 
   /**

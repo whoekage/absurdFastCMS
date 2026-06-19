@@ -70,6 +70,10 @@ export interface FieldOptions {
   default?: unknown;
   /** `media` only: false (default) -> a single int4 file id column; true -> a jsonb array of file ids. */
   multiple?: boolean;
+  /** be-05 component / component-repeatable only: the referenced component-type api_id. */
+  component?: string;
+  /** be-05 dynamiczone only: the allowed component-type api_ids (the zone's allowed-set). */
+  components?: string[];
 }
 
 /** A cms_type resolved against the catalog: the pg literal, the engine intent, and recorded params. */
@@ -204,6 +208,69 @@ export function resolveType(cmsType: CmsType, options?: FieldOptions): ResolvedT
   if (resolver === undefined) throw new UnknownCmsTypeError(cmsType);
   const r = resolver(options);
   return { cmsType, pgType: r.pgType, engineType: r.engineType, params: r.params };
+}
+
+// --- be-05 COMPONENT field kinds (a CLOSED set; like RELATION_KINDS they are NOT scalar CmsTypes) -----
+
+/**
+ * The three structured-content field kinds a content-type (or another component) may attach. They are
+ * NOT members of {@link CmsType}: each PHYSICALLY resolves to a single `jsonb` column (no link table, no
+ * per-kind RESOLVERS arm — keeping the `satisfies Record<CmsType,...>` exhaustiveness guard intact), but
+ * their `params` SHAPE differs from `media` (a component/dynamiczone carries the referenced component
+ * api_id(s), not a cardinality flag). The component INSTANCE tree is stored INLINE in the jsonb column.
+ *
+ *   component            — ONE instance of a component type (`params.component = "<apiId>"`).
+ *   component-repeatable — an ORDERED ARRAY of instances of one component (`params.component`).
+ *   dynamiczone          — an ORDERED ARRAY of instances, each tagged `__component`, drawn from an
+ *                          allowed-set (`params.components = ["a","b",...]`).
+ */
+export type ComponentFieldKind = 'component' | 'component-repeatable' | 'dynamiczone';
+export const COMPONENT_FIELD_KINDS: ReadonlySet<string> = new Set<ComponentFieldKind>(['component', 'component-repeatable', 'dynamiczone']);
+
+/** Closed-set test: is this cms_type one of the structured-content component kinds? */
+export function isComponentFieldKind(value: unknown): value is ComponentFieldKind {
+  return typeof value === 'string' && COMPONENT_FIELD_KINDS.has(value);
+}
+
+/** Thrown for a malformed component field spec (missing/empty component ref or dynamic-zone allowed-set). */
+export class ComponentFieldError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ComponentFieldError';
+  }
+}
+
+/**
+ * Resolve a component field kind (+ options) to its physical pg column + the recorded params. Every
+ * kind is a `jsonb` column (engine `json`) — byte-identical mechanics to a multiple-media field — so the
+ * read path emits the inline component tree verbatim (RawJson) un-populated, and indexing skips it (json).
+ * The referenced component api_id(s) are validated for SHAPE here (legal identifier) but their EXISTENCE
+ * is checked by the repository against `component_types` (this module never touches a connection).
+ *
+ * params shape (stored verbatim in content_type_fields.params / component_type_fields.params):
+ *   component / component-repeatable -> { kind, component: '<apiId>' }
+ *   dynamiczone                      -> { kind, components: ['<apiId>', ...] }
+ */
+export function resolveComponentField(kind: ComponentFieldKind, options?: FieldOptions): ResolvedType {
+  if (kind === 'dynamiczone') {
+    const components = options?.components;
+    if (!Array.isArray(components) || components.length === 0) {
+      throw new ComponentFieldError('dynamiczone requires a non-empty components[] allowed-set');
+    }
+    const seen = new Set<string>();
+    for (const c of components) {
+      if (typeof c !== 'string' || c.length === 0) throw new ComponentFieldError(`dynamiczone components must be non-empty api_id strings, got ${String(c)}`);
+      if (seen.has(c.toLowerCase())) throw new ComponentFieldError(`duplicate dynamiczone component: ${c}`);
+      seen.add(c.toLowerCase());
+    }
+    return { cmsType: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, components: [...components] } };
+  }
+  // component / component-repeatable: exactly one referenced component api_id.
+  const component = options?.component;
+  if (typeof component !== 'string' || component.length === 0) {
+    throw new ComponentFieldError(`${kind} requires a component api_id`);
+  }
+  return { cmsType: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, component } };
 }
 
 /**

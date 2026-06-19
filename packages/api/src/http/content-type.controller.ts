@@ -31,7 +31,8 @@ import {
   UnknownRelationKindError,
   type RelationKind,
 } from '../db/ddl.ts';
-import { UnknownCmsTypeError, TypeOptionError, EnumValueError, type CmsType, type FieldOptions } from '../db/type.catalog.ts';
+import { UnknownCmsTypeError, TypeOptionError, EnumValueError, ComponentFieldError, type CmsType, type FieldOptions } from '../db/type.catalog.ts';
+import { ComponentTypeNotFoundError } from '../db/component-type.repository.ts';
 import { JSON_CT, errorResponse, type CoreResponse } from './read.router.ts';
 
 /**
@@ -100,6 +101,16 @@ function projectDef(def: ContentTypeDef): unknown {
       // `cmsType:'media'` field (so every existing non-media field's projection is BYTE-IDENTICAL). The
       // admin reads it to pick a single-asset picker vs a multi-asset gallery; the SDK mirrors it.
       ...(f.media !== undefined ? { multiple: f.media.multiple } : {}),
+      // be-05 COMPONENT: the structural metadata of a component / component-repeatable / dynamiczone field.
+      // CONDITIONAL keys — emitted ONLY for a component field (so every non-component field's projection is
+      // BYTE-IDENTICAL). `component` is the single ref (component/component-repeatable); `components` is the
+      // dynamic-zone allowed-set. The admin reads these to render the nested editor; the SDK mirrors them.
+      ...(f.component !== undefined
+        ? {
+            ...(f.component.component !== undefined ? { component: f.component.component } : {}),
+            ...(f.component.components !== undefined ? { components: f.component.components } : {}),
+          }
+        : {}),
       // i18n: per-field localized flag. CONDITIONAL key — emitted ONLY for an i18n type so a non-i18n
       // type's projected fields stay BYTE-IDENTICAL to before this feature (the existing builder suite is
       // unaffected; only NEW i18n tests assert the key). The admin reads it to show the per-field toggle.
@@ -156,7 +167,11 @@ function mapError(e: unknown): CoreResponse {
     e instanceof EnumValueError ||
     e instanceof DefaultTypeError ||
     e instanceof TypeChangeForbiddenError ||
-    e instanceof TypeChangeFailedError
+    e instanceof TypeChangeFailedError ||
+    // be-05: a malformed component field spec, or a reference to a non-existent component, is a 400 on a
+    // CONTENT-TYPE route (the referenced component is request input, not the route's addressed resource).
+    e instanceof ComponentFieldError ||
+    e instanceof ComponentTypeNotFoundError
   ) {
     return errorResponse(400, e.message);
   }

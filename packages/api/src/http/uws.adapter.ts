@@ -7,8 +7,10 @@ import { rebuildType } from '../db/engine.loader.ts';
 import { handleRequest, errorResponse, type CoreResponse } from './read.router.ts';
 import { handleWrite, type WriteContext } from './write.handler.ts';
 import { handleContentTypeRequest, type ContentTypeContext } from './content-type.controller.ts';
+import { handleComponentTypeRequest, type ComponentTypeContext } from './component-type.controller.ts';
 import { handleUpload, handleListFiles, handleGetFile, handleDeleteFile, type FileContext, type ParsedUpload } from './upload.handler.ts';
 import { mediaPopulateTargets, stripMediaPopulate, applyMediaPopulate } from './media.populate.ts';
+import { componentPopulateTargets, applyComponentPopulate } from './component.populate.ts';
 import { getStorageProvider } from '../storage/index.ts';
 import { listTypes, inspectType } from '../store/inspect.ts';
 import { config } from '../config.ts';
@@ -263,6 +265,37 @@ function handleContentTypeRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, met
   });
 }
 
+/**
+ * be-05 — a COMPONENT-TYPE BUILDER route. Structurally identical to {@link handleContentTypeRoute}:
+ * capture params synchronously, read the body (413 cap, JSON.parse -> 400), run the async core, cork the
+ * response. The `/component-types` literal prefix can never shadow a real `/:type` ('-' is illegal in an
+ * api_id, and uWS matches a static segment over a `:param`).
+ */
+function handleComponentTypeRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, method: string, ctx: ComponentTypeContext, opts: CtRouteOpts): void {
+  const apiId = opts.hasApiId ? (req.getParameter(0) ?? '') : undefined;
+  const fieldName = opts.hasName ? (req.getParameter(1) ?? '') : undefined;
+  const { aborted } = readBody(res, (raw) => {
+    void (async () => {
+      if (raw === null) return corkSend(res, aborted, errorResponse(413, 'request body too large'));
+      let body: unknown = undefined;
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8'));
+        } catch {
+          return corkSend(res, aborted, errorResponse(400, 'invalid JSON body'));
+        }
+      }
+      let result: CoreResponse;
+      try {
+        result = await handleComponentTypeRequest(ctx, { method, apiId, fieldName, sub: opts.sub, body });
+      } catch {
+        result = errorResponse(500, 'internal error');
+      }
+      corkSend(res, aborted, result);
+    })();
+  });
+}
+
 // be-04 MEDIA — sanitize a busboy-reported filename to its bare basename over a safe alphabet. NEVER used
 // to build a storage path (that is the content-addressed key); recorded only for display. Strips any
 // directory component (defends against `../../etc/passwd` or a backslash-path), collapses everything
@@ -426,26 +459,31 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
   const current = engine;
 
   /**
-   * be-04 MEDIA — the OPTIONAL media-populate wrapper around a GET read. When the registry is present,
-   * the addressed type declares >=1 media field, AND the request asked to populate one of them, this:
-   *   1. STRIPS the media-field populate names from the query (so the engine's relation-only populate
-   *      parser never 400s on a scalar media field), runs the pure read core on the stripped query,
-   *   2. on a 200, JSON.parse/inlines the asset record(s) for the targeted media fields via a single
-   *      batched `files` lookup, then re-serializes — corked + onAborted-guarded (it is async).
+   * be-04 MEDIA + be-05 COMPONENT — the OPTIONAL populate-post-step wrapper around a GET read. When the
+   * registry is present and the request asked to populate >=1 MEDIA field and/or >=1 COMPONENT field of the
+   * addressed type, this:
+   *   1. STRIPS the targeted media + component populate names from the query (so the engine's relation-only
+   *      populate parser never 400s on a scalar media / json component field), runs the pure read core,
+   *   2. on a 200, applies the media populate (inline asset record(s)) AND the component populate (resolve
+   *      inline media refs inside the component trees), each over the parsed envelope — corked + onAborted.
    * Returns true iff it OWNED the response (took the async path); false => the caller runs the normal
-   * SYNCHRONOUS byte-identical read path. With no registry / no media field / no media populate asked,
-   * it always returns false => the existing zero-copy read path is byte-identical.
+   * SYNCHRONOUS byte-identical read path. With no registry / no media+component field / no such populate
+   * asked, it always returns false => the existing zero-copy read path is byte-identical.
    */
   function mediaRead(res: uWS.HttpResponse, method: string, path: string, type: string, query: string): boolean {
     if (registry === undefined || store === undefined) return false;
     if (method.toUpperCase() !== 'GET') return false;
     const def = registry.get(type);
-    if (def === undefined || def.mediaFields.size === 0) return false;
-    const targets = mediaPopulateTargets(def, query);
-    if (targets.size === 0) return false;
+    if (def === undefined || (def.mediaFields.size === 0 && def.componentFields.size === 0)) return false;
+    const mediaTargets = mediaPopulateTargets(def, query);
+    const componentTargets = componentPopulateTargets(def, query);
+    if (mediaTargets.size === 0 && componentTargets.size === 0) return false;
 
+    const reg = registry;
     const sql = store.sql;
-    const strippedQuery = stripMediaPopulate(query, new Set(targets.keys()));
+    // Strip BOTH the media + component populate names so the engine's relation-only parser never 400s.
+    const stripNames = new Set<string>([...mediaTargets.keys(), ...componentTargets.keys()]);
+    const strippedQuery = stripMediaPopulate(query, stripNames);
     let aborted = false;
     res.onAborted(() => {
       aborted = true;
@@ -454,8 +492,15 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
       let result: CoreResponse;
       try {
         const base = handleRequest(current, { method, path, query: strippedQuery });
-        // Only a successful read carries a media id to resolve; a 400/404/405 passes straight through.
-        result = base.status === 200 ? await applyMediaPopulate(sql, base.body, targets) : base;
+        // Only a successful read carries a value to resolve; a 400/404/405 passes straight through.
+        if (base.status === 200) {
+          let body = base.body;
+          if (mediaTargets.size > 0) body = (await applyMediaPopulate(sql, body, mediaTargets)).body;
+          if (componentTargets.size > 0) body = (await applyComponentPopulate(sql, reg, body, componentTargets)).body;
+          result = { status: 200, contentType: base.contentType, body };
+        } else {
+          result = base;
+        }
       } catch {
         result = errorResponse(500, 'internal error');
       }
@@ -540,6 +585,17 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
     app.post('/content-types/:apiId/fields', (res, req) => handleContentTypeRoute(res, req, 'POST', ctCtx, { hasApiId: true, sub: 'fields' }));
     app.put('/content-types/:apiId/fields/:name', (res, req) => handleContentTypeRoute(res, req, 'PUT', ctCtx, { hasApiId: true, sub: 'fields', hasName: true }));
     app.del('/content-types/:apiId/fields/:name', (res, req) => handleContentTypeRoute(res, req, 'DELETE', ctCtx, { hasApiId: true, sub: 'fields', hasName: true }));
+
+    // be-05 COMPONENT-TYPE BUILDER (meta-only runtime schema over HTTP). Same `/component-types` literal-
+    // prefix safety as `/content-types` ('-' is illegal in an api_id). No engine sync (components have no
+    // engine presence) — the controller syncs only the registry's component store.
+    const cmpCtx: ComponentTypeContext = { sql: store.sql, registry: () => registry };
+    app.post('/component-types', (res, req) => handleComponentTypeRoute(res, req, 'POST', cmpCtx, { hasApiId: false }));
+    app.get('/component-types', (res, req) => handleComponentTypeRoute(res, req, 'GET', cmpCtx, { hasApiId: false }));
+    app.get('/component-types/:apiId', (res, req) => handleComponentTypeRoute(res, req, 'GET', cmpCtx, { hasApiId: true }));
+    app.del('/component-types/:apiId', (res, req) => handleComponentTypeRoute(res, req, 'DELETE', cmpCtx, { hasApiId: true }));
+    app.post('/component-types/:apiId/fields', (res, req) => handleComponentTypeRoute(res, req, 'POST', cmpCtx, { hasApiId: true, sub: 'fields' }));
+    app.del('/component-types/:apiId/fields/:name', (res, req) => handleComponentTypeRoute(res, req, 'DELETE', cmpCtx, { hasApiId: true, sub: 'fields', hasName: true }));
 
     // Draft & Publish action sub-route. 3 segments — structurally distinct from the 2-segment data
     // routes, so ordering vs put('/:type/:id') is irrelevant (uWS matches by segment count + literals).

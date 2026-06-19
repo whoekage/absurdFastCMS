@@ -1,5 +1,6 @@
 import type { Sql } from 'postgres';
-import { resolveType, classifyTypeChange, type CmsType, type FieldOptions, type ResolvedType } from './type.catalog.ts';
+import { resolveType, resolveComponentField, isComponentFieldKind, classifyTypeChange, type CmsType, type ComponentFieldKind, type FieldOptions, type ResolvedType } from './type.catalog.ts';
+import { assertComponentRefsExist } from './component-type.repository.ts';
 import {
   validateFieldName,
   deriveTableName,
@@ -45,8 +46,9 @@ import {
 
 /** A field the caller wants to define: the user name, its cms_type, and per-type options. */
 export interface FieldSpec {
+  /** A scalar {@link CmsType} OR a be-05 {@link ComponentFieldKind} (component/component-repeatable/dynamiczone). */
   name: string;
-  cmsType: CmsType;
+  cmsType: CmsType | ComponentFieldKind;
   options?: FieldOptions;
   /** i18n: true => the field is localized (per-variant); false => shared across locale variants. Defaults true. */
   localized?: boolean;
@@ -142,13 +144,33 @@ export function resolveFields(specs: FieldSpec[]): ResolvedField[] {
     const lower = name.toLowerCase();
     if (seen.has(lower)) throw new DuplicateFieldError(name);
     seen.add(lower);
-    const resolved = resolveType(spec.cmsType, spec.options);
+    // be-05: a component/component-repeatable/dynamiczone field resolves to a jsonb column via a SIBLING
+    // helper (NOT the RESOLVERS record — so the `satisfies Record<CmsType,...>` guard stays exhaustive).
+    // A component field never carries a constant default (it is a structured tree, not a scalar).
+    const resolved = isComponentFieldKind(spec.cmsType)
+      ? resolveComponentField(spec.cmsType, spec.options)
+      : resolveType(spec.cmsType, spec.options);
     const nullable = spec.options?.nullable ?? true;
     let defaultValue: unknown;
     if (spec.options?.default !== undefined) defaultValue = validateDefault(resolved, spec.options.default).sqlLiteral;
     out.push({ name, resolved, nullable, defaultValue, localized: spec.localized ?? true });
   }
   return out;
+}
+
+/**
+ * Collect the component-type api_id(s) a batch of resolved fields references (component/component-repeatable
+ * carry `params.component`; dynamiczone carries `params.components[]`). Used to existence-check refs inside
+ * a create/addField tx (a dangling ref => a clean ComponentTypeNotFoundError -> 400, not a runtime hole).
+ */
+function referencedComponents(fields: ResolvedField[]): string[] {
+  const refs = new Set<string>();
+  for (const f of fields) {
+    const p = f.resolved.params;
+    if (typeof p['component'] === 'string') refs.add(p['component']);
+    if (Array.isArray(p['components'])) for (const c of p['components'] as string[]) refs.add(c);
+  }
+  return [...refs];
 }
 
 /** The `params` jsonb stored for a field is the catalog's resolved params verbatim. */
@@ -193,6 +215,9 @@ export async function createContentType(sql: Sql, params: { apiId: string; field
   if (existing !== null) throw new ContentTypeExistsError(params.apiId);
 
   return runSchemaTx(sql, tableName, async (tx) => {
+    // be-05: every referenced component type must EXIST (a dangling component ref is a clean 400). Checked
+    // INSIDE the tx (FOR-SHARE-free read; the catalog is small) so the whole create rolls back on a miss.
+    await assertComponentRefsExist(tx, referencedComponents(fields));
     const [ct] = await tx<ContentTypeRow[]>`
       INSERT INTO content_types (api_id, table_name, draft_publish, i18n) VALUES (${params.apiId}, ${tableName}, ${params.draftPublish ?? false}, ${params.i18n ?? false}) RETURNING *
     `;
@@ -233,7 +258,9 @@ async function lockContentType(tx: Sql, apiId: string): Promise<ContentTypeRow> 
  */
 export async function addField(sql: Sql, apiId: string, spec: FieldSpec): Promise<FieldRow> {
   const name = validateFieldName(spec.name);
-  const resolved = resolveType(spec.cmsType, spec.options);
+  const resolved = isComponentFieldKind(spec.cmsType)
+    ? resolveComponentField(spec.cmsType, spec.options)
+    : resolveType(spec.cmsType, spec.options);
   const nullable = spec.options?.nullable ?? true;
   let defaultValue: unknown;
   if (spec.options?.default !== undefined) defaultValue = validateDefault(resolved, spec.options.default).sqlLiteral;
@@ -242,6 +269,7 @@ export async function addField(sql: Sql, apiId: string, spec: FieldSpec): Promis
   const tableName = deriveTableName(apiId);
   return runSchemaTx(sql, tableName, async (tx) => {
     const ct = await lockContentType(tx, apiId);
+    await assertComponentRefsExist(tx, referencedComponents([field])); // be-05: refs must exist (400 else).
     const dup = await tx`SELECT 1 FROM content_type_fields WHERE content_type_id = ${ct.id} AND lower(name) = lower(${name})`;
     if (dup.length > 0) throw new FieldExistsError(name);
     const [{ next }] = await tx<{ next: number }[]>`SELECT COALESCE(MAX(sort) + 1, 0) AS next FROM content_type_fields WHERE content_type_id = ${ct.id}`;

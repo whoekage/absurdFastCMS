@@ -77,6 +77,39 @@ CREATE UNIQUE INDEX IF NOT EXISTS "ctr_type_field_lower_uq" ON "content_type_rel
 -- Cheap inbound-reference scan for the drop guard (lower(target_api_id)).
 CREATE INDEX IF NOT EXISTS "ctr_target_api_id_lower_idx" ON "content_type_relations" (lower("target_api_id"));
 
+-- COMPONENT catalog (be-05). A component type is a REUSABLE field group with NO physical ct_ table and NO
+-- engine presence: it lives ENTIRELY as meta (component_types + component_type_fields). A content-type (or
+-- another component) attaches a component via a `component` / `component-repeatable` / `dynamiczone` field —
+-- which renders as a single jsonb COLUMN on the owner ct_ table (no link table), the component instance
+-- tree stored inline. Mirrors content_types / content_type_fields, MINUS every physical concern (no
+-- table_name, no pg_type/engine_type, no draft_publish/i18n) — a component field's full spec lives in
+-- cms_type + params. Created by the migration runner, never the runtime Builder DDL. No backfill (pre-launch).
+CREATE TABLE IF NOT EXISTS "component_types" (
+	"id"         serial PRIMARY KEY NOT NULL,
+	"api_id"     varchar(63) NOT NULL,                    -- the component api_id (e.g. "seo", "hero")
+	"created_at" timestamp with time zone NOT NULL DEFAULT now(),
+	"updated_at" timestamp with time zone NOT NULL DEFAULT now()
+);
+-- Case-insensitive uniqueness on the component api_id (mirrors content_types_api_id_lower_uq).
+CREATE UNIQUE INDEX IF NOT EXISTS "component_types_api_id_lower_uq" ON "component_types" (lower("api_id"));
+
+CREATE TABLE IF NOT EXISTS "component_type_fields" (
+	"id"                serial PRIMARY KEY NOT NULL,
+	"component_type_id" integer NOT NULL REFERENCES "component_types"("id") ON DELETE CASCADE,
+	"name"              varchar(63) NOT NULL,   -- exact, untruncated field name (also the in-jsonb key)
+	-- cms_type: a catalog CmsType (string/integer/...) OR a nesting kind ('component'|'component-repeatable'|
+	-- 'dynamiczone') OR 'media'. A component field has NO pg_type/engine_type — it is never a physical column.
+	"cms_type"          varchar(32) NOT NULL,
+	-- params: the FULL field spec. scalar: {length}|{precision,scale}|{values}|... ; media: {multiple} ;
+	-- component/component-repeatable: {component:"<apiId>"} ; dynamiczone: {components:["a","b",...]}.
+	"params"            jsonb NOT NULL DEFAULT '{}'::jsonb,
+	"nullable"          boolean NOT NULL DEFAULT true,
+	"sort"              integer NOT NULL        -- ordering is metadata only; eager, NOT NULL, no nulls
+);
+-- App enforces case-insensitive duplicate rejection; these are the DB backstops (mirror ctf_*_uq).
+CREATE UNIQUE INDEX IF NOT EXISTS "cmptf_type_name_lower_uq" ON "component_type_fields" (component_type_id, lower("name"));
+CREATE UNIQUE INDEX IF NOT EXISTS "cmptf_type_sort_uq"       ON "component_type_fields" (component_type_id, "sort");
+
 -- Media/asset registry (be-04). A dedicated SYSTEM table — NOT a content_type / engine type: the columnar
 -- engine is built ONLY from content_types/content_type_fields, so assets live + serve from here via their
 -- own thin endpoints (POST/GET/DELETE /_files...), never the read engine. Created by the migration runner,

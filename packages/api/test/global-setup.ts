@@ -101,7 +101,31 @@ export async function globalSetup(): Promise<void> {
     await admin`SELECT pg_advisory_lock(${GOLDEN_LOCK_KEY})`;
     try {
       const exists = await admin`SELECT 1 FROM pg_database WHERE datname = ${GOLDEN_DB}`;
-      if (exists.length === 0) await admin.unsafe(`CREATE DATABASE "${GOLDEN_DB}"`);
+      // DRIFT HEAL (pre-launch drop & recreate, no backfill): the consolidated migrations/0001_init.sql is
+      // applied ONCE per golden (tracked in _migrations by name), so EDITING it (e.g. be-05 adding the
+      // component_* tables) would NOT re-apply onto a REUSED stale golden. Detect that drift by probing for
+      // a sentinel table from the latest init; if golden exists but lacks it, DROP golden so it is recreated
+      // fresh below and re-migrated from the current init. A non-reused (fresh) container has no golden, so
+      // this is a no-op there.
+      if (exists.length > 0) {
+        const goldenProbe = postgres(goldenUrlFrom(adminUri), { max: 1, onnotice: () => {} });
+        let drift = false;
+        try {
+          const t = await goldenProbe`SELECT to_regclass('public.component_types') AS reg`;
+          drift = t[0]?.reg === null;
+        } catch {
+          drift = true;
+        } finally {
+          await goldenProbe.end({ timeout: 5 });
+        }
+        if (drift) {
+          // Terminate lingering backends so DROP DATABASE is not blocked, then drop.
+          await admin`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${GOLDEN_DB} AND pid <> pg_backend_pid()`;
+          await admin.unsafe(`DROP DATABASE IF EXISTS "${GOLDEN_DB}"`);
+        }
+      }
+      const present = await admin`SELECT 1 FROM pg_database WHERE datname = ${GOLDEN_DB}`;
+      if (present.length === 0) await admin.unsafe(`CREATE DATABASE "${GOLDEN_DB}"`);
       // ALWAYS migrate (idempotent via _migrations): tops up a reused/stale golden with new migrations.
       // runMigrations opens + ends its OWN handle; golden is connected to only inside this window.
       const goldenUrl = goldenUrlFrom(adminUri);

@@ -1,6 +1,6 @@
 import type { Sql } from 'postgres';
 import type { Engine } from '../store/engine.ts';
-import type { Registry, ContentTypeDef } from '../store/registry.ts';
+import type { Registry, ContentTypeDef, ComponentDef } from '../store/registry.ts';
 import { validateBody, BodyParseError } from '../store/body.parser.ts';
 import { insertEntry, updateEntry, deleteEntry, publishEntry, unpublishEntry, readSiblingForVariant, serializeEntry, EntryWriteError } from '../db/entry.repository.ts';
 import { applyRelationOps } from '../db/relation.repository.ts';
@@ -90,8 +90,8 @@ export interface WriteRequest {
  * text (e.g. `[1,2,3]`). That class is NOT iterable, so we unwrap+parse it back to a `number[]` here
  * (those ids were already validated at the sibling's own create; re-checking them is cheap + correct).
  */
-async function assertMediaRefsExist(tx: Sql, def: ContentTypeDef, data: Record<string, unknown>): Promise<void> {
-  if (def.mediaFields.size === 0) return;
+async function assertMediaRefsExist(tx: Sql, def: ContentTypeDef, data: Record<string, unknown>, registry: Registry): Promise<void> {
+  if (def.mediaFields.size === 0 && def.componentFields.size === 0) return;
   const ids: number[] = [];
   for (const [name, { multiple }] of def.mediaFields) {
     const v = data[name];
@@ -104,10 +104,74 @@ async function assertMediaRefsExist(tx: Sql, def: ContentTypeDef, data: Record<s
       ids.push(v as number);
     }
   }
+  // be-05 COMPONENT: walk the coerced component / dynamiczone trees for INLINE media id refs. The body
+  // parser already produced a plain JS tree (component arrays/objects) whose inline media values are a
+  // number / number[] (validated positive-int4), guided by the nested {@link ComponentDef} schemas — so
+  // the existence check is the SAME `files` lookup as a top-level media field, just gathered recursively.
+  for (const [name, cmeta] of def.componentFields) {
+    const v = data[name];
+    if (v === undefined || v === null) continue;
+    // A shared-sibling copy of a component column is a RawJson(verbatim text); parse it back to walk it.
+    const tree = v instanceof RawJson ? JSON.parse(v.raw) : v;
+    collectComponentMediaIds(registry, cmeta, tree, ids);
+  }
   if (ids.length === 0) return;
   const missing = await missingFileIds(tx, ids);
   if (missing.length > 0) {
     throw new EntryWriteError(`media reference to unknown file id(s): ${missing.join(', ')}`);
+  }
+}
+
+/**
+ * be-05 COMPONENT — recursively gather every INLINE media `files.id` referenced inside a coerced component
+ * / component-repeatable / dynamiczone value, guided by the registry's {@link ComponentDef} schemas. Mirrors
+ * the read-side populate walk's collect step: for a single component recurse into the named component; for a
+ * repeatable recurse each entry; for a dynamiczone pick the schema per block's `__component`. A null/absent
+ * branch contributes nothing. Defensive against a non-conforming shape (a coerced tree is well-formed; a
+ * shared-sibling RawJson re-parse is canonical) — anything unexpected is simply skipped (the body parser
+ * already rejected an invalid write; this is the existence gate, not a re-validation).
+ */
+function collectComponentMediaIds(
+  registry: Registry,
+  meta: { kind: string; component?: string; components?: readonly string[] },
+  value: unknown,
+  into: number[],
+): void {
+  if (value === null || value === undefined) return;
+  if (meta.kind === 'component') {
+    if (meta.component !== undefined) collectInstanceMediaIds(registry, meta.component, value, into);
+  } else if (meta.kind === 'component-repeatable') {
+    if (Array.isArray(value) && meta.component !== undefined) {
+      for (const entry of value) collectInstanceMediaIds(registry, meta.component, entry, into);
+    }
+  } else if (meta.kind === 'dynamiczone') {
+    if (Array.isArray(value)) {
+      for (const block of value) {
+        if (typeof block === 'object' && block !== null && typeof (block as Record<string, unknown>)['__component'] === 'string') {
+          collectInstanceMediaIds(registry, (block as Record<string, unknown>)['__component'] as string, block, into);
+        }
+      }
+    }
+  }
+}
+
+/** Gather inline media ids from ONE component instance object (recursing nested component fields). */
+function collectInstanceMediaIds(registry: Registry, apiId: string, obj: unknown, into: number[]): void {
+  if (typeof obj !== 'object' || obj === null) return;
+  const cdef: ComponentDef | undefined = registry.getComponent(apiId);
+  if (cdef === undefined) return;
+  const o = obj as Record<string, unknown>;
+  for (const [fname, { multiple }] of cdef.mediaFields) {
+    const v = o[fname];
+    if (v === undefined || v === null) continue;
+    if (multiple) {
+      if (Array.isArray(v)) for (const id of v) if (typeof id === 'number') into.push(id);
+    } else if (typeof v === 'number') {
+      into.push(v);
+    }
+  }
+  for (const [fname, cmeta] of cdef.componentFields) {
+    collectComponentMediaIds(registry, cmeta, o[fname], into);
   }
 }
 
@@ -142,7 +206,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
       // so an empty body is allowed here (the 'update' "at least one field" rule does NOT apply to a
       // create). We then re-check that every required LOCALIZED field is present (shared required fields
       // are satisfied by the copy from the sibling).
-      const { data, relationOps } = validateBody(def, body ?? {}, 'variant');
+      const { data, relationOps } = validateBody(def, body ?? {}, 'variant', ctx.registry());
       for (const reqName of def.requiredOnCreate) {
         const f = def.writableByName.get(reqName)!;
         if (f.localized && !(reqName in data)) return errorResponse(400, `missing required field "${reqName}"`);
@@ -159,7 +223,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
           }
         }
         const merged = { ...sib.shared, ...data };
-        await assertMediaRefsExist(tx, def, merged); // be-04: any media id (overlaid or shared-copied) must exist.
+        await assertMediaRefsExist(tx, def, merged, ctx.registry()); // be-04/05: any media id (top-level or inline) must exist.
         const r = await insertEntry(tx, def, merged, { documentId: sib.documentId, locale });
         // Per §7 relations are PER-VARIANT (link rows key the physical row id), so any relation ops apply
         // to the NEW row only — exactly the same applyRelationOps seam as a plain create.
@@ -191,7 +255,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
     }
 
     if (method === 'POST') {
-      const { data, relationOps } = validateBody(def, body, 'create');
+      const { data, relationOps } = validateBody(def, body, 'create', ctx.registry());
       // i18n: a plain create starts a NEW document (fresh document_id via nextval) in the DEFAULT_LOCALE
       // — the (NOT NULL) `locale` column is server-set here (the body can't carry it). A new locale of an
       // EXISTING document goes through the variant-create verb above. Non-i18n => opts omitted (unchanged).
@@ -199,7 +263,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
       // ONE tx: INSERT scalars RETURNING id, then apply the relation ops with that id. A FK 23503 on a
       // non-existent related id rolls the WHOLE tx back -> no orphan ct_ row, no partial link write.
       const row = await ctx.sql.begin(async (tx) => {
-        await assertMediaRefsExist(tx, def, data); // be-04: media id(s) must reference real assets (400 else).
+        await assertMediaRefsExist(tx, def, data, ctx.registry()); // be-04/05: media id(s) must reference real assets (400 else).
         const r = await insertEntry(tx, def, data, opts);
         await applyRelationOps(tx, def, Number(r['id']), relationOps);
         return r;
@@ -211,12 +275,12 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
     if (method === 'PUT') {
       const id = parseId(idRaw);
       if (id === null) return errorResponse(404, 'not found');
-      const { data, relationOps } = validateBody(def, body, 'update');
+      const { data, relationOps } = validateBody(def, body, 'update', ctx.registry());
       // ONE tx: update scalars (also confirms the row exists), then apply relation ops on the URL id.
       const row = await ctx.sql.begin(async (tx) => {
         const r = await updateEntry(tx, def, id, data);
         if (r === null) return null; // missing owner -> abort the tx, do NO link work.
-        await assertMediaRefsExist(tx, def, data); // be-04: any media id(s) in this update must exist (400 else).
+        await assertMediaRefsExist(tx, def, data, ctx.registry()); // be-04/05: any media id(s) in this update must exist (400 else).
         await applyRelationOps(tx, def, id, relationOps);
         return r;
       });
