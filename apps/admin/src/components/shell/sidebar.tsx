@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Boxes, FileStack, Layers, Plus } from 'lucide-react';
+import { Boxes, FileStack, Layers, Plus, Image } from 'lucide-react';
 import { api } from '@/lib/api';
 import { contentTypeKeys, errorMessage } from '@/lib/content-types';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -66,6 +66,10 @@ export function Sidebar() {
 
       <Separator />
       <nav className="space-y-0.5 p-2">
+        <Link to="/media" className={navLink} activeOptions={{ exact: true }}>
+          <Image className="h-4 w-4 shrink-0" />
+          Media Library
+        </Link>
         <Link to="/content-types/new" className={navLink}>
           <Plus className="h-4 w-4 shrink-0" />
           New content type

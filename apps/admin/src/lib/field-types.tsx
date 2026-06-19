@@ -391,6 +391,91 @@ const uuidHandler: FieldTypeHandler = {
   emptyForm: () => '',
 };
 
+// ── be-04 MEDIA ─────────────────────────────────────────────────────────────────────────────────
+// A media field references uploaded asset(s) by id. The ENTRY FORM does NOT use this handler's `input`
+// — it routes media fields to a dedicated <MediaPicker> (like relations) and merges the picked id(s)
+// straight into the write body. This handler exists so (a) the registry stays an exhaustive
+// Record<CmsType,...> and (b) media fields render a THUMBNAIL in read-only table cells / detail views via
+// `format`, which understands both a raw id / id[] and a populated FileAsset object/array.
+const mediaHandler: FieldTypeHandler = {
+  input: textInput('text'), // fallback only; the entry form overrides media with <MediaPicker>.
+  zod: () => z.any(),
+  format: (v) => formatMedia(v),
+  toForm: (v) => (v === null || v === undefined ? '' : String(v)),
+  fromForm: (value) => {
+    const s = typeof value === 'string' ? value.trim() : '';
+    if (s === '') return null;
+    const n = Number(s);
+    return Number.isInteger(n) && n > 0 ? n : s;
+  },
+  emptyForm: () => '',
+};
+
+/** A wire media value -> a read-only display: a thumbnail (populated asset), a count, or an id. */
+function formatMedia(value: unknown): ReactNode {
+  const nullDisplay = displayNullable(value);
+  if (nullDisplay !== undefined) return nullDisplay;
+  if (isAssetLike(value)) return <MediaThumb asset={value} />;
+  if (Array.isArray(value)) {
+    const assets = value.filter(isAssetLike);
+    if (assets.length > 0) {
+      return (
+        <span className="inline-flex items-center gap-1">
+          {assets.slice(0, 4).map((a) => (
+            <MediaThumb key={a.id} asset={a} />
+          ))}
+          {assets.length > 4 && (
+            <span className="text-xs text-muted-foreground">+{assets.length - 4}</span>
+          )}
+        </span>
+      );
+    }
+    return <span className="text-xs text-muted-foreground">{value.length} file(s)</span>;
+  }
+  return <span className="text-xs text-muted-foreground">#{String(value)}</span>;
+}
+
+/** Minimal asset shape the formatter needs (a populated media value). */
+interface AssetLike {
+  id: number;
+  url: string | null;
+  mime: string;
+  filename?: string;
+}
+
+function isAssetLike(v: unknown): v is AssetLike {
+  return (
+    typeof v === 'object' &&
+    v !== null &&
+    'id' in v &&
+    'mime' in v &&
+    typeof (v as { id: unknown }).id === 'number'
+  );
+}
+
+/** A 28px thumbnail (image) or a mime badge (non-image), with the filename as a tooltip. */
+export function MediaThumb({ asset }: { asset: AssetLike }): ReactNode {
+  const isImage = asset.mime.startsWith('image/') && asset.url;
+  if (isImage) {
+    return (
+      <img
+        src={asset.url as string}
+        alt={asset.filename ?? `#${asset.id}`}
+        title={asset.filename ?? `#${asset.id}`}
+        className="inline-block h-7 w-7 rounded object-cover ring-1 ring-border"
+      />
+    );
+  }
+  return (
+    <span
+      title={asset.filename ?? `#${asset.id}`}
+      className="inline-flex h-7 items-center rounded bg-muted px-1.5 text-[10px] text-muted-foreground ring-1 ring-border"
+    >
+      {asset.mime.split('/')[1] ?? 'file'}
+    </span>
+  );
+}
+
 const registry: Record<CmsType, FieldTypeHandler> = {
   string: stringHandler,
   text: textHandler,
@@ -408,6 +493,7 @@ const registry: Record<CmsType, FieldTypeHandler> = {
   json: jsonHandler,
   array: jsonHandler,
   uuid: uuidHandler,
+  media: mediaHandler,
 };
 
 /** Resolve the handler for a field's cmsType (falls back to a plain text/string handler). */
@@ -446,9 +532,11 @@ export interface CmsTypeOptionMeta {
   length: boolean;
   /** decimal `precision` + `scale` apply. */
   precisionScale: boolean;
+  /** be-04 MEDIA: the `multiple` (single-vs-array) toggle applies. */
+  multiple: boolean;
 }
 
-const NO_OPTIONS: CmsTypeOptionMeta = { enumValues: false, length: false, precisionScale: false };
+const NO_OPTIONS: CmsTypeOptionMeta = { enumValues: false, length: false, precisionScale: false, multiple: false };
 
 const optionMeta: Record<CmsType, CmsTypeOptionMeta> = {
   string: { ...NO_OPTIONS, length: true },
@@ -467,6 +555,7 @@ const optionMeta: Record<CmsType, CmsTypeOptionMeta> = {
   json: NO_OPTIONS,
   array: NO_OPTIONS,
   uuid: NO_OPTIONS,
+  media: { ...NO_OPTIONS, multiple: true },
 };
 
 /** Which conditional option inputs a cmsType needs in the builder forms. */

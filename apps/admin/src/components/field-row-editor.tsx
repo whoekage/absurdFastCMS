@@ -124,6 +124,18 @@ export function FieldRowEditor({ draft, onChange, onRemove, disabled, i18n }: Fi
         </div>
       )}
 
+      {meta.multiple && (
+        <label className="flex items-center gap-2 text-sm" title="Multiple: this media field holds an ARRAY of assets. Unchecked = a single asset reference.">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-input"
+            checked={draft.multiple}
+            onChange={(e) => set({ multiple: e.target.checked })}
+          />
+          Multiple (asset array)
+        </label>
+      )}
+
       <div className="flex flex-wrap items-end gap-4">
         <label className="flex items-center gap-2 text-sm">
           <input

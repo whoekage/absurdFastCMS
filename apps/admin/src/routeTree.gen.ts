@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as MediaIndexRouteImport } from './routes/media.index'
 import { Route as ContentTypesIndexRouteImport } from './routes/content-types.index'
 import { Route as ArticlesIndexRouteImport } from './routes/articles.index'
 import { Route as ContentTypesNewRouteImport } from './routes/content-types.new'
@@ -25,6 +26,11 @@ import { Route as ContentApiIdIdEditRouteImport } from './routes/content.$apiId.
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MediaIndexRoute = MediaIndexRouteImport.update({
+  id: '/media/',
+  path: '/media/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ContentTypesIndexRoute = ContentTypesIndexRouteImport.update({
@@ -91,6 +97,7 @@ export interface FileRoutesByFullPath {
   '/content-types/new': typeof ContentTypesNewRoute
   '/articles/': typeof ArticlesIndexRoute
   '/content-types/': typeof ContentTypesIndexRoute
+  '/media/': typeof MediaIndexRoute
   '/articles/$id/edit': typeof ArticlesIdEditRoute
   '/content/$apiId/$id': typeof ContentApiIdIdRouteWithChildren
   '/content/$apiId/new': typeof ContentApiIdNewRoute
@@ -105,6 +112,7 @@ export interface FileRoutesByTo {
   '/content-types/new': typeof ContentTypesNewRoute
   '/articles': typeof ArticlesIndexRoute
   '/content-types': typeof ContentTypesIndexRoute
+  '/media': typeof MediaIndexRoute
   '/articles/$id/edit': typeof ArticlesIdEditRoute
   '/content/$apiId/$id': typeof ContentApiIdIdRouteWithChildren
   '/content/$apiId/new': typeof ContentApiIdNewRoute
@@ -120,6 +128,7 @@ export interface FileRoutesById {
   '/content-types/new': typeof ContentTypesNewRoute
   '/articles/': typeof ArticlesIndexRoute
   '/content-types/': typeof ContentTypesIndexRoute
+  '/media/': typeof MediaIndexRoute
   '/articles/$id/edit': typeof ArticlesIdEditRoute
   '/content/$apiId/$id': typeof ContentApiIdIdRouteWithChildren
   '/content/$apiId/new': typeof ContentApiIdNewRoute
@@ -136,6 +145,7 @@ export interface FileRouteTypes {
     | '/content-types/new'
     | '/articles/'
     | '/content-types/'
+    | '/media/'
     | '/articles/$id/edit'
     | '/content/$apiId/$id'
     | '/content/$apiId/new'
@@ -150,6 +160,7 @@ export interface FileRouteTypes {
     | '/content-types/new'
     | '/articles'
     | '/content-types'
+    | '/media'
     | '/articles/$id/edit'
     | '/content/$apiId/$id'
     | '/content/$apiId/new'
@@ -164,6 +175,7 @@ export interface FileRouteTypes {
     | '/content-types/new'
     | '/articles/'
     | '/content-types/'
+    | '/media/'
     | '/articles/$id/edit'
     | '/content/$apiId/$id'
     | '/content/$apiId/new'
@@ -179,6 +191,7 @@ export interface RootRouteChildren {
   ContentTypesNewRoute: typeof ContentTypesNewRoute
   ArticlesIndexRoute: typeof ArticlesIndexRoute
   ContentTypesIndexRoute: typeof ContentTypesIndexRoute
+  MediaIndexRoute: typeof MediaIndexRoute
   ContentApiIdIdRoute: typeof ContentApiIdIdRouteWithChildren
   ContentApiIdNewRoute: typeof ContentApiIdNewRoute
   ContentApiIdIndexRoute: typeof ContentApiIdIndexRoute
@@ -191,6 +204,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/media/': {
+      id: '/media/'
+      path: '/media'
+      fullPath: '/media/'
+      preLoaderRoute: typeof MediaIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/content-types/': {
@@ -305,6 +325,7 @@ const rootRouteChildren: RootRouteChildren = {
   ContentTypesNewRoute: ContentTypesNewRoute,
   ArticlesIndexRoute: ArticlesIndexRoute,
   ContentTypesIndexRoute: ContentTypesIndexRoute,
+  MediaIndexRoute: MediaIndexRoute,
   ContentApiIdIdRoute: ContentApiIdIdRouteWithChildren,
   ContentApiIdNewRoute: ContentApiIdNewRoute,
   ContentApiIdIndexRoute: ContentApiIdIndexRoute,

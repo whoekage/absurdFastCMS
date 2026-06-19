@@ -1,0 +1,153 @@
+import { useRef, useState } from 'react';
+import { createFileRoute } from '@tanstack/react-router';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Upload, Trash2 } from 'lucide-react';
+import type { FileAsset } from '@absurd/sdk';
+import { api } from '@/lib/api';
+import { mediaKeys, isImageAsset, formatBytes } from '@/lib/media';
+import { Button } from '@/components/ui/button';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { toast } from '@/components/ui/toast';
+
+export const Route = createFileRoute('/media/')({
+  component: MediaLibraryPage,
+});
+
+/**
+ * be-04 — the MEDIA LIBRARY screen: a grid of every uploaded asset (image thumbnail or mime badge),
+ * with upload (multiple) and per-asset delete. All via @absurd/sdk (client.assets.list / client.upload /
+ * client.assets.delete). Deleting an asset that a media field still references is allowed — the reference
+ * dangles and a populate read resolves it to null/drops it (no error).
+ */
+function MediaLibraryPage() {
+  const queryClient = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const listQuery = useQuery({
+    queryKey: mediaKeys.list(0, 100),
+    queryFn: ({ signal }) => api.assets.list({ start: 0, limit: 100 }, signal),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => api.assets.delete(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: mediaKeys.all });
+      toast.success('Asset deleted');
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Delete failed'),
+  });
+
+  async function onUpload(files: FileList | null): Promise<void> {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    try {
+      let count = 0;
+      for (const file of Array.from(files)) {
+        await api.upload(file);
+        count += 1;
+      }
+      await queryClient.invalidateQueries({ queryKey: mediaKeys.all });
+      toast.success(`Uploaded ${count} file(s)`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  const assets = listQuery.data?.data ?? [];
+
+  return (
+    <section className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Media Library</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Upload, browse, and manage assets. {listQuery.data ? `${listQuery.data.meta.pagination.total} total.` : ''}
+          </p>
+        </div>
+        <div>
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => void onUpload(e.target.files)}
+          />
+          <Button disabled={uploading} onClick={() => fileRef.current?.click()}>
+            <Upload className="h-4 w-4" />
+            {uploading ? 'Uploading…' : 'Upload'}
+          </Button>
+        </div>
+      </div>
+
+      {listQuery.isError ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 p-6 text-sm">
+          <p className="font-medium text-destructive">Could not load the media library</p>
+          <Button className="mt-3" variant="outline" size="sm" onClick={() => listQuery.refetch()}>
+            Retry
+          </Button>
+        </div>
+      ) : listQuery.isLoading ? (
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : assets.length === 0 ? (
+        <div className="rounded-md border border-dashed p-12 text-center text-sm text-muted-foreground">
+          No assets yet. Click <span className="font-medium">Upload</span> to add your first file.
+        </div>
+      ) : (
+        <ScrollArea className="h-[calc(100vh-12rem)]">
+          <div className="grid grid-cols-3 gap-4 p-1 sm:grid-cols-4 lg:grid-cols-6">
+            {assets.map((asset) => (
+              <AssetCard
+                key={asset.id}
+                asset={asset}
+                onDelete={() => deleteMutation.mutate(asset.id)}
+                deleting={deleteMutation.isPending && deleteMutation.variables === asset.id}
+              />
+            ))}
+          </div>
+        </ScrollArea>
+      )}
+    </section>
+  );
+}
+
+function AssetCard({ asset, onDelete, deleting }: { asset: FileAsset; onDelete: () => void; deleting: boolean }) {
+  return (
+    <div className="group relative flex flex-col gap-1 rounded-md border p-2">
+      {isImageAsset(asset) ? (
+        <img
+          src={asset.url as string}
+          alt={asset.filename}
+          className="aspect-square w-full rounded object-cover"
+        />
+      ) : (
+        <div className="flex aspect-square w-full items-center justify-center rounded bg-muted text-xs uppercase text-muted-foreground">
+          {asset.mime.split('/')[1] ?? 'file'}
+        </div>
+      )}
+      <div className="min-w-0">
+        <p className="truncate text-xs font-medium" title={asset.filename}>
+          {asset.filename}
+        </p>
+        <p className="text-[10px] text-muted-foreground">
+          {formatBytes(asset.size)}
+          {asset.width !== null && asset.height !== null ? ` · ${asset.width}×${asset.height}` : ''}
+        </p>
+      </div>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        title="Delete asset"
+        disabled={deleting}
+        onClick={onDelete}
+        className="absolute right-1 top-1 h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100"
+      >
+        <Trash2 className="h-3.5 w-3.5 text-destructive" />
+      </Button>
+    </div>
+  );
+}

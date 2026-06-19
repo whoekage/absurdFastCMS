@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useForm } from '@tanstack/react-form';
 import { useBlocker } from '@tanstack/react-router';
-import type { ContentTypeDefinition, FieldDefinition, RelationId, WriteBody } from '@absurd/sdk';
+import type { ContentTypeDefinition, FieldDefinition, FileAsset, RelationId, WriteBody } from '@absurd/sdk';
 import { getFieldHandler, type FormFieldValue } from '@/lib/field-types';
 import {
   asRelatedRows,
@@ -10,7 +10,15 @@ import {
   type RelatedRow,
   type RelationFieldConfig,
 } from '@/lib/relations';
+import {
+  mediaFieldsFromDef,
+  applyMediaValues,
+  isMediaField,
+  type MediaFieldConfig,
+  type MediaSelections,
+} from '@/lib/media';
 import { RelationPicker } from '@/components/relation-picker';
+import { MediaPicker } from '@/components/media-picker';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import {
@@ -22,9 +30,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 
-/** Fields the user may edit: everything that is not a system column (id/created_at/updated_at). */
+/**
+ * Scalar fields the user edits via the type-handler inputs: every non-system field EXCEPT media fields
+ * (be-04). Media fields are non-system too, but they are NOT scalars — they render a dedicated
+ * <MediaPicker> and their value is merged into the body separately (mirroring how relations are handled
+ * out-of-band). Excluding them here keeps buildInitialValues / toWriteBody on the scalar path only.
+ */
 export function editableFields(def: ContentTypeDefinition): FieldDefinition[] {
-  return def.fields.filter((f) => !f.system);
+  return def.fields.filter((f) => !f.system && !isMediaField(f));
 }
 
 /** The form's controlled values: one entry per editable field, keyed by field name. */
@@ -134,6 +147,13 @@ interface EntryFormProps {
   initialRelations?: RelationSelections;
   /** Seed populated rows per relation field (to label the seeded selections in the picker). */
   initialRelationRows?: Record<string, RelatedRow[]>;
+  /**
+   * be-04 MEDIA: seed selections per media field (asset ids) from a populated edit row. Optional — the
+   * EntryForm discovers the media FIELDS from `def` itself; this only pre-fills the current selection.
+   */
+  initialMedia?: MediaSelections;
+  /** be-04 MEDIA: seed the populated FileAsset record(s) per media field (to label the picker thumbnails). */
+  initialMediaAssets?: Record<string, FileAsset[]>;
   submitLabel: string;
   pending: boolean;
   onSubmit: (body: WriteBody) => void;
@@ -146,6 +166,8 @@ export function EntryForm({
   relationFields = [],
   initialRelations,
   initialRelationRows,
+  initialMedia,
+  initialMediaAssets,
   submitLabel,
   pending,
   onSubmit,
@@ -153,6 +175,9 @@ export function EntryForm({
 }: EntryFormProps) {
   const fields = useMemo(() => editableFields(def), [def]);
   const relations = useRelationSelectionsState(relationFields, initialRelations);
+  // be-04 MEDIA: discover media fields from the def; manage their selected-id sets locally.
+  const mediaFields = useMemo(() => mediaFieldsFromDef(def), [def]);
+  const media = useMediaSelectionsState(mediaFields, initialMedia);
 
   // Once we submit, the imminent success redirect must NOT be blocked. We flip this on submit and
   // re-arm it below if the mutation FAILS — otherwise a failed save would disable the guard forever.
@@ -162,7 +187,8 @@ export function EntryForm({
     defaultValues: initialValues,
     onSubmit: ({ value }) => {
       submittedRef.current = true;
-      const body = applyRelationOps(toWriteBody(def, value), relationFields, relations.selections);
+      let body = applyRelationOps(toWriteBody(def, value), relationFields, relations.selections);
+      body = applyMediaValues(body, mediaFields, media.selections); // be-04: merge media id(s) as sibling keys.
       onSubmit(body);
     },
   });
@@ -178,8 +204,8 @@ export function EntryForm({
   // Unsaved-changes guard: while the form is dirty (and not yet submitted), block route changes and
   // browser unload. `withResolver` surfaces a resolver so we can show our own confirm dialog.
   const blocker = useBlocker({
-    shouldBlockFn: () => (form.state.isDirty || relations.dirty) && !submittedRef.current,
-    enableBeforeUnload: () => (form.state.isDirty || relations.dirty) && !submittedRef.current,
+    shouldBlockFn: () => (form.state.isDirty || relations.dirty || media.dirty) && !submittedRef.current,
+    enableBeforeUnload: () => (form.state.isDirty || relations.dirty || media.dirty) && !submittedRef.current,
     withResolver: true,
   });
 
@@ -274,6 +300,31 @@ export function EntryForm({
         );
       })}
 
+      {/* be-04 MEDIA fields — discovered from def.fields (cmsType: 'media'). Each renders a MediaPicker
+          (browse the library / upload) whose selected asset id(s) are merged into the write body on
+          submit (single -> id|null; multiple -> id[]). */}
+      {mediaFields.map((m) => {
+        const fieldId = `media-${m.field}`;
+        return (
+          <div key={m.field} className="space-y-1.5">
+            <Label htmlFor={fieldId}>
+              {m.field}
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                media · {m.multiple ? 'multiple' : 'single'}
+              </span>
+            </Label>
+            <MediaPicker
+              id={fieldId}
+              config={m}
+              value={media.selections[m.field] ?? []}
+              {...(initialMediaAssets?.[m.field] ? { initialAssets: initialMediaAssets[m.field] } : {})}
+              onChange={(ids) => media.set(m.field, ids)}
+              disabled={pending}
+            />
+          </div>
+        );
+      })}
+
       <div className="flex items-center gap-2 pt-2">
         <Button type="submit" disabled={pending}>
           {pending ? 'Saving…' : submitLabel}
@@ -356,6 +407,43 @@ function useRelationSelectionsState(
     if (cur.length !== base.length) return true;
     const baseSet = new Set(base);
     return cur.some((id) => !baseSet.has(id));
+  });
+
+  return { selections, dirty, set };
+}
+
+/** be-04 MEDIA — the media-selection state hook: per-field asset-id arrays + an ORDER-SENSITIVE dirty
+ *  flag (a multiple media field's order is meaningful, so reordering is a change). */
+interface MediaSelectionsState {
+  selections: MediaSelections;
+  dirty: boolean;
+  set: (field: string, ids: number[]) => void;
+}
+
+function useMediaSelectionsState(
+  mediaFields: MediaFieldConfig[],
+  initial: MediaSelections | undefined,
+): MediaSelectionsState {
+  const seed = useMemo<MediaSelections>(() => {
+    const out: MediaSelections = {};
+    for (const m of mediaFields) out[m.field] = initial?.[m.field] ?? [];
+    return out;
+    // `mediaFields`/`initial` are stable per form mount (derived from the loaded def + row).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaFields]);
+
+  const [selections, setSelections] = useState<MediaSelections>(seed);
+
+  const set = (field: string, ids: number[]): void => {
+    setSelections((prev) => ({ ...prev, [field]: ids }));
+  };
+
+  // Dirty when any media field's id LIST differs from its seed (order-sensitive — order is meaningful).
+  const dirty = mediaFields.some((m) => {
+    const cur = selections[m.field] ?? [];
+    const base = seed[m.field] ?? [];
+    if (cur.length !== base.length) return true;
+    return cur.some((id, i) => id !== base[i]);
   });
 
   return { selections, dirty, set };

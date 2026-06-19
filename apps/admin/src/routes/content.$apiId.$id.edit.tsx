@@ -6,6 +6,12 @@ import { api } from '@/lib/api';
 import { contentKeys, errorMessage } from '@/lib/content-manager';
 import { populateFromDef, relationFieldsFromDef } from '@/lib/relations';
 import {
+  mediaFieldsFromDef,
+  mediaPopulateFromDef,
+  buildInitialMedia,
+  buildInitialMediaAssets,
+} from '@/lib/media';
+import {
   buildInitialRelations,
   buildInitialRelationRows,
   buildInitialValues,
@@ -31,9 +37,13 @@ function EditEntryPage() {
     retry: (count, err) => !(err instanceof NotFoundError) && count < 3,
   });
 
-  // Relations + the populate spec are derived from the API-projected definition (def.relations).
+  // Relations + media + the populate spec are derived from the API-projected definition. The populate
+  // spec folds relation names AND media-field names so the edit row arrives with both inlined (the media
+  // picker seeds its thumbnails from the populated FileAsset records).
   const relationFields = relationFieldsFromDef(defQuery.data);
-  const populate = populateFromDef(defQuery.data);
+  const mediaFields = mediaFieldsFromDef(defQuery.data);
+  const populateNames = [...(populateFromDef(defQuery.data) ?? []), ...mediaPopulateFromDef(defQuery.data)];
+  const populate = populateNames.length > 0 ? populateNames : undefined;
   const isI18n = defQuery.data?.i18n === true;
 
   const detailQuery = useQuery({
@@ -101,6 +111,8 @@ function EditEntryPage() {
               relationFields={relationFields}
               initialRelations={buildInitialRelations(relationFields, row)}
               initialRelationRows={buildInitialRelationRows(relationFields, row)}
+              initialMedia={buildInitialMedia(mediaFields, row)}
+              initialMediaAssets={buildInitialMediaAssets(mediaFields, row)}
               submitLabel="Save changes"
               pending={updateMutation.isPending}
               onSubmit={(body) => updateMutation.mutate(body)}

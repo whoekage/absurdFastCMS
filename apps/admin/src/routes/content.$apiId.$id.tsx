@@ -12,6 +12,7 @@ import {
   relatedRowLabel,
   relationFieldsFromDef,
 } from '@/lib/relations';
+import { mediaPopulateFromDef } from '@/lib/media';
 import { UnknownType } from '@/components/unknown-type';
 import { LocaleSwitcher } from '@/components/locale-switcher';
 import { Button } from '@/components/ui/button';
@@ -35,7 +36,10 @@ function ViewEntryPage() {
   // Relations discovered from the API-projected definition (def.relations).
   const relationFields = relationFieldsFromDef(defQuery.data);
   const relationByField = new Map(relationFields.map((r) => [r.field, r]));
-  const populate = populateFromDef(defQuery.data);
+  // Populate folds relation names AND media-field names so the detail view shows asset thumbnails
+  // (formatValue renders a populated media value as a <MediaThumb>).
+  const populateNames = [...(populateFromDef(defQuery.data) ?? []), ...mediaPopulateFromDef(defQuery.data)];
+  const populate = populateNames.length > 0 ? populateNames : undefined;
 
   const isDraftPublish = defQuery.data?.draftPublish === true;
   const isI18n = defQuery.data?.i18n === true;

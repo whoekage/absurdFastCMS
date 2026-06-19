@@ -52,6 +52,8 @@ export interface FieldDraft {
    * is i18n, and lowered onto the {@link FieldSpec} as `localized`.
    */
   localized: boolean;
+  /** be-04 MEDIA: `cmsType:'media'` cardinality — false = single asset, true = an asset array. */
+  multiple: boolean;
 }
 
 let draftSeq = 0;
@@ -70,6 +72,7 @@ export function emptyFieldDraft(): FieldDraft {
     precision: '',
     scale: '',
     localized: true,
+    multiple: false,
   };
 }
 
@@ -83,6 +86,7 @@ export function draftFromField(field: {
   precision?: number;
   scale?: number;
   localized?: boolean;
+  multiple?: boolean;
 }): FieldDraft {
   draftSeq += 1;
   return {
@@ -96,6 +100,7 @@ export function draftFromField(field: {
     precision: field.precision !== undefined ? String(field.precision) : '',
     scale: field.scale !== undefined ? String(field.scale) : '',
     localized: field.localized ?? true,
+    multiple: field.multiple ?? false,
   };
 }
 
@@ -141,6 +146,9 @@ export function draftOptions(draft: FieldDraft): FieldOptions {
   if (meta.precisionScale) {
     if (draft.precision.trim() !== '') options.precision = Number(draft.precision);
     if (draft.scale.trim() !== '') options.scale = Number(draft.scale);
+  }
+  if (meta.multiple) {
+    options.multiple = draft.multiple;
   }
   if (draft.defaultValue.trim() !== '') {
     options.default = parseDefault(draft);

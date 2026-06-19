@@ -50,6 +50,11 @@ export function filterKind(cmsType: CmsType): FilterKind {
       return 'enum';
     case 'boolean':
       return 'boolean';
+    // be-04 MEDIA: a media field is an asset-id reference, not a user-facing filterable scalar — it is
+    // excluded from the filter UI by isFilterableField below. Map it to `text` only to keep this switch
+    // exhaustive over the closed CmsType set (the value is never used: media never reaches a filter input).
+    case 'media':
+      return 'text';
   }
 }
 
@@ -65,7 +70,9 @@ export function fieldFilterKind(field: FieldDefinition): FilterKind {
  * a 400. They are therefore non-filterable (excluded from the field picker AND the search fallback).
  */
 export function isFilterableField(field: FieldDefinition): boolean {
-  return field.cmsType !== 'json' && field.cmsType !== 'array';
+  // be-04 MEDIA: a media field is an asset-id reference (a multiple one is a json column the parser
+  // rejects operators on); filtering by raw file id is not a meaningful admin operation — exclude it.
+  return field.cmsType !== 'json' && field.cmsType !== 'array' && field.cmsType !== 'media';
 }
 
 /**

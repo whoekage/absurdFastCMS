@@ -20,6 +20,7 @@ import {
   relationFieldsFromDef,
   type RelationFieldConfig,
 } from '@/lib/relations';
+import { mediaPopulateFromDef } from '@/lib/media';
 import { useColumnVisibility, useDensity } from '@/lib/table-view';
 import {
   EMPTY_LIST_SEARCH,
@@ -145,7 +146,9 @@ function EntryListPage() {
     () => new Map(relationFieldsFromDef(def).map((r) => [r.field, r])),
     [def],
   );
-  const populate = populateFromDef(def);
+  // Populate folds relation names AND media-field names so list cells show linked rows + asset thumbnails.
+  const populateNames = [...(populateFromDef(def) ?? []), ...mediaPopulateFromDef(def)];
+  const populate = populateNames.length > 0 ? populateNames : undefined;
   const byName = def ? fieldMap(def) : new Map<string, FieldDefinition>();
   // The SDK query params derived from the URL state — also the basis of the query key. Populate the
   // configured relations so list cells can show the linked rows.
