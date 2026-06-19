@@ -14,7 +14,15 @@ import type { ColumnType } from '../store/column.ts';
  * engine's `createColumn` — they describe how a LATER step will ingest the column.
  */
 
-/** The closed set of CMS field types a user may define. Relation/media/component/etc. are NOT here. */
+/**
+ * The closed set of CMS field types a user may define. Relation/component/dynamiczone are NOT here
+ * (relations ride their own link-table plumbing). `media` (be-04) IS here: unlike a relation, a media
+ * field is a PLAIN SCALAR COLUMN on the ct_ table — `media` (single) -> a positive int4 `files.id`
+ * reference (engine `i32`), `media` + `{ multiple: true }` -> a jsonb array of ids (engine `json`). It
+ * needs ZERO engine/loader/keyset surgery: it is just another scalar column that the read path emits
+ * byte-identically (raw id(s) un-populated); reads POPULATE the asset(s) via a post-step that resolves
+ * the id(s) against the system `files` table (see http/media.populate.ts), NOT via the CSR relation path.
+ */
 export type CmsType =
   | 'string'
   | 'text'
@@ -31,7 +39,8 @@ export type CmsType =
   | 'time'
   | 'json'
   | 'array'
-  | 'uuid';
+  | 'uuid'
+  | 'media';
 
 /**
  * The engine INTENT recorded in `content_type_fields.engine_type`. NOTE: as of step 4 the names
@@ -59,6 +68,8 @@ export interface FieldOptions {
   nullable?: boolean;
   /** constant default value (volatile defaults like now()/gen_random_uuid() are rejected upstream). */
   default?: unknown;
+  /** `media` only: false (default) -> a single int4 file id column; true -> a jsonb array of file ids. */
+  multiple?: boolean;
 }
 
 /** A cms_type resolved against the catalog: the pg literal, the engine intent, and recorded params. */
@@ -170,6 +181,16 @@ const RESOLVERS = {
   json: () => ({ pgType: 'jsonb', engineType: 'json', params: {} }),
   array: () => ({ pgType: 'jsonb', engineType: 'json', params: {} }),
   uuid: () => ({ pgType: 'uuid', engineType: 'string', params: {} }),
+  // be-04 MEDIA — a reference to the system `files` table, by id. SINGLE: a plain int4 column (engine
+  // `i32`), holding ONE positive `files.id`; emitted as a bare number un-populated, exactly like a
+  // relation id. MULTIPLE: a jsonb array of ids (engine `json`), emitted as a JSON array un-populated.
+  // No FK to `files`: the engine is a RAM rebuild from PG and `multiple` could never carry a column FK
+  // anyway — referential integrity is a WRITE-TIME existence check (write.handler) + populate-skip of a
+  // deleted asset, mirroring how a relation id may dangle. `params.multiple` is the load/validate/
+  // populate switch (registry reads it to size cardinality + pick the i32-vs-json populate shape).
+  media: (o) => (o?.multiple === true
+    ? { pgType: 'jsonb', engineType: 'json', params: { multiple: true } }
+    : { pgType: 'integer', engineType: 'i32', params: { multiple: false } }),
 } satisfies Record<CmsType, (o?: FieldOptions) => { pgType: string; engineType: EngineTypeIntent; params: Record<string, unknown> }>;
 
 /**

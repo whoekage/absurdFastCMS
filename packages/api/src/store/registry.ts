@@ -96,6 +96,13 @@ export interface RegistryField {
   /** type === 'json' (drives the `::text` SELECT cast on both load and RETURNING). */
   json: boolean;
   /**
+   * be-04 MEDIA: present iff `cmsType === 'media'` — the field references the system `files` table by id.
+   * `multiple:false` => SINGLE (an int4 column holding ONE positive files.id); `multiple:true` => MULTIPLE
+   * (a jsonb array of ids). Absent for every non-media field. The body parser reads it (positive-int4 +
+   * cardinality check), and the media-populate post-step reads it (resolve the id(s) against `files`).
+   */
+  media?: { multiple: boolean };
+  /**
    * i18n: true => the field is localized (each locale variant carries its own value); false => shared
    * across the document's locale variants (write-side fan-out keeps siblings in sync — a later slice).
    * Always true for a user field on a non-i18n type (no variants exist, so it is moot); system fields
@@ -169,6 +176,15 @@ export interface ContentTypeDef {
   relations: RelationMeta[];
   /** O(1) relation lookup by this side's field name. */
   relationsByField: Map<string, RelationMeta>;
+  /**
+   * be-04 MEDIA: O(1) lookup of this type's media fields by field name -> cardinality. A media field IS
+   * a plain scalar column in `fields`/`fieldDefs`/`writable` (an int4 single / jsonb-array multiple) — it
+   * is NOT excluded from the engine like a relation. This map is the seam the body parser uses (positive-
+   * int4 + cardinality validation) and the read-path media-populate post-step uses (which fields to
+   * resolve against `files`, and whether to inline ONE object or an ARRAY). Empty for a type with no
+   * media field => the populate post-step is skipped entirely (byte-identical read path).
+   */
+  mediaFields: Map<string, { multiple: boolean }>;
   /**
    * Model A Draft & Publish opt-in (per-type). When true, a synthesized nullable `published_at` system
    * field is appended to `fields` (after the 3 base system fields, before user fields — matching the DDL
@@ -255,6 +271,13 @@ function buildUserField(apiId: string, row: FieldRow): RegistryField {
       throw new RegistryError(apiId, row.name, 'length out of range');
     }
     field.length = length;
+  }
+  // be-04 MEDIA: tag the field as a media reference (single int4 / multiple jsonb) from its catalog
+  // params. The engine_type already drove `type` (i32 or json) above — this only adds the cardinality
+  // flag the body parser + populate post-step read. A multiple-media field IS a json column, so
+  // `field.json` is already true (RETURNING/SELECT ::text cast applies) — correct, no special-case.
+  if (cmsType === 'media') {
+    field.media = { multiple: params['multiple'] === true };
   }
 
   return field;
@@ -462,6 +485,10 @@ function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[], relationRows: Relat
   const relations = relationRows.map((r) => buildRelation(ct.api_id, r));
   const relationsByField = new Map<string, RelationMeta>(relations.map((r) => [r.field, r]));
 
+  // be-04 MEDIA: index the media fields (a SUBSET of `writable`, since a media field is a real column).
+  const mediaFields = new Map<string, { multiple: boolean }>();
+  for (const f of writable) if (f.media !== undefined) mediaFields.set(f.name, f.media);
+
   return {
     apiId: ct.api_id,
     tableName,
@@ -475,6 +502,7 @@ function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[], relationRows: Relat
     indexPlan,
     relations,
     relationsByField,
+    mediaFields,
     draftPublish: ct.draft_publish,
     i18n: ct.i18n,
   };

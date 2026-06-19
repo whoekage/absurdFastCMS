@@ -151,7 +151,8 @@ test('T10 resolveType exhaustive catalog', () => {
 
 // T11 — unknown cms_type -> UnknownCmsTypeError. [36]
 test('T11 unknown cms_type rejected', () => {
-  for (const bad of ['relation', 'media', 'component', 'dynamiczone', 'richtext']) {
+  // NOTE: `media` is now a SUPPORTED scalar cms_type (be-04) and is intentionally NOT in this list.
+  for (const bad of ['relation', 'component', 'dynamiczone', 'richtext']) {
     assert.throws(() => resolveType(bad as CmsType), UnknownCmsTypeError, bad);
   }
 });

@@ -76,3 +76,24 @@ CREATE TABLE IF NOT EXISTS "content_type_relations" (
 CREATE UNIQUE INDEX IF NOT EXISTS "ctr_type_field_lower_uq" ON "content_type_relations" (content_type_id, lower("field_name"));
 -- Cheap inbound-reference scan for the drop guard (lower(target_api_id)).
 CREATE INDEX IF NOT EXISTS "ctr_target_api_id_lower_idx" ON "content_type_relations" (lower("target_api_id"));
+
+-- Media/asset registry (be-04). A dedicated SYSTEM table — NOT a content_type / engine type: the columnar
+-- engine is built ONLY from content_types/content_type_fields, so assets live + serve from here via their
+-- own thin endpoints (POST/GET/DELETE /_files...), never the read engine. Created by the migration runner,
+-- never the runtime Builder DDL. No backfill (pre-launch). The `_files`/`files` table name has no ct_
+-- prefix and is not user-derivable, so it can never collide with a runtime per-type table.
+CREATE TABLE IF NOT EXISTS "files" (
+	"id"          serial PRIMARY KEY NOT NULL,            -- positive int4; a media field ref points here
+	"filename"    varchar(255) NOT NULL,                  -- SANITIZED original name (display only)
+	"mime"        varchar(127) NOT NULL,                  -- sniffed-or-declared content type
+	"size"        bigint NOT NULL,                        -- byte length
+	"width"       integer,                                -- NULL for non-image uploads
+	"height"      integer,                                -- NULL for non-image uploads
+	"hash"        varchar(64) NOT NULL,                   -- sha256 hex of the bytes (content address)
+	"provider"    varchar(16) NOT NULL,                   -- 'local' | 's3' (which backend holds the bytes)
+	"storage_key" varchar(255) NOT NULL,                  -- opaque hash-based key in that provider
+	"url"         text,                                   -- cached public URL (nullable; derivable from provider+key)
+	"created_at"  timestamp with time zone NOT NULL DEFAULT now()
+);
+-- Content-addressed dedup: identical bytes upload once. A re-upload of the same hash returns the row.
+CREATE UNIQUE INDEX IF NOT EXISTS "files_hash_uq" ON "files" ("hash");

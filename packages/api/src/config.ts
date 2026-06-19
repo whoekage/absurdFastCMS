@@ -131,6 +131,79 @@ function getDefaultLocale(): string {
   return loc;
 }
 
+/** Resolved S3 storage config; `undefined` when no S3 bucket is configured (=> the local provider). */
+export interface S3Config {
+  bucket: string;
+  region: string;
+  endpoint?: string | undefined;
+  accessKeyId: string;
+  secretAccessKey: string;
+  forcePathStyle: boolean;
+  publicBaseUrl?: string | undefined;
+}
+
+/**
+ * be-04 MEDIA — the local-filesystem storage base dir (LOCAL_STORAGE_PATH). Dev default: `<api>/.storage`;
+ * `.env.test` points it at an os-tmpdir subdir so tests never touch the dev dir. Cached on first access.
+ */
+function getLocalStoragePath(): string {
+  if ('localStoragePath' in cache) return cache.localStoragePath as string;
+  const fromEnv = process.env.LOCAL_STORAGE_PATH?.trim();
+  // Default to <api package>/.storage — fileURLToPath of the package root relative to this module.
+  const fallback = new URL('../.storage', import.meta.url).pathname;
+  const result = fromEnv && fromEnv.length > 0 ? fromEnv : fallback;
+  cache.localStoragePath = result;
+  return result;
+}
+
+/**
+ * be-04 MEDIA — the PUBLIC base URL used to build local-provider asset URLs (PUBLIC_BASE_URL). Defaults
+ * to `http://localhost:${PORT}`. Cached on first access.
+ */
+function getPublicBaseUrl(): string {
+  if ('publicBaseUrl' in cache) return cache.publicBaseUrl as string;
+  const fromEnv = process.env.PUBLIC_BASE_URL?.trim();
+  const result = fromEnv && fromEnv.length > 0 ? fromEnv : `http://localhost:${getPort()}`;
+  cache.publicBaseUrl = result;
+  return result;
+}
+
+/**
+ * be-04 MEDIA — the max upload size in bytes (UPLOAD_MAX_BYTES). Separate from the 1 MiB JSON-body cap;
+ * defaults to 25 MiB. The multipart parser enforces it natively and rejects an oversized file with 413.
+ */
+function getUploadMaxBytes(): number {
+  if ('uploadMaxBytes' in cache) return cache.uploadMaxBytes as number;
+  const raw = process.env.UPLOAD_MAX_BYTES?.trim();
+  const parsed = raw ? Number(raw) : NaN;
+  const result = Number.isInteger(parsed) && parsed > 0 ? parsed : 25 * 1024 * 1024;
+  cache.uploadMaxBytes = result;
+  return result;
+}
+
+/**
+ * be-04 MEDIA — resolve the S3 storage config from env, or `undefined` when `S3_BUCKET` is unset (=> the
+ * local provider is selected). Reads S3_BUCKET / S3_REGION / S3_ENDPOINT / S3_ACCESS_KEY_ID /
+ * S3_SECRET_ACCESS_KEY / S3_FORCE_PATH_STYLE / S3_PUBLIC_BASE_URL. NEVER logs the credentials. NOT cached
+ * (the value carries secrets and is read once at provider construction).
+ */
+function getS3Config(): S3Config | undefined {
+  const bucket = process.env.S3_BUCKET?.trim();
+  if (!bucket) return undefined;
+  const cfg: S3Config = {
+    bucket,
+    region: process.env.S3_REGION?.trim() || 'us-east-1',
+    accessKeyId: process.env.S3_ACCESS_KEY_ID?.trim() ?? '',
+    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY?.trim() ?? '',
+    forcePathStyle: process.env.S3_FORCE_PATH_STYLE === '1' || process.env.S3_FORCE_PATH_STYLE === 'true',
+  };
+  const endpoint = process.env.S3_ENDPOINT?.trim();
+  if (endpoint) cfg.endpoint = endpoint;
+  const publicBaseUrl = process.env.S3_PUBLIC_BASE_URL?.trim();
+  if (publicBaseUrl) cfg.publicBaseUrl = publicBaseUrl;
+  return cfg;
+}
+
 /**
  * Get TEST_DATABASE_URL for test setup (optional).
  * Used by testcontainers to connect to the test database instance.
@@ -202,6 +275,23 @@ export const config = {
 
   get defaultLocale(): string {
     return getDefaultLocale();
+  },
+
+  // be-04 MEDIA — storage config.
+  get localStoragePath(): string {
+    return getLocalStoragePath();
+  },
+
+  get publicBaseUrl(): string {
+    return getPublicBaseUrl();
+  },
+
+  get uploadMaxBytes(): number {
+    return getUploadMaxBytes();
+  },
+
+  get s3(): S3Config | undefined {
+    return getS3Config();
   },
 
   // Dev-only constant (always available)

@@ -55,10 +55,15 @@ export function mapPgError(e: unknown): never {
 /** Bind a single writable value to the form Postgres stores exactly (every value a bound param). */
 function bindValue(field: RegistryField, value: unknown): unknown {
   if (value === null) return null;
-  // A copied json value (variant-create shared-field copy) arrives as RawJson wrapping the verbatim
-  // ::text — bind that text straight to the `::jsonb` placeholder (re-parses to the SAME jsonb value).
-  // The normal write path passes a parsed JS value (body.parser) which is handled by the default arm.
-  if (value instanceof RawJson) return value.raw;
+  // A copied json value (variant-create shared-field copy) arrives as RawJson wrapping the sibling's
+  // verbatim jsonb `::text`. The placeholder is `$n::jsonb`, and postgres.js binds a JS STRING param as
+  // a TEXT value — so casting the raw STRING to jsonb DOUBLE-ENCODES it into a jsonb string scalar
+  // (e.g. the gallery text "[1, 2]" would store as the jsonb string "[1, 2]", not the array [1,2]).
+  // PARSE it back to a JS value so postgres.js serializes it to a REAL jsonb value — byte-identical to
+  // how the normal create binds body.parser's parsed value (the proven path). The verbatim ::text is
+  // canonical jsonb, so JSON.parse round-trips it; >2^53 fidelity is already the loader's concern (the
+  // wire JSON.parse upstream collapsed any such int), exactly as on the normal write path.
+  if (value instanceof RawJson) return JSON.parse(value.raw);
   switch (field.type) {
     case 'i64':
       // The validator produced a canonical digit STRING; bind it so int8 round-trips exactly.

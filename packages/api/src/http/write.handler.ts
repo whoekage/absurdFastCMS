@@ -4,6 +4,8 @@ import type { Registry, ContentTypeDef } from '../store/registry.ts';
 import { validateBody, BodyParseError } from '../store/body.parser.ts';
 import { insertEntry, updateEntry, deleteEntry, publishEntry, unpublishEntry, readSiblingForVariant, serializeEntry, EntryWriteError } from '../db/entry.repository.ts';
 import { applyRelationOps } from '../db/relation.repository.ts';
+import { missingFileIds } from '../db/file.repository.ts';
+import { RawJson } from '../store/column.ts';
 import { validateLocale, QueryParseError } from '../store/query.parser.ts';
 import { config } from '../config.ts';
 import { CANONICAL_INT, JSON_CT, errorResponse, type CoreResponse } from './read.router.ts';
@@ -76,6 +78,39 @@ export interface WriteRequest {
   variantLocale?: string;
 }
 
+/**
+ * be-04 MEDIA — assert every `files.id` a write body references actually exists, INSIDE the caller's tx
+ * (so the existence check + the row insert/update commit atomically). The body parser already validated
+ * shape + cardinality + positive-int4; here we gather the referenced ids from the COERCED `data` (single
+ * media field => a number value; multiple => a number[] value) and reject (a 400 via EntryWriteError) any
+ * id that names no asset. No-op when the type declares no media field, or none were supplied (no query).
+ *
+ * i18n NOTE: on a variant-create the SHARED copies come from {@link readSiblingForVariant}, which wraps
+ * every jsonb column (so a MULTIPLE media field) in a {@link RawJson} whose `.raw` is the verbatim JSON
+ * text (e.g. `[1,2,3]`). That class is NOT iterable, so we unwrap+parse it back to a `number[]` here
+ * (those ids were already validated at the sibling's own create; re-checking them is cheap + correct).
+ */
+async function assertMediaRefsExist(tx: Sql, def: ContentTypeDef, data: Record<string, unknown>): Promise<void> {
+  if (def.mediaFields.size === 0) return;
+  const ids: number[] = [];
+  for (const [name, { multiple }] of def.mediaFields) {
+    const v = data[name];
+    if (v === undefined || v === null) continue; // not in this write, or explicitly cleared.
+    if (multiple) {
+      // A freshly-supplied overlay is a coerced number[]; a shared sibling copy is a RawJson(`[…]`).
+      const arr = v instanceof RawJson ? (JSON.parse(v.raw) as number[]) : (v as number[]);
+      for (const id of arr) ids.push(id);
+    } else {
+      ids.push(v as number);
+    }
+  }
+  if (ids.length === 0) return;
+  const missing = await missingFileIds(tx, ids);
+  if (missing.length > 0) {
+    throw new EntryWriteError(`media reference to unknown file id(s): ${missing.join(', ')}`);
+  }
+}
+
 /** Build the write response Buffer: `{"data":<serialized row>,"meta":{}}`, byte-consistent with GET. */
 function writeOk(status: number, def: ContentTypeDef, row: Record<string, unknown>): CoreResponse {
   return {
@@ -124,6 +159,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
           }
         }
         const merged = { ...sib.shared, ...data };
+        await assertMediaRefsExist(tx, def, merged); // be-04: any media id (overlaid or shared-copied) must exist.
         const r = await insertEntry(tx, def, merged, { documentId: sib.documentId, locale });
         // Per §7 relations are PER-VARIANT (link rows key the physical row id), so any relation ops apply
         // to the NEW row only — exactly the same applyRelationOps seam as a plain create.
@@ -163,6 +199,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
       // ONE tx: INSERT scalars RETURNING id, then apply the relation ops with that id. A FK 23503 on a
       // non-existent related id rolls the WHOLE tx back -> no orphan ct_ row, no partial link write.
       const row = await ctx.sql.begin(async (tx) => {
+        await assertMediaRefsExist(tx, def, data); // be-04: media id(s) must reference real assets (400 else).
         const r = await insertEntry(tx, def, data, opts);
         await applyRelationOps(tx, def, Number(r['id']), relationOps);
         return r;
@@ -179,6 +216,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
       const row = await ctx.sql.begin(async (tx) => {
         const r = await updateEntry(tx, def, id, data);
         if (r === null) return null; // missing owner -> abort the tx, do NO link work.
+        await assertMediaRefsExist(tx, def, data); // be-04: any media id(s) in this update must exist (400 else).
         await applyRelationOps(tx, def, id, relationOps);
         return r;
       });

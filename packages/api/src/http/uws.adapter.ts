@@ -1,4 +1,5 @@
 import uWS from 'uWebSockets.js';
+import busboy from 'busboy';
 import type { Engine } from '../store/engine.ts';
 import type { Registry } from '../store/registry.ts';
 import type { PostgresStore } from '../db/postgres.store.ts';
@@ -6,6 +7,9 @@ import { rebuildType } from '../db/engine.loader.ts';
 import { handleRequest, errorResponse, type CoreResponse } from './read.router.ts';
 import { handleWrite, type WriteContext } from './write.handler.ts';
 import { handleContentTypeRequest, type ContentTypeContext } from './content-type.controller.ts';
+import { handleUpload, handleListFiles, handleGetFile, handleDeleteFile, type FileContext, type ParsedUpload } from './upload.handler.ts';
+import { mediaPopulateTargets, stripMediaPopulate, applyMediaPopulate } from './media.populate.ts';
+import { getStorageProvider } from '../storage/index.ts';
 import { listTypes, inspectType } from '../store/inspect.ts';
 import { config } from '../config.ts';
 
@@ -60,6 +64,7 @@ const STATUS_LINE: Record<number, string> = {
   405: '405 Method Not Allowed',
   409: '409 Conflict',
   413: '413 Payload Too Large',
+  415: '415 Unsupported Media Type',
   500: '500 Internal Server Error',
 };
 
@@ -258,6 +263,154 @@ function handleContentTypeRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, met
   });
 }
 
+// be-04 MEDIA — sanitize a busboy-reported filename to its bare basename over a safe alphabet. NEVER used
+// to build a storage path (that is the content-addressed key); recorded only for display. Strips any
+// directory component (defends against `../../etc/passwd` or a backslash-path), collapses everything
+// outside `[A-Za-z0-9._-]`, caps length, and falls back to `upload` when nothing survives.
+function sanitizeFilename(raw: string): string {
+  // basename over BOTH separators (a Windows client may send backslashes).
+  const base = raw.replace(/\\/g, '/').split('/').pop() ?? '';
+  const cleaned = base.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '').slice(0, 255);
+  return cleaned.length > 0 ? cleaned : 'upload';
+}
+
+/** A media upload-route outcome: a parsed single file, or a client error to surface verbatim. */
+type UploadParseResult = { ok: true; upload: ParsedUpload } | { ok: false; status: number; message: string };
+
+/**
+ * be-04 MEDIA — stream the multipart/form-data body through busboy into a SINGLE bounded file buffer.
+ * Uses a SEPARATE cap (`config.uploadMaxBytes`) — the 1 MiB JSON `MAX_BODY_BYTES` is untouched. busboy
+ * enforces the size natively (`limits.fileSize`) and emits the file stream's `limit` event when exceeded
+ * => we reject 413 WITHOUT buffering the whole oversized body. `files:1` rejects a second file part. The
+ * `content-type` header MUST be read synchronously off the stack-allocated `req` before the first onData.
+ */
+function readMultipart(res: uWS.HttpResponse, contentType: string, onDone: (r: UploadParseResult) => void): { aborted: () => boolean } {
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+  });
+
+  if (!/^multipart\/form-data/i.test(contentType)) {
+    // Drain so uWS doesn't complain, then reject. Read one onData to satisfy the stream contract.
+    res.onData((_ab, isLast) => {
+      if (isLast) onDone({ ok: false, status: 415, message: 'expected multipart/form-data' });
+    });
+    return { aborted: () => aborted };
+  }
+
+  let bb: ReturnType<typeof busboy>;
+  try {
+    bb = busboy({ headers: { 'content-type': contentType }, limits: { files: 1, fields: 0, fileSize: config.uploadMaxBytes } });
+  } catch {
+    res.onData((_ab, isLast) => {
+      if (isLast) onDone({ ok: false, status: 400, message: 'invalid multipart body' });
+    });
+    return { aborted: () => aborted };
+  }
+
+  let settled = false;
+  const settle = (r: UploadParseResult): void => {
+    if (settled) return;
+    settled = true;
+    onDone(r);
+  };
+
+  const chunks: Buffer[] = [];
+  let sawFile = false;
+  let tooLarge = false;
+  let extraFile = false;
+  let filename = 'upload';
+  let declaredMime = 'application/octet-stream';
+
+  bb.on('file', (_name, stream, info) => {
+    if (sawFile) {
+      // A second file part: ignore its bytes and flag a 400.
+      extraFile = true;
+      stream.resume();
+      return;
+    }
+    sawFile = true;
+    filename = sanitizeFilename(info.filename ?? '');
+    declaredMime = (info.mimeType ?? 'application/octet-stream').slice(0, 127);
+    stream.on('data', (d: Buffer) => {
+      if (!tooLarge) chunks.push(d);
+    });
+    stream.on('limit', () => {
+      tooLarge = true;
+    });
+    stream.on('error', () => settle({ ok: false, status: 400, message: 'invalid multipart body' }));
+  });
+  bb.on('filesLimit', () => {
+    extraFile = true;
+  });
+  bb.on('error', () => settle({ ok: false, status: 400, message: 'invalid multipart body' }));
+  bb.on('close', () => {
+    if (tooLarge) return settle({ ok: false, status: 413, message: 'upload too large' });
+    if (extraFile) return settle({ ok: false, status: 400, message: 'expected exactly one file part' });
+    if (!sawFile) return settle({ ok: false, status: 400, message: 'no file part' });
+    settle({ ok: true, upload: { bytes: Buffer.concat(chunks), filename, declaredMime } });
+  });
+
+  res.onData((ab, isLast) => {
+    // The chunk ArrayBuffer is only valid during this callback — copy before handing to busboy.
+    bb.write(Buffer.from(ab.slice(0)));
+    if (isLast) bb.end();
+  });
+
+  return { aborted: () => aborted };
+}
+
+/** be-04 MEDIA — the POST /_files/upload route: stream multipart -> core -> cork the response. */
+function handleUploadRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, ctx: FileContext): void {
+  // Read the content-type header SYNCHRONOUSLY (the req is stack-allocated, invalid after the first await).
+  const contentType = req.getHeader('content-type') ?? '';
+  const { aborted } = readMultipart(res, contentType, (parsed) => {
+    void (async () => {
+      if (!parsed.ok) return corkSend(res, aborted, errorResponse(parsed.status, parsed.message));
+      let result: CoreResponse;
+      try {
+        result = await handleUpload(ctx, parsed.upload);
+      } catch {
+        result = errorResponse(500, 'internal error');
+      }
+      corkSend(res, aborted, result);
+    })();
+  });
+}
+
+/**
+ * be-04 MEDIA — the GET /_files[, /:id] + DELETE /_files/:id routes. GET-list reads ?start&limit off the
+ * query synchronously; the :id routes validate a canonical int id (404 otherwise, like the data routes).
+ * No body is read (these verbs carry none), so this is synchronous-capture + async-core, corked.
+ */
+function handleFilesRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, method: 'GET' | 'DELETE', hasId: boolean, ctx: FileContext): void {
+  const idRaw = hasId ? (req.getParameter(0) ?? '') : '';
+  const query = req.getQuery() ?? '';
+  let aborted = false;
+  res.onAborted(() => {
+    aborted = true;
+  });
+  void (async () => {
+    let result: CoreResponse;
+    try {
+      if (!hasId) {
+        const params = new URLSearchParams(query);
+        const start = toInt(params.get('start')) ?? 0;
+        const limit = toInt(params.get('limit')) ?? 25;
+        result = await handleListFiles(ctx, start, limit);
+      } else {
+        // Canonical non-negative int id, else 404 — symmetric with the data routes.
+        if (!/^(0|[1-9]\d*)$/.test(idRaw)) result = errorResponse(404, 'not found');
+        else if (method === 'GET') result = await handleGetFile(ctx, Number(idRaw));
+        else result = await handleDeleteFile(ctx, Number(idRaw));
+      }
+    } catch {
+      result = errorResponse(500, 'internal error');
+    }
+    if (!aborted) res.cork(() => writeResponse(res, result));
+  })();
+}
+
 /**
  * Build a uWS server over `engine`. Construction is SEPARATE from listening so tests build the
  * server once and bind it to a free port chosen by the harness.
@@ -271,6 +424,45 @@ function handleContentTypeRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, met
 export function createServer(engine: Engine, store?: PostgresStore, registry?: Registry, publishClock: () => Date = () => new Date()): UwsServer {
   const app = uWS.App();
   const current = engine;
+
+  /**
+   * be-04 MEDIA — the OPTIONAL media-populate wrapper around a GET read. When the registry is present,
+   * the addressed type declares >=1 media field, AND the request asked to populate one of them, this:
+   *   1. STRIPS the media-field populate names from the query (so the engine's relation-only populate
+   *      parser never 400s on a scalar media field), runs the pure read core on the stripped query,
+   *   2. on a 200, JSON.parse/inlines the asset record(s) for the targeted media fields via a single
+   *      batched `files` lookup, then re-serializes — corked + onAborted-guarded (it is async).
+   * Returns true iff it OWNED the response (took the async path); false => the caller runs the normal
+   * SYNCHRONOUS byte-identical read path. With no registry / no media field / no media populate asked,
+   * it always returns false => the existing zero-copy read path is byte-identical.
+   */
+  function mediaRead(res: uWS.HttpResponse, method: string, path: string, type: string, query: string): boolean {
+    if (registry === undefined || store === undefined) return false;
+    if (method.toUpperCase() !== 'GET') return false;
+    const def = registry.get(type);
+    if (def === undefined || def.mediaFields.size === 0) return false;
+    const targets = mediaPopulateTargets(def, query);
+    if (targets.size === 0) return false;
+
+    const sql = store.sql;
+    const strippedQuery = stripMediaPopulate(query, new Set(targets.keys()));
+    let aborted = false;
+    res.onAborted(() => {
+      aborted = true;
+    });
+    void (async () => {
+      let result: CoreResponse;
+      try {
+        const base = handleRequest(current, { method, path, query: strippedQuery });
+        // Only a successful read carries a media id to resolve; a 400/404/405 passes straight through.
+        result = base.status === 200 ? await applyMediaPopulate(sql, base.body, targets) : base;
+      } catch {
+        result = errorResponse(500, 'internal error');
+      }
+      if (!aborted) res.cork(() => writeResponse(res, result));
+    })();
+    return true;
+  }
 
   // DEBUG INSPECTOR (dev-only, read-only) — mounted ONLY when DEBUG_INSPECTOR=1 outside production. The
   // `debug-inspect` segment contains '-', illegal in an api_id, so it can never shadow a real `/:type`.
@@ -297,7 +489,10 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
     const method = req.getMethod();
     const type = req.getParameter(0) ?? '';
     const query = req.getQuery() ?? '';
-    // SYNC handler: no await past this point, so `req` is no longer touched and no onAborted needed.
+    // SYNC handler: no await past this point, so `req` is no longer touched and no onAborted needed —
+    // UNLESS this is a media-populate read (registry present + a media field targeted), which needs an
+    // async batched `files` lookup. mediaRead returns true iff it took the async path (else fall through).
+    if (mediaRead(res, method, `/${type}`, type, query)) return;
     writeResponse(res, handleRequest(current, { method, path: `/${type}`, query }));
   });
 
@@ -307,6 +502,7 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
     const type = req.getParameter(0) ?? '';
     const id = req.getParameter(1) ?? '';
     const query = req.getQuery() ?? '';
+    if (mediaRead(res, method, `/${type}/${id}`, type, query)) return;
     writeResponse(res, handleRequest(current, { method, path: `/${type}/${id}`, query }));
   });
 
@@ -354,6 +550,16 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
     app.post('/:type', (res, req) => handleWriteRoute(res, req, 'POST', false, ctx));
     app.put('/:type/:id', (res, req) => handleWriteRoute(res, req, 'PUT', true, ctx));
     app.del('/:type/:id', (res, req) => handleWriteRoute(res, req, 'DELETE', true, ctx));
+
+    // be-04 MEDIA — asset endpoints under the `/_files` literal prefix. A leading underscore is illegal
+    // in an api_id (validateFieldName / deriveTableName), so `_files` can NEVER collide with a real
+    // `/:type`; uWS also matches a static segment over a `:param`. Registered only when writes are enabled
+    // (a read-only server has no asset endpoints; they fall to any('/*') -> 404).
+    const fileCtx: FileContext = { sql: store.sql, provider: getStorageProvider() };
+    app.post('/_files/upload', (res, req) => handleUploadRoute(res, req, fileCtx));
+    app.get('/_files', (res, req) => handleFilesRoute(res, req, 'GET', false, fileCtx));
+    app.get('/_files/:id', (res, req) => handleFilesRoute(res, req, 'GET', true, fileCtx));
+    app.del('/_files/:id', (res, req) => handleFilesRoute(res, req, 'DELETE', true, fileCtx));
   }
 
   // Everything else (root, non-GET on a known route, deeper paths): let the core decide the status

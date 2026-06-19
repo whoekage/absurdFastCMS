@@ -163,9 +163,44 @@ function normalizeIds(meta: RelationMeta, isToOne: boolean, op: 'set' | 'connect
   return ids;
 }
 
+/**
+ * be-04 MEDIA: validate + normalize a media field's body value into the bound wire form. SINGLE accepts
+ * a bare positive-int4 id (or, leniently, a single-element array) -> a NUMBER bound straight to the int4
+ * column. MULTIPLE accepts an id or an array of ids -> a deduped NUMBER[] bound to the jsonb column
+ * (postgres.js serializes the JS array to a real jsonb array, NOT a quoted string). Every id is a
+ * positive int4 (mirrors the relation id rule + write.handler's MAX_INT4 guard); a non-int / <=0 / >int4
+ * id is a clean 400 that beats a PG 22003. The id's EXISTENCE in `files` is checked later in
+ * write.handler (the body parser is sync + has no DB); a deleted-asset id simply populates as skipped.
+ */
+function coerceMedia(field: RegistryField, multiple: boolean, v: unknown): unknown {
+  const name = field.name;
+  const validId = (x: unknown): x is number =>
+    typeof x === 'number' && Number.isInteger(x) && x > 0 && x <= MAX_INT4;
+  if (!multiple) {
+    // Single: a bare id, or a 1-element array (lenient — clients sometimes send `[id]`).
+    if (Array.isArray(v)) {
+      if (v.length === 0) throw new BodyParseError(`media field "${name}" is single-valued (use null to clear)`);
+      if (v.length > 1) throw new BodyParseError(`media field "${name}" is single-valued and accepts at most one id`);
+      v = v[0];
+    }
+    if (!validId(v)) throw new BodyParseError(`media field "${name}" must be a positive integer file id`);
+    return v;
+  }
+  // Multiple: an id or an array of ids -> a deduped (first-seen order) array of positive int4s.
+  const arr = Array.isArray(v) ? v : [v];
+  for (const x of arr) {
+    if (!validId(x)) throw new BodyParseError(`media field "${name}" must be a positive integer file id or an array of them`);
+  }
+  return [...new Set(arr as number[])];
+}
+
 /** Type-check + coerce one non-null value against its engine field. Coerce throws become 400s here. */
 function coerce(field: RegistryField, v: unknown): unknown {
   const name = field.name;
+  // be-04 MEDIA: a media field is a real scalar column (engine i32 single / json multiple) but its VALUE
+  // is a file-id reference with cardinality + positive-int4 rules — coerce it HERE before the generic
+  // engine-type switch (which would accept any integer / any JSON for i32 / json).
+  if (field.media !== undefined) return coerceMedia(field, field.media.multiple, v);
   switch (field.type) {
     case 'i32':
       if (typeof v !== 'number' || !Number.isInteger(v)) throw new BodyParseError(`field "${name}" must be an integer`);

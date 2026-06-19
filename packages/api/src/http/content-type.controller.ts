@@ -96,6 +96,10 @@ function projectDef(def: ContentTypeDef): unknown {
       ...(f.length !== undefined ? { length: f.length } : {}),
       ...(f.scale !== undefined ? { scale: f.scale } : {}),
       ...(f.precision !== undefined ? { precision: f.precision } : {}),
+      // be-04 MEDIA: the cardinality flag for a media field. CONDITIONAL key — emitted ONLY for a
+      // `cmsType:'media'` field (so every existing non-media field's projection is BYTE-IDENTICAL). The
+      // admin reads it to pick a single-asset picker vs a multi-asset gallery; the SDK mirrors it.
+      ...(f.media !== undefined ? { multiple: f.media.multiple } : {}),
       // i18n: per-field localized flag. CONDITIONAL key — emitted ONLY for an i18n type so a non-i18n
       // type's projected fields stay BYTE-IDENTICAL to before this feature (the existing builder suite is
       // unaffected; only NEW i18n tests assert the key). The admin reads it to show the per-field toggle.
