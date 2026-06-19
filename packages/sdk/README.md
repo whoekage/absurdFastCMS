@@ -56,6 +56,7 @@ console.log(data, meta.pagination);
 - [Client options](#client-options)
 - [Read methods](#read-methods)
 - [Write methods](#write-methods)
+- [Media library & media fields](#media-library--media-fields)
 - [Content-type Builder](#content-type-builder)
 - [Filter cookbook](#filter-cookbook) — every operator + `$and`/`$or`/`$not` + relation filters
 - [Fluent filter builder](#fluent-filter-builder)
@@ -244,6 +245,99 @@ await client.update('article', 1, { tags: { connect: [6], disconnect: [1] } });
 
 ---
 
+## Media library & media fields
+
+The media library stores uploaded files in a dedicated asset registry (the `files` table) served by
+its own `/_files` endpoints — **not** the columnar read engine. A **media field** on a content-type is
+a plain reference to one or more assets by id.
+
+### Upload — `client.upload(file, filename?, signal?)`
+
+`POST /_files/upload` as `multipart/form-data`. Accepts a `Blob`/`File` (browsers + Node 24) or raw
+bytes (`Uint8Array`/`ArrayBuffer`/Node `Buffer`) plus a `filename`. Returns the stored `FileAsset`
+(`201`, or `200` when the same bytes were already uploaded — content-addressed dedup). The server
+sniffs the real mime + image dimensions from the bytes, so a wrong declared type is harmless.
+
+```ts
+// Browser: from an <input type="file">
+const asset = await client.upload(fileInput.files[0]);
+
+// Node 24: raw bytes + filename
+const asset = await client.upload(await fs.readFile('photo.png'), 'photo.png');
+
+asset.id;            // -> put this in a media-field write
+asset.mime;          // 'image/png' (sniffed)
+asset.width;         // 800  (null for a non-image)
+asset.url;           // public URL for the bytes
+```
+
+`BadRequestError` (400, empty / no file part) and `PayloadTooLargeError` (413, over the server's
+upload cap) are the failure cases. Uploads are not retried (a non-idempotent POST).
+
+### Asset library — `client.assets.{list,get,delete}`
+
+```ts
+const page = await client.assets.list({ start: 0, limit: 25 }); // { data: FileAsset[], meta }
+const one  = await client.assets.get(asset.id);                 // FileAsset (404 if absent)
+await client.assets.delete(asset.id);                            // removes the record AND the bytes
+```
+
+Deleting an asset that a media field still references is allowed — the reference is left dangling, and
+a later **populate** read resolves it to `null` (single) or drops it from the array (multiple), never
+an error.
+
+### Declaring a media field
+
+A media field is the `media` `cmsType` (see the Builder section). `options.multiple` picks the
+cardinality — `false` (default) = a single asset reference, `true` = an ordered array.
+
+```ts
+await client.contentTypes.create({
+  apiId: 'product',
+  fields: [
+    { name: 'title',  cmsType: 'string', options: { nullable: false } },
+    { name: 'cover',  cmsType: 'media' },                          // single
+    { name: 'photos', cmsType: 'media', options: { multiple: true } }, // multiple
+  ],
+});
+```
+
+### Writing & reading a media field
+
+Write the asset **id(s)** (a `MediaInput`: a positive int4 for single, an array for multiple, `null`
+to clear). The id must reference an existing asset or the write is a `400` (the whole tx rolls back).
+
+```ts
+const cover  = await client.upload(coverBlob);
+const photoA = await client.upload(aBlob);
+const photoB = await client.upload(bBlob);
+
+await client.create('product', {
+  title: 'Widget',
+  cover: cover.id,                 // single: a bare id
+  photos: [photoA.id, photoB.id],  // multiple: an array of ids (order preserved)
+});
+```
+
+Un-populated reads echo the raw id / id array. A `populate` read inlines the full `FileAsset`
+object(s) — a single media field becomes the asset object (or `null`), a multiple becomes an array of
+asset objects:
+
+```ts
+// raw ids
+const { data } = await client.findOne('product', 1);
+data.cover;   // 12        (raw id)
+data.photos;  // [7, 9]    (raw ids)
+
+// populated -> inlined asset records (Strapi v5 flat shape)
+const { data: full } = await client.findOne('product', 1, { populate: ['cover', 'photos'] });
+full.cover;        // { id: 12, mime: 'image/png', width: 800, url: '…', … }  (or null)
+full.photos;       // [{ id: 7, … }, { id: 9, … }]
+// `populate: '*'` expands media fields too (alongside relations).
+```
+
+---
+
 ## Draft & Publish
 
 Draft & Publish is a **per-type opt-in** (Strapi v5 Model A). Enable it at create time with
@@ -413,10 +507,11 @@ array (`{ field, kind, target, owner, inverseField? }`); a scalar-only type retu
 Errors: `NotFoundError` (404 unknown owner/target), `ConflictError` (409 field/relation name clash),
 `BadRequestError` (400 invalid identifier / reserved name / unknown kind).
 
-The 16 `cmsType`s: `string`, `text`, `email`, `uid`, `enumeration`, `integer`, `biginteger`,
-`float`, `decimal`, `boolean`, `date`, `datetime`, `time`, `json`, `array`, `uuid`. `FieldOptions`
-keys: `length` (varchar sizing), `precision` / `scale` (decimal), `values` (enumeration),
-`nullable`, `default`.
+The 17 `cmsType`s: `string`, `text`, `email`, `uid`, `enumeration`, `integer`, `biginteger`,
+`float`, `decimal`, `boolean`, `date`, `datetime`, `time`, `json`, `array`, `uuid`, `media`.
+`FieldOptions` keys: `length` (varchar sizing), `precision` / `scale` (decimal), `values`
+(enumeration), `multiple` (media single-vs-array), `nullable`, `default`. See
+[Media library & media fields](#media-library--media-fields) for the `media` type.
 
 ---
 

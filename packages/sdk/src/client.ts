@@ -21,6 +21,9 @@ import {
   type UpdateFieldInput,
   type DropResult,
   type DeclareRelationInput,
+  type FileAsset,
+  type FileListResponse,
+  type FileListParams,
 } from './types.ts';
 import { decodeEntry, type DecodeOptions } from './serde.ts';
 
@@ -255,6 +258,54 @@ function sleep(ms: number): Promise<void> {
 type RequestFn = <T>(method: string, path: string, opts?: RequestOptions) => Promise<T>;
 
 /**
+ * be-04 MEDIA — the ASSET-LIBRARY namespace (`client.assets`). Covers the dedicated `/_files` endpoints
+ * (NOT the columnar read engine): list / get-one / delete. Upload is {@link AbsurdClient.upload} (it needs
+ * the multipart transport, not the JSON `request` pipeline this namespace reuses). Every list/get returns
+ * a {@link FileAsset}; errors surface as the typed subclasses ({@link NotFoundError} 404, etc.).
+ *
+ * ⚠️ The `/_files` routes are only mounted by the server when started WITH a store + registry (writes
+ * enabled). Against a read-only server these calls answer 404.
+ */
+export class AssetsApi {
+  private readonly request: RequestFn;
+  constructor(request: RequestFn) {
+    this.request = request;
+  }
+
+  /** LIST a page of the media library. `GET /_files?start&limit` -> `{ data: FileAsset[], meta }`. */
+  list(params: FileListParams = {}, signal?: AbortSignal): Promise<FileListResponse> {
+    const q = new URLSearchParams();
+    if (params.start !== undefined) q.set('start', String(params.start));
+    if (params.limit !== undefined) q.set('limit', String(params.limit));
+    const opts: RequestOptions = {};
+    const query = q.toString();
+    if (query !== '') opts.query = query;
+    if (signal) opts.signal = signal;
+    return this.request<FileListResponse>('GET', '/_files', opts);
+  }
+
+  /** GET one asset by id. `GET /_files/:id`. Throws {@link NotFoundError} (404) when no asset carries it. */
+  async get(id: number, signal?: AbortSignal): Promise<FileAsset> {
+    const opts: RequestOptions = {};
+    if (signal) opts.signal = signal;
+    const res = await this.request<{ data: FileAsset }>('GET', `/_files/${encodeURIComponent(String(id))}`, opts);
+    return res.data;
+  }
+
+  /**
+   * DELETE one asset (record AND bytes). `DELETE /_files/:id` -> the deleted {@link FileAsset}. Throws
+   * {@link NotFoundError} (404) when no asset carries the id. Any media-field reference to the deleted
+   * asset is left dangling (a populate read then resolves it to `null`/drops it — never an error).
+   */
+  async delete(id: number, signal?: AbortSignal): Promise<FileAsset> {
+    const opts: RequestOptions = {};
+    if (signal) opts.signal = signal;
+    const res = await this.request<{ data: FileAsset }>('DELETE', `/_files/${encodeURIComponent(String(id))}`, opts);
+    return res.data;
+  }
+}
+
+/**
  * Slice 6 — the CONTENT-TYPE BUILDER namespace (`client.contentTypes`). Covers the meta / runtime-DDL
  * routes: `GET/POST /content-types`, `GET/DELETE /content-types/:apiId`, `POST .../fields`, and
  * `PUT/DELETE .../fields/:name`. Every 2xx body is a {@link ContentTypeDefinition} (the `projectDef`
@@ -418,6 +469,13 @@ export class AbsurdClient {
    */
   readonly contentTypes: ContentTypesApi;
 
+  /**
+   * be-04 MEDIA — the asset-library namespace (`client.assets`): `list` / `get` / `delete` over the
+   * `/_files` endpoints. Upload is {@link AbsurdClient.upload} (multipart). Reuses this client's
+   * {@link request} pipeline (same retries / timeout / hooks / typed-error tower).
+   */
+  readonly assets: AssetsApi;
+
   constructor(options: ClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
 
@@ -441,6 +499,7 @@ export class AbsurdClient {
 
     // Bind request so the namespace keeps the right `this` while calling the protected pipeline.
     this.contentTypes = new ContentTypesApi(this.request.bind(this));
+    this.assets = new AssetsApi(this.request.bind(this));
   }
 
   /**
@@ -812,6 +871,88 @@ export class AbsurdClient {
       `/${encodeURIComponent(type)}/${encodeURIComponent(String(id))}`,
       opts,
     );
+  }
+
+  // === be-04 — media upload =====================================================================
+
+  /**
+   * be-04 MEDIA — UPLOAD a file to the asset library. `POST /_files/upload` as `multipart/form-data` with
+   * a single `file` part. Returns the stored {@link FileAsset} (HTTP 201; or 200 when the SAME bytes were
+   * already stored — content-addressed dedup returns the existing row). The returned `id` is what you put
+   * in a {@link MediaInput} media-field write body.
+   *
+   * Accepts a `Blob`/`File` (browsers + Node 24 ship both) — its own `name`/`type` are used unless you
+   * pass an explicit `filename` — OR raw bytes (`Uint8Array`/`ArrayBuffer`; a Node `Buffer` IS a
+   * Uint8Array) plus a `filename`. The server SNIFFS the real mime + image dimensions from the bytes, so a
+   * wrong declared type is harmless. Throws {@link BadRequestError} (400, empty / no file part),
+   * {@link PayloadTooLargeError} (413, over the server's upload cap), or a generic {@link ApiError}
+   * (415, a non-multipart body — not reachable through this method) on the respective failures.
+   *
+   * Transport note: this does NOT reuse the JSON {@link request} pipeline (which sets a JSON content-type
+   * and stringifies the body). It builds `FormData` and lets `fetch` set the multipart boundary; the auth
+   * token / `getHeaders` / hooks still apply. Uploads are NOT retried (a non-idempotent POST).
+   */
+  async upload(
+    file: Blob | Uint8Array | ArrayBuffer,
+    filename?: string,
+    signal?: AbortSignal,
+  ): Promise<FileAsset> {
+    const fd = new FormData();
+    let blob: Blob;
+    let name: string;
+    if (file instanceof Blob) {
+      blob = file;
+      // A File carries its own .name; fall back to the explicit filename, then a generic default.
+      name = filename ?? (file as File).name ?? 'upload';
+    } else {
+      if (filename === undefined) throw new Error('AbsurdClient.upload: a filename is required when uploading raw bytes');
+      // Normalize to a plain ArrayBuffer-backed view (a BlobPart): a Uint8Array over a SharedArrayBuffer
+      // is not a valid BlobPart under the strict DOM lib types, so copy the bytes into a fresh buffer.
+      const src = file instanceof ArrayBuffer ? new Uint8Array(file) : file;
+      const copy = new Uint8Array(src.byteLength);
+      copy.set(src);
+      blob = new Blob([copy.buffer]);
+      name = filename;
+    }
+    fd.set('file', blob, name);
+
+    const url = `${this.baseUrl}/_files/upload`;
+    const headers: Record<string, string> = {};
+    // NO content-type here — fetch derives `multipart/form-data; boundary=...` from the FormData body.
+    if (this.token !== undefined) headers['authorization'] = `Bearer ${this.token}`;
+    if (this.getHeaders) {
+      const extra = await this.getHeaders();
+      for (const key in extra) headers[key] = extra[key]!;
+    }
+    if (this.onRequest) await this.onRequest({ method: 'POST', url, headers, body: undefined, attempt: 1 });
+
+    const { signal: sig, dispose } = this.buildSignal(signal, this.timeout);
+    const init: RequestInit = { method: 'POST', headers, body: fd };
+    if (sig) init.signal = sig;
+
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, init);
+    } finally {
+      dispose();
+    }
+    if (this.onResponse) await this.onResponse({ response: res, method: 'POST', url, attempt: 1 });
+
+    const raw = await res.text();
+    let parsed: unknown = undefined;
+    if (raw !== '') {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = raw;
+      }
+    }
+    if (!res.ok) {
+      const message = messageFromBody(parsed) ?? res.statusText ?? `HTTP ${res.status}`;
+      if (res.status === 401 && this.onUnauthorized) await this.onUnauthorized({ status: 401, method: 'POST', url, body: parsed });
+      throw errorFromResponse(res.status, message, parsed);
+    }
+    return (parsed as { data: FileAsset }).data;
   }
 
   // === Draft & Publish lifecycle ================================================================

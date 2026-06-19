@@ -26,6 +26,10 @@ export type {
   UpdateFieldInput,
   DeclareRelationInput,
   DropResult,
+  FileAsset,
+  MediaInput,
+  FileListResponse,
+  FileListParams,
 } from './types.ts';
 export { isKeysetPagination } from './types.ts';
 
@@ -60,6 +64,7 @@ export {
   AbsurdClient,
   Collection,
   ContentTypesApi,
+  AssetsApi,
   createClient,
   ApiError,
   BadRequestError,

@@ -12,8 +12,9 @@
 
 /**
  * The closed set of CMS field types a user may define on a content-type field. Mirror of
- * `CmsType` in `@absurd/api` (packages/api/src/db/type.catalog.ts) — 14 members.
- * Relation / media / component / dynamiczone are NOT here.
+ * `CmsType` in `@absurd/api` (packages/api/src/db/type.catalog.ts). `media` (be-04) IS here — a
+ * reference to an uploaded asset in the `files` library (single int4 id / multiple jsonb id array; see
+ * {@link FileAsset} + `client.upload`). Relation / component / dynamiczone are NOT here.
  */
 export type CmsType =
   | 'string'
@@ -31,7 +32,8 @@ export type CmsType =
   | 'time'
   | 'json'
   | 'array'
-  | 'uuid';
+  | 'uuid'
+  | 'media';
 
 /**
  * Per-field options the caller may supply when defining a field; each `cmsType` validates only the
@@ -50,6 +52,11 @@ export interface FieldOptions {
   nullable?: boolean;
   /** constant default value (volatile defaults like now()/gen_random_uuid() are rejected upstream). */
   default?: unknown;
+  /**
+   * be-04 MEDIA only: `false` (default) => a SINGLE asset reference (one `files.id`); `true` => MULTIPLE
+   * (an ordered array of `files.id`s). Ignored for non-media types.
+   */
+  multiple?: boolean;
 }
 
 /**
@@ -98,6 +105,12 @@ export interface FieldDefinition {
    * value (string/number/boolean/JSON), not a form-shaped value.
    */
   default?: unknown;
+  /**
+   * be-04 MEDIA: the cardinality of a `cmsType: 'media'` field — `false` = single asset reference,
+   * `true` = multiple. PROJECTED only for a media field (a conditional wire key; every non-media field
+   * omits it). The admin reads it to pick a single-asset picker vs a multi-asset gallery widget.
+   */
+  multiple?: boolean;
   /**
    * i18n per-field localized flag, PROJECTED only for an `i18n: true` type (a non-i18n type omits this
    * key — a conditional wire key). `true` => the field is per-variant; `false` => shared across the
@@ -281,6 +294,50 @@ export type RelationInput =
 export type WriteBody<T = Entry> = { [K in keyof T]?: T[K] | RelationInput } & {
   [field: string]: unknown;
 };
+
+// === be-04 — media / asset library ==============================================================
+
+/**
+ * One asset record from the media library (`files` registry), as returned by the asset endpoints
+ * (`POST/GET/DELETE /_files...`) AND inlined into an entry by a media-field POPULATE. Mirror of
+ * `FileAsset` in `@absurd/api` (packages/api/src/db/file.repository.ts). `width`/`height` are `null`
+ * for a non-image upload; `url` is the public URL for the bytes (provider-derived; may be null).
+ */
+export interface FileAsset {
+  id: number;
+  filename: string;
+  mime: string;
+  size: number;
+  width: number | null;
+  height: number | null;
+  hash: string;
+  /** Which storage backend holds the bytes: `'local'` | `'s3'`. */
+  provider: string;
+  /** The opaque content-addressed key inside that provider (`ab/cd/<sha256>.<ext>`). */
+  storageKey: string;
+  url: string | null;
+  createdAt: string;
+}
+
+/**
+ * The value a MEDIA field accepts in a write body. SINGLE: one positive `files.id` (or `null` to clear).
+ * MULTIPLE: an array of `files.id`s (`[]` clears). Ids must be positive int4 AND reference an existing
+ * asset (a non-existent id is a 400 — the write tx rolls back). Upload first with {@link AbsurdClient.upload}
+ * to obtain an id. UN-POPULATED reads echo the raw id / id[]; a `populate` read inlines {@link FileAsset}(s).
+ */
+export type MediaInput = number | number[] | null;
+
+/** The list-response envelope for `GET /_files` (offset-paginated asset library page). */
+export interface FileListResponse {
+  data: FileAsset[];
+  meta: { pagination: { start: number; limit: number; total: number } };
+}
+
+/** Optional paging for {@link AbsurdClient.assets}.list — `start` (offset, default 0) + `limit` (1..100, default 25). */
+export interface FileListParams {
+  start?: number;
+  limit?: number;
+}
 
 // === 6 — content-type builder inputs ===========================================================
 //
