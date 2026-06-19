@@ -1,7 +1,8 @@
 import type { Engine } from '../store/engine.ts';
-import { parseQuery, QueryParseError, type ParsedQuery } from '../store/query.parser.ts';
+import { parseQuery, QueryParseError, ALL_LOCALES, type ParsedQuery } from '../store/query.parser.ts';
 import { InvalidCursorError } from '../store/cursor.codec.ts';
 import type { FilterNode } from '../store/table.ts';
+import { config } from '../config.ts';
 
 /**
  * uWS-MIGRATION SLICE 0 — the framework-agnostic HTTP request CORE.
@@ -82,6 +83,21 @@ function statusWhere(engine: Engine, name: string, parsed: ParsedQuery): FilterN
   return { leaf: { field: 'published_at', op, value: true } };
 }
 
+/**
+ * For an i18n type, derive the `locale` eq predicate to fold into the query. The DEFAULT (locale absent)
+ * is the global {@link config.defaultLocale}; `locale=<slug>` -> eq that slug; `locale=*` -> undefined (no
+ * predicate, ALL variants). Returns undefined for a NON-i18n type (so the query is byte-identical) — the
+ * parser already 400s a malformed slug on any type, so the value here is always a valid slug or `*`. There
+ * is NO fallback: a missing variant simply returns nothing (the eq predicate matches no row). The `locale`
+ * field is eq-indexed (registry index plan), so this leaf is index-backed.
+ */
+function localeWhere(engine: Engine, name: string, parsed: ParsedQuery): FilterNode | undefined {
+  if (!engine.isI18n(name)) return undefined;
+  if (parsed.locale === ALL_LOCALES) return undefined; // all variants — no predicate.
+  const loc = parsed.locale ?? config.defaultLocale;
+  return { leaf: { field: 'locale', op: 'eq', value: loc } };
+}
+
 /** Split a path into its non-empty segments: `/article/42` -> `['article', '42']`. */
 function segments(path: string): string[] {
   const out: string[] = [];
@@ -117,6 +133,11 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
       // assembled response (and its cache key) is BYTE-IDENTICAL to before this feature.
       const sw = statusWhere(engine, name, parsed);
       if (sw !== undefined) parsed.options.where = andWhere(parsed.options.where, sw);
+      // i18n: for an i18n type, fold the locale eq predicate (default DEFAULT_LOCALE) into the query's
+      // where, AND-merged with status (both are pure scalar leaves). For a non-i18n type localeWhere
+      // returns undefined => options untouched => the assembled response (+ cache key) is BYTE-IDENTICAL.
+      const lw = localeWhere(engine, name, parsed);
+      if (lw !== undefined) parsed.options.where = andWhere(parsed.options.where, lw);
       // Relations Slice 5: the populate plan reaches respond as a 3rd arg; it resolves + validates it
       // (unknown/scalar populate name -> QueryParseError -> 400) and assembles the nested response.
       return { status: 200, contentType: JSON_CT, body: engine.respond(name, parsed.options, parsed.populate) };
@@ -144,8 +165,14 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
       // Draft & Publish single-item gate: the addressed row must also satisfy the status predicate
       // (default published-only) for a D&P type, else 404. Undefined for a non-D&P type => respondById
       // resolves straight through (byte-identical to before).
+      // Single-item gate: the addressed row must satisfy BOTH the status (D&P) and locale (i18n) predicate
+      // for its respective opted-in type, else 404. AND-merge the two scalar leaves (either may be
+      // undefined); for a non-D&P/non-i18n type the merged predicate is undefined => respondById resolves
+      // straight through (byte-identical to before).
       const sw = statusWhere(engine, name, parsed);
-      const body = engine.respondById(name, Number(idRaw), parsed.populate, sw);
+      const lw = localeWhere(engine, name, parsed);
+      const gate = sw === undefined ? lw : lw === undefined ? sw : andWhere(sw, lw);
+      const body = engine.respondById(name, Number(idRaw), parsed.populate, gate);
       if (body === null) return errorResponse(404, `not found`);
       return { status: 200, contentType: JSON_CT, body };
     } catch (e) {

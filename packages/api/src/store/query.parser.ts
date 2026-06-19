@@ -51,6 +51,29 @@ export type PopulatePlan = PopulateNode[];
 /** The Strapi v5 Draft & Publish lifecycle selector (v5 replaced v4 `publicationState=preview|live`). */
 export type Status = 'draft' | 'published';
 
+/** The `*` sentinel a `locale` query param accepts to mean "all variants" (no locale predicate). */
+export const ALL_LOCALES = '*';
+
+/**
+ * A permissive locale slug bound: non-empty, <= 35 bytes (matches the `varchar(35)` locale column), and a
+ * BCP-47-ish shape (letters/digits/`_`/`-`, e.g. `en`, `pt-BR`, `zh_Hant`). NOT a registry of enabled
+ * locales — any well-formed slug is accepted in v1 (no per-type/project allowlist; documented deferral).
+ */
+const LOCALE_SLUG_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Validate a locale slug, returning it verbatim, or throw {@link QueryParseError} (`*` is NOT handled
+ * here — the caller special-cases the all-variants sentinel before validation). Shared by the read
+ * `locale` query param and (a later slice) the variant-create verb so both reject the same malformed
+ * shapes identically.
+ */
+export function validateLocale(value: string, what = 'locale'): string {
+  if (value.length === 0) throw new QueryParseError(`${what} must be a non-empty string`);
+  if (Buffer.byteLength(value, 'utf8') > 35) throw new QueryParseError(`${what} must be <= 35 bytes`);
+  if (!LOCALE_SLUG_RE.test(value)) throw new QueryParseError(`${what} must match /^[A-Za-z0-9_-]+$/ (e.g. en, pt-BR)`);
+  return value;
+}
+
 /** The parser's full structured output. `where` is omitted when there are no filters. */
 export interface ParsedQuery {
   where?: FilterNode;
@@ -62,6 +85,13 @@ export interface ParsedQuery {
    * type it is a no-op. Absent => the router defaults a D&P type to published-only.
    */
   status?: Status;
+  /**
+   * The i18n locale selector (`locale=<slug>` or `locale=*`), when present. VALIDATED here on EVERY type
+   * (a malformed slug -> 400) but only ACTED ON for an i18n type by the read router; on a non-i18n type it
+   * is a no-op. `*` ({@link ALL_LOCALES}) means all variants (no predicate). Absent => the router defaults
+   * an i18n type to DEFAULT_LOCALE.
+   */
+  locale?: string;
 }
 
 // --- the Strapi `$op` -> engine ScanOp map ----------------------------------
@@ -727,6 +757,7 @@ export function parseQuery(
   let keysetRaw: RawKeysetOptions | undefined;
   let populate: PopulatePlan = [];
   let status: Status | undefined;
+  let locale: string | undefined;
 
   for (const key of Object.keys(params)) {
     switch (key) {
@@ -765,6 +796,15 @@ export function parseQuery(
         status = v;
         break;
       }
+      case 'locale': {
+        // i18n locale selector. Validated on ANY type (a malformed slug -> 400); the all-variants `*`
+        // sentinel is accepted verbatim BEFORE slug validation. The EFFECT (folding a locale=eq predicate)
+        // is applied by the read router and only for an i18n type; on a non-i18n type the token parses but
+        // is ignored. `locale` is a selector, NOT a filter/sort field.
+        const v = leafString(params[key]!, 'locale');
+        locale = v === ALL_LOCALES ? ALL_LOCALES : validateLocale(v);
+        break;
+      }
       default:
         throw new QueryParseError(`unknown query parameter "${key}"`);
     }
@@ -780,5 +820,6 @@ export function parseQuery(
   const out: ParsedQuery = { options, populate };
   if (where !== undefined) out.where = where;
   if (status !== undefined) out.status = status;
+  if (locale !== undefined) out.locale = locale;
   return out;
 }

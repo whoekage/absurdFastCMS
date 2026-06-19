@@ -48,6 +48,8 @@ export interface FieldSpec {
   name: string;
   cmsType: CmsType;
   options?: FieldOptions;
+  /** i18n: true => the field is localized (per-variant); false => shared across locale variants. Defaults true. */
+  localized?: boolean;
 }
 
 /** A `content_types` row (snake_case as stored). */
@@ -59,6 +61,8 @@ export interface ContentTypeRow {
   updated_at: Date;
   /** Model A Draft & Publish opt-in: true => the ct_ table has a `published_at` system column. */
   draft_publish: boolean;
+  /** i18n opt-in: true => the ct_ table has a `locale` system column + UNIQUE(document_id, locale). */
+  i18n: boolean;
 }
 
 /** A `content_type_fields` row (snake_case as stored). */
@@ -73,6 +77,8 @@ export interface FieldRow {
   sort: number;
   default_value: string | null;
   params: Record<string, unknown>;
+  /** i18n: true => localized (per-variant); false => shared across the document's locale variants. */
+  localized: boolean;
 }
 
 /** A relation the caller wants to declare on an owner type. inverseField PRESENT => two-way. */
@@ -140,7 +146,7 @@ export function resolveFields(specs: FieldSpec[]): ResolvedField[] {
     const nullable = spec.options?.nullable ?? true;
     let defaultValue: unknown;
     if (spec.options?.default !== undefined) defaultValue = validateDefault(resolved, spec.options.default).sqlLiteral;
-    out.push({ name, resolved, nullable, defaultValue });
+    out.push({ name, resolved, nullable, defaultValue, localized: spec.localized ?? true });
   }
   return out;
 }
@@ -165,7 +171,7 @@ function defaultText(value: unknown): string | null {
  * `sort`) -> CREATE TABLE. A pre-check rejects an existing api_id BEFORE any DDL; the DB UNIQUE on
  * lower(api_id)/lower(table_name) is the atomic backstop for a race.
  */
-export async function createContentType(sql: Sql, params: { apiId: string; fields: FieldSpec[]; relations?: RelationSpec[]; draftPublish?: boolean }): Promise<ContentTypeRow> {
+export async function createContentType(sql: Sql, params: { apiId: string; fields: FieldSpec[]; relations?: RelationSpec[]; draftPublish?: boolean; i18n?: boolean }): Promise<ContentTypeRow> {
   const tableName = deriveTableName(params.apiId);
   const fields = resolveFields(params.fields);
   const relations = params.relations ?? [];
@@ -188,18 +194,19 @@ export async function createContentType(sql: Sql, params: { apiId: string; field
 
   return runSchemaTx(sql, tableName, async (tx) => {
     const [ct] = await tx<ContentTypeRow[]>`
-      INSERT INTO content_types (api_id, table_name, draft_publish) VALUES (${params.apiId}, ${tableName}, ${params.draftPublish ?? false}) RETURNING *
+      INSERT INTO content_types (api_id, table_name, draft_publish, i18n) VALUES (${params.apiId}, ${tableName}, ${params.draftPublish ?? false}, ${params.i18n ?? false}) RETURNING *
     `;
     for (let i = 0; i < fields.length; i++) {
       const f = fields[i]!;
       await tx`
-        INSERT INTO content_type_fields (content_type_id, name, cms_type, pg_type, engine_type, nullable, sort, default_value, params)
-        VALUES (${ct!.id}, ${f.name}, ${f.resolved.cmsType}, ${f.resolved.pgType}, ${f.resolved.engineType}, ${f.nullable}, ${i}, ${defaultText(f.defaultValue)}, ${tx.json(paramsOf(f.resolved))})
+        INSERT INTO content_type_fields (content_type_id, name, cms_type, pg_type, engine_type, nullable, sort, default_value, params, localized)
+        VALUES (${ct!.id}, ${f.name}, ${f.resolved.cmsType}, ${f.resolved.pgType}, ${f.resolved.engineType}, ${f.nullable}, ${i}, ${defaultText(f.defaultValue)}, ${tx.json(paramsOf(f.resolved))}, ${f.localized ?? true})
       `;
     }
     // The owner ct_ table must exist BEFORE any (possibly self-referential) link-table FK is created.
-    // D&P opt-in injects a conditional `published_at` system column (NULL=draft) — see compileCreateTable.
-    const ddl = compileCreateTable(tableName, fields, params.draftPublish ?? false);
+    // D&P opt-in injects a conditional `published_at` system column (NULL=draft); i18n opt-in injects a
+    // conditional NOT NULL `locale` column + UNIQUE(document_id, locale) — see compileCreateTable.
+    const ddl = compileCreateTable(tableName, fields, params.draftPublish ?? false, params.i18n ?? false);
     await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
 
     for (const spec of relations) {
@@ -230,7 +237,7 @@ export async function addField(sql: Sql, apiId: string, spec: FieldSpec): Promis
   const nullable = spec.options?.nullable ?? true;
   let defaultValue: unknown;
   if (spec.options?.default !== undefined) defaultValue = validateDefault(resolved, spec.options.default).sqlLiteral;
-  const field: ResolvedField = { name, resolved, nullable, defaultValue };
+  const field: ResolvedField = { name, resolved, nullable, defaultValue, localized: spec.localized ?? true };
 
   const tableName = deriveTableName(apiId);
   return runSchemaTx(sql, tableName, async (tx) => {
@@ -239,8 +246,8 @@ export async function addField(sql: Sql, apiId: string, spec: FieldSpec): Promis
     if (dup.length > 0) throw new FieldExistsError(name);
     const [{ next }] = await tx<{ next: number }[]>`SELECT COALESCE(MAX(sort) + 1, 0) AS next FROM content_type_fields WHERE content_type_id = ${ct.id}`;
     const [row] = await tx<FieldRow[]>`
-      INSERT INTO content_type_fields (content_type_id, name, cms_type, pg_type, engine_type, nullable, sort, default_value, params)
-      VALUES (${ct.id}, ${name}, ${resolved.cmsType}, ${resolved.pgType}, ${resolved.engineType}, ${nullable}, ${next!}, ${defaultText(defaultValue)}, ${tx.json(paramsOf(resolved))})
+      INSERT INTO content_type_fields (content_type_id, name, cms_type, pg_type, engine_type, nullable, sort, default_value, params, localized)
+      VALUES (${ct.id}, ${name}, ${resolved.cmsType}, ${resolved.pgType}, ${resolved.engineType}, ${nullable}, ${next!}, ${defaultText(defaultValue)}, ${tx.json(paramsOf(resolved))}, ${field.localized ?? true})
       RETURNING *
     `;
     const ddl = compileAddColumn(ct.table_name, field);

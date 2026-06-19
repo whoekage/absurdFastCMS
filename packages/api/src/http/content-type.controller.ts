@@ -96,6 +96,10 @@ function projectDef(def: ContentTypeDef): unknown {
       ...(f.length !== undefined ? { length: f.length } : {}),
       ...(f.scale !== undefined ? { scale: f.scale } : {}),
       ...(f.precision !== undefined ? { precision: f.precision } : {}),
+      // i18n: per-field localized flag. CONDITIONAL key — emitted ONLY for an i18n type so a non-i18n
+      // type's projected fields stay BYTE-IDENTICAL to before this feature (the existing builder suite is
+      // unaffected; only NEW i18n tests assert the key). The admin reads it to show the per-field toggle.
+      ...(def.i18n ? { localized: f.localized } : {}),
     })),
     // Relations are physical-detail-free (no linkTable, no content_type_id): each entry carries the
     // owner-side field key, its cardinality kind, the target api_id, whether THIS side owns the link
@@ -112,6 +116,9 @@ function projectDef(def: ContentTypeDef): unknown {
     // def stays BYTE-IDENTICAL to before this feature — the entire existing builder suite is unaffected
     // with zero edits, and only NEW D&P tests assert the key. (admin reads this to show the D&P toggle.)
     ...(def.draftPublish ? { draftPublish: true } : {}),
+    // i18n flag. CONDITIONAL key (same byte-identity guarantee as draftPublish): emitted ONLY for an i18n
+    // type, so a non-i18n type's projected def is unchanged. The admin reads it to show the i18n toggle.
+    ...(def.i18n ? { i18n: true } : {}),
   };
 }
 
@@ -232,6 +239,10 @@ export async function handleContentTypeRequest(ctx: ContentTypeContext, req: Con
         // Draft & Publish opt-in flag: validate it is a boolean if present (else 400). RAW pass-through
         // doctrine — no SQL is built here; the conditional `published_at` DDL lives in compileCreateTable.
         if (body.draftPublish !== undefined && typeof body.draftPublish !== 'boolean') return errorResponse(400, 'draftPublish must be a boolean');
+        // i18n opt-in flag: validate it is a boolean if present (else 400). RAW pass-through doctrine — no
+        // SQL is built here; the conditional `locale` column + UNIQUE(document_id, locale) DDL lives in
+        // compileCreateTable. Per-field `localized` rides along on each FieldSpec (defaults true).
+        if (body.i18n !== undefined && typeof body.i18n !== 'boolean') return errorResponse(400, 'i18n must be a boolean');
         const relations = body.relations as RelationSpec[] | undefined;
         // RAW pass-through to the validating repo — the api_id + every field name are validated there
         // BEFORE any DDL. The HTTP layer never derives a table name or builds SQL.
@@ -240,6 +251,7 @@ export async function handleContentTypeRequest(ctx: ContentTypeContext, req: Con
           fields: body.fields as FieldSpec[],
           ...(relations !== undefined ? { relations } : {}),
           ...(body.draftPublish !== undefined ? { draftPublish: body.draftPublish as boolean } : {}),
+          ...(body.i18n !== undefined ? { i18n: body.i18n as boolean } : {}),
         });
         // Create-time relations may target OTHER existing types; if any is two-way, its inverse row
         // landed on a target type, so rebuild every distinct two-way target's def before the owner load
@@ -268,6 +280,7 @@ export async function handleContentTypeRequest(ctx: ContentTypeContext, req: Con
             name: body.name as string,
             cmsType: body.cmsType as CmsType,
             options: body.options as FieldOptions | undefined,
+            ...(body.localized !== undefined ? { localized: body.localized as boolean } : {}),
           });
           const def = await syncSchema(ctx, apiId);
           return ok(201, projectDef(def));

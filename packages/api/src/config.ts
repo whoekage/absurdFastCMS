@@ -120,6 +120,18 @@ function getDebugInspector(): boolean {
 }
 
 /**
+ * The global default locale (i18n). Read from DEFAULT_LOCALE (dev: .env, test: .env.test); falls back to
+ * 'en' when unset. Used by the read router as the locale a `locale`-less read of an i18n type resolves to.
+ * Cached on first access.
+ */
+function getDefaultLocale(): string {
+  if ('defaultLocale' in cache) return cache.defaultLocale as string;
+  const loc = process.env.DEFAULT_LOCALE?.trim() || 'en';
+  cache.defaultLocale = loc;
+  return loc;
+}
+
+/**
  * Get TEST_DATABASE_URL for test setup (optional).
  * Used by testcontainers to connect to the test database instance.
  */
@@ -186,6 +198,10 @@ export const config = {
 
   get debugInspector(): boolean {
     return getDebugInspector();
+  },
+
+  get defaultLocale(): string {
+    return getDefaultLocale();
   },
 
   // Dev-only constant (always available)

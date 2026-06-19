@@ -37,7 +37,9 @@ export const SYSTEM_FIELDS: readonly FieldDef[] = [
 // `published_at` (Draft & Publish): reject it in a public write body on EVERY type (uniform mass-assignment
 // guard) so a client can never spoof publish state through POST/PUT — only the publish/unpublish endpoints
 // set it. Distinct from the article seed's USER field `publishedAt` (camelCase), which stays writable.
-const SYSTEM_COLUMN_NAMES: ReadonlySet<string> = new Set(['id', 'document_id', 'created_at', 'updated_at', 'published_at']);
+// `locale` (i18n system column): reject it in a public write body on EVERY type so a client can never
+// spoof a variant's locale through POST/PUT — only the variant-create verb (a later slice) sets it.
+const SYSTEM_COLUMN_NAMES: ReadonlySet<string> = new Set(['id', 'document_id', 'created_at', 'updated_at', 'published_at', 'locale']);
 
 /** The closed set of valid engine column types (engine_type IS a ColumnType 1:1, validated against this). */
 const KNOWN_COLUMN_TYPES: ReadonlySet<string> = new Set<ColumnType>([
@@ -93,6 +95,13 @@ export interface RegistryField {
   length?: number;
   /** type === 'json' (drives the `::text` SELECT cast on both load and RETURNING). */
   json: boolean;
+  /**
+   * i18n: true => the field is localized (each locale variant carries its own value); false => shared
+   * across the document's locale variants (write-side fan-out keeps siblings in sync — a later slice).
+   * Always true for a user field on a non-i18n type (no variants exist, so it is moot); system fields
+   * (incl. the synthesized `locale` itself) are never per-field-localized => false.
+   */
+  localized: boolean;
 }
 
 /** A positional coercion descriptor (parallel to {@link ContentTypeDef.fields}) for the loader hot path. */
@@ -167,6 +176,15 @@ export interface ContentTypeDef {
    * synthesized => no FieldDef/column/SELECT/wire key/index — the read arena is BYTE-IDENTICAL to today.
    */
   draftPublish: boolean;
+  /**
+   * i18n opt-in (per-type). When true, the synthesized `document_id` (i32) + `locale` (string) system
+   * fields are appended to `fields` (so document_id un-skips from the be-02b loader-skip: it loads as a
+   * queryable i32 column + eq-index + wire-emitted, and locale loads + eq-indexes + emits), and the read
+   * path supports a `locale` filter (default DEFAULT_LOCALE). When false, NEITHER is synthesized => no
+   * FieldDef/column/SELECT/wire key/index for them — the read arena is BYTE-IDENTICAL to today (the
+   * be-02b document_id loader-skip stays in force).
+   */
+  i18n: boolean;
 }
 
 /** Map a positive number out of a jsonb `params` object, or undefined (presence check; 0 is valid). */
@@ -209,6 +227,7 @@ function buildUserField(apiId: string, row: FieldRow): RegistryField {
     system: false,
     hasDefault: row.default_value !== null,
     json: type === 'json',
+    localized: row.localized,
   };
 
   if (type === 'decimal') {
@@ -252,6 +271,7 @@ function systemField(def: FieldDef): RegistryField {
     system: true,
     hasDefault: true,
     json: false,
+    localized: false,
   };
 }
 
@@ -271,6 +291,51 @@ function publishedAtField(): RegistryField {
     system: true,
     hasDefault: true,
     json: false,
+    localized: false,
+  };
+}
+
+/**
+ * The synthesized i18n `document_id` system field (i18n types ONLY). UN-SKIPS the be-02b loader-skip:
+ * for an i18n type document_id loads as a queryable i32 column, is eq-indexed (variant grouping
+ * `WHERE document_id = X` is O(1)), and is emitted on the wire as a plain JSON NUMBER. `system:true`
+ * (never writable / never required on create), `hasDefault:true` (the column DEFAULTs to
+ * nextval('document_id_seq')). `localized:false` — document_id is the SHARED grouping key across variants.
+ * For a non-i18n type this field is NOT synthesized => document_id stays loader-skipped (byte-identical).
+ */
+function documentIdField(): RegistryField {
+  return {
+    name: 'document_id',
+    column: 'document_id',
+    type: 'i32',
+    cmsType: 'integer',
+    nullable: false,
+    system: true,
+    hasDefault: true,
+    json: false,
+    localized: false,
+  };
+}
+
+/**
+ * The synthesized i18n `locale` system field (i18n types ONLY). NOT NULL, server-controlled (the write
+ * path sets it; `system:true` keeps it out of `writable`, and SYSTEM_COLUMN_NAMES rejects it in a body).
+ * Loaded as a string column, eq-indexed (so the `locale` filter is index-backed), emitted on the wire.
+ * `hasDefault:false` — the server always supplies a locale (a plain create uses the request/default
+ * locale, a variant create the addressed locale); it is never auto-defaulted by the DB.
+ */
+function localeField(): RegistryField {
+  return {
+    name: 'locale',
+    column: 'locale',
+    type: 'string',
+    cmsType: 'string',
+    nullable: false,
+    system: true,
+    hasDefault: false,
+    json: false,
+    localized: false,
+    length: 35,
   };
 }
 
@@ -305,6 +370,18 @@ function buildIndexPlan(fields: RegistryField[]): IndexPlan {
     // skip indexing it (mirrors the json skip). Flip to `sorted` here if a future product wants sort-by-
     // publish-date; the status predicate stays bitset-served either way.
     if (f.name === 'published_at') continue;
+    // i18n: `document_id` is the variant-grouping key — eq-index it so `WHERE document_id = X` is O(1)
+    // (write-side fan-out + variant create lean on it). `locale` is eq-filtered by the read router — eq-
+    // index it so the locale predicate is index-backed (not a dictionary scan). Both ONLY exist in
+    // `fields` for an i18n type, so a non-i18n type's index plan never sees them (byte-identical).
+    if (f.name === 'document_id') {
+      eq.push(f.name);
+      continue;
+    }
+    if (f.name === 'locale') {
+      eq.push(f.name);
+      continue;
+    }
     if (f.type === 'json') continue;
     if (f.type === 'bool' || (f.type === 'string' && f.enumValues !== undefined)) {
       eq.push(f.name);
@@ -354,10 +431,16 @@ function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[], relationRows: Relat
   const tableName = deriveTableName(ct.api_id);
 
   const fields: RegistryField[] = SYSTEM_FIELDS.map(systemField);
+  // i18n opt-in: un-skip the synthesized `document_id` system field (be-02b loader-skip becomes
+  // conditional) BEFORE the published_at push. For a non-i18n type NO document_id field is pushed => it
+  // stays loader-skipped (not loaded/indexed/emitted) — the read arena is byte-identical.
+  if (ct.i18n) fields.push(documentIdField());
   // D&P opt-in: append the synthesized `published_at` system field AFTER the base system fields and
-  // BEFORE user fields — matching the physical DDL column order (id/document_id/created_at/updated_at/
-  // published_at/...user). For a non-D&P type NO field is pushed => the read arena is byte-identical.
+  // BEFORE user fields — matching the physical DDL column order. For a non-D&P type NO field is pushed.
   if (ct.draft_publish) fields.push(publishedAtField());
+  // i18n opt-in: append the synthesized `locale` system field after published_at, before user fields
+  // (matching the DDL column order). For a non-i18n type NO locale field is pushed (byte-identical).
+  if (ct.i18n) fields.push(localeField());
   for (const row of fieldRows) fields.push(buildUserField(ct.api_id, row));
 
   const fieldDefs: FieldDef[] = fields.map((f) => ({
@@ -393,6 +476,7 @@ function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[], relationRows: Relat
     relations,
     relationsByField,
     draftPublish: ct.draft_publish,
+    i18n: ct.i18n,
   };
 }
 

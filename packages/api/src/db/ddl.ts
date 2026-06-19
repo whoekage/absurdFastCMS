@@ -46,7 +46,9 @@ export const TABLE_PREFIX = 'ct_';
 // not), cheap + uniform, so a non-D&P type cannot declare a column that would collide if it later opted
 // in, and a client cannot spoof one. NOTE: `publishedAt` (camelCase, the article seed's USER field) is
 // NOT reserved — only the snake_case underscore form is, so the seed field keeps working byte-identically.
-export const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(['id', 'document_id', 'created_at', 'updated_at', 'published_at']);
+// `locale` (snake_case) is the i18n system column — reserved on EVERY type (i18n or not), so a non-i18n
+// type cannot declare a column that would collide if it later opted in, and a client cannot spoof one.
+export const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(['id', 'document_id', 'created_at', 'updated_at', 'published_at', 'locale']);
 /** Tables/api_ids a user type may not collide with. */
 export const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['content_types', 'content_type_fields', 'content_type_relations', '_migrations']);
 
@@ -329,6 +331,8 @@ export interface ResolvedField {
   nullable: boolean;
   /** validated/bound default value (from {@link validateDefault}); undefined = no default. */
   defaultValue?: unknown;
+  /** i18n: true => localized (per-variant); false => shared. Stored in meta; no effect on the column DDL. */
+  localized?: boolean;
 }
 
 /** Render one user column onto a Kysely createTable/alterTable add-column builder. */
@@ -366,20 +370,39 @@ function columnSpec(name: string, field: ResolvedField): (cb: import('kysely').C
  *
  * Alternative considered + REJECTED: `published_at DEFAULT now()`. Model A requires create=draft (NULL);
  * a default would auto-publish every insert, and `now()` is non-deterministic (breaks byte-exact fixtures).
+ *
+ * i18n (per-type opt-in): when `i18n` is true, a NOT NULL snake_case `locale varchar(35)` system column is
+ * injected AFTER `published_at` and BEFORE the user columns (matching the registry field order), plus a
+ * `UNIQUE(document_id, locale)` constraint (one row per (document, locale)). NO DEFAULT — the server sets
+ * `locale` on every insert (a variant create supplies it; a plain create uses the request/default locale).
+ * With `i18n=false` (the DEFAULT) the emitted SQL is BYTE-IDENTICAL to before — the `if` is the only delta.
  */
-export function compileCreateTable(tableName: string, fields: ResolvedField[], draftPublish = false): CompiledQuery {
+const LOCALE_VARCHAR = 'varchar(35)'; // BCP-47-ish slug bound (e.g. `en`, `pt-BR`); matches the locale validator.
+
+export function compileCreateTable(tableName: string, fields: ResolvedField[], draftPublish = false, i18n = false): CompiledQuery {
   let builder = compiler.schema
     .createTable(tableName)
     .addColumn('id', 'serial', (cb) => cb.primaryKey().notNull())
     // Global document_id (i32) — the variant-grouping key for draft/publish + i18n. DEFAULTs from the
     // shared sequence (0001_init.sql) so a plain INSERT auto-allocates; a variant supplies an existing
-    // value. NOT projected by the loader (not in registry SYSTEM_FIELDS) — reads stay byte-identical.
+    // value. NOT projected by the loader for a non-i18n type (not in registry SYSTEM_FIELDS) — reads stay
+    // byte-identical; for an i18n type the registry un-skips it (queryable + emitted).
     .addColumn('document_id', sql`integer`, (cb) => cb.notNull().defaultTo(sql`nextval('document_id_seq')`))
     .addColumn('created_at', sql`timestamptz`, (cb) => cb.notNull().defaultTo(sql`now()`))
     .addColumn('updated_at', sql`timestamptz`, (cb) => cb.notNull().defaultTo(sql`now()`));
   if (draftPublish) {
     // NULL = draft. No DEFAULT (a fresh insert is a draft); publish writes it explicitly.
     builder = builder.addColumn('published_at', sql`timestamptz`, (cb) => cb);
+  }
+  if (i18n) {
+    // NOT NULL: every variant row has a locale (server-set). No DEFAULT — the write path supplies it.
+    builder = builder.addColumn('locale', sql.raw(LOCALE_VARCHAR), (cb) => cb.notNull());
+    // UNIQUE(document_id, locale): one row per (document, locale). Constraint name capped to 63 bytes.
+    const suffix = '_doc_loc_uq';
+    const room = MAX_IDENTIFIER_BYTES - suffix.length;
+    // The compile-only Kysely is typed `Record<string, never>`, so the dynamic ct_ table's columns are
+    // not in its literal column union — cast the column list (the names are validated system columns).
+    builder = builder.addUniqueConstraint(validateIdentifier(`${tableName.slice(0, room)}${suffix}`), ['document_id', 'locale'] as never[]);
   }
   for (const f of fields) {
     builder = builder.addColumn(f.name, sql.raw(f.resolved.pgType), columnSpec(f.name, f));

@@ -20,7 +20,13 @@ CREATE TABLE IF NOT EXISTS "content_types" (
 	-- DEFAULT false => every existing/seeded type is non-D&P (byte-identical reads); pre-launch drop &
 	-- recreate means no backfill. NOTE: distinct from the article seed's USER field "publishedAt"
 	-- (camelCase) — physically and on the wire a different key.
-	"draft_publish" boolean NOT NULL DEFAULT false
+	"draft_publish" boolean NOT NULL DEFAULT false,
+	-- PER-TYPE OPT-IN i18n (localization). META flag only: when true, the Builder DDL adds a NOT NULL
+	-- snake_case "locale" system column (varchar) to ct_<type> + a UNIQUE(document_id, locale) constraint
+	-- (one row per (document, locale)). DEFAULT false => every existing/seeded type is non-i18n
+	-- (byte-identical reads: no locale column, document_id still loader-skipped). Pre-launch drop &
+	-- recreate means no backfill.
+	"i18n" boolean NOT NULL DEFAULT false
 );
 -- Case-insensitive uniqueness on BOTH the api_id and the derived table_name (PG-quoting semantics +
 -- truncation rule): two api_ids that fold/truncate to one table are rejected by the DB as a backstop.
@@ -37,7 +43,13 @@ CREATE TABLE IF NOT EXISTS "content_type_fields" (
 	"nullable"        boolean NOT NULL DEFAULT true,
 	"sort"            integer NOT NULL,       -- ordering is metadata only; eager, NOT NULL, no nulls
 	"default_value"   text,                   -- constant default as a literal string (NULL = none)
-	"params"          jsonb NOT NULL DEFAULT '{}'::jsonb  -- {length}|{precision,scale}|{values:[...]} etc.
+	"params"          jsonb NOT NULL DEFAULT '{}'::jsonb,  -- {length}|{precision,scale}|{values:[...]} etc.
+	-- PER-FIELD i18n localization (only meaningful on an i18n type). true => the field is LOCALIZED
+	-- (each locale variant row carries its own value). false => the field is SHARED across the
+	-- document's locale variants (write-side fan-out keeps siblings in sync — a later slice). DEFAULT
+	-- true: every field is localized by default, so each variant row stands alone and reads stay
+	-- one-row-per-locale (S1 read-fast invariant). Irrelevant for a non-i18n type (no variants exist).
+	"localized"       boolean NOT NULL DEFAULT true
 );
 -- App enforces case-insensitive duplicate rejection; these are the DB backstops.
 CREATE UNIQUE INDEX IF NOT EXISTS "ctf_type_name_lower_uq" ON "content_type_fields" (content_type_id, lower("name"));

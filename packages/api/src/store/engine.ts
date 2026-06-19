@@ -208,6 +208,14 @@ export class Engine {
   private readonly draftPublishFlags = new Map<string, boolean>();
 
   /**
+   * Per-type i18n flag, derived from the presence of the synthesized `locale` field in the type's schema
+   * (the registry only synthesizes it for an i18n type). Set on define/registerDetached/replaceType,
+   * purged on dropType. The read router reads this to decide whether to fold a `locale` predicate into the
+   * query; a non-i18n type is never touched (byte-identical reads).
+   */
+  private readonly i18nFlags = new Map<string, boolean>();
+
+  /**
    * RELATION STORE: the in-memory CSR {@link Relation} per declared OWNER-side relation, keyed by
    * `ownerApiId + "\u0000" + field` (NUL-joined — api_ids/fields pass `validateIdentifier` and never
    * contain NUL, so `(a,bc)` and `(ab,c)` can never alias). Populated by the loader (boot phase-2 +
@@ -273,6 +281,16 @@ export class Engine {
   /** Whether `name` opted into Model A Draft & Publish (has the `published_at` system column). */
   isDraftPublish(name: string): boolean {
     return this.draftPublishFlags.get(name) ?? false;
+  }
+
+  /** Record a type's i18n flag from its field schema (presence of the synthesized `locale` system field). */
+  private trackI18n(name: string, fields: readonly FieldDef[]): void {
+    this.i18nFlags.set(name, fields.some((f) => f.name === 'locale'));
+  }
+
+  /** Whether `name` opted into i18n (has the `locale` system column). */
+  isI18n(name: string): boolean {
+    return this.i18nFlags.get(name) ?? false;
   }
 
   /** NUL-joined relation key (collision-free: validated api_ids/fields never contain NUL). */
@@ -365,6 +383,7 @@ export class Engine {
     );
     this.trackSchema(name, fields);
     this.trackDraftPublish(name, fields);
+    this.trackI18n(name, fields);
     return t;
   }
 
@@ -448,6 +467,7 @@ export class Engine {
     this.hasRawField.set(name, detached.hasRawField);
     this.trackSchema(name, detached.table.fields);
     this.trackDraftPublish(name, detached.table.fields);
+    this.trackI18n(name, detached.table.fields);
   }
 
   /**
@@ -473,6 +493,7 @@ export class Engine {
     // outstanding cursor survives a write (the headline write-stability win) but not a DDL.
     this.trackSchema(name, detached.table.fields);
     this.trackDraftPublish(name, detached.table.fields);
+    this.trackI18n(name, detached.table.fields);
     this.bus.publish(name); // drop ONLY this type's cached responses (frees the old arena's views).
   }
 
@@ -493,6 +514,7 @@ export class Engine {
     // must bump past any version an old cursor was signed under (so a stale cursor never re-validates).
     this.schemaShapes.delete(name);
     this.draftPublishFlags.delete(name);
+    this.i18nFlags.delete(name);
     // Purge every relation referencing the dropped type: by KEY (forward relations X owns + inverses
     // keyed on X) AND by stored ENDPOINT object (a SURVIVING partner's two-way inverse that points back
     // at X — keyed on the partner, so missed by the key scan). Deleting from a Map while iterating its

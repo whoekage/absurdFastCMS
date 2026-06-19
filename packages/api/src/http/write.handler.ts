@@ -2,8 +2,10 @@ import type { Sql } from 'postgres';
 import type { Engine } from '../store/engine.ts';
 import type { Registry, ContentTypeDef } from '../store/registry.ts';
 import { validateBody, BodyParseError } from '../store/body.parser.ts';
-import { insertEntry, updateEntry, deleteEntry, publishEntry, unpublishEntry, serializeEntry, EntryWriteError } from '../db/entry.repository.ts';
+import { insertEntry, updateEntry, deleteEntry, publishEntry, unpublishEntry, readSiblingForVariant, serializeEntry, EntryWriteError } from '../db/entry.repository.ts';
 import { applyRelationOps } from '../db/relation.repository.ts';
+import { validateLocale, QueryParseError } from '../store/query.parser.ts';
+import { config } from '../config.ts';
 import { CANONICAL_INT, JSON_CT, errorResponse, type CoreResponse } from './read.router.ts';
 
 /**
@@ -66,6 +68,12 @@ export interface WriteRequest {
    * token before setting this; an unknown token never reaches here.
    */
   action?: 'publish' | 'unpublish';
+  /**
+   * i18n VARIANT-CREATE sub-route (`POST /:type/:id/locales/:locale`): the target locale slug when on that
+   * route (the `:id` addresses an existing sibling row whose document the new variant joins), otherwise
+   * undefined. The adapter passes the RAW slug; this handler validates its shape (a malformed slug -> 400).
+   */
+  variantLocale?: string;
 }
 
 /** Build the write response Buffer: `{"data":<serialized row>,"meta":{}}`, byte-consistent with GET. */
@@ -78,12 +86,55 @@ function writeOk(status: number, def: ContentTypeDef, row: Record<string, unknow
 }
 
 export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise<CoreResponse> {
-  const { method, type, idRaw, body, action } = req;
+  const { method, type, idRaw, body, action, variantLocale } = req;
   // Registry membership === engine membership (same canonical api_id). Gate BEFORE any SQL.
   const def = ctx.registry().get(type);
   if (def === undefined || !ctx.engine().has(type)) return errorResponse(404, `unknown content-type "${type}"`);
 
   try {
+    // i18n VARIANT-CREATE sub-route (POST /:type/:id/locales/:locale). Gated FIRST so it never collides
+    // with the plain POST-create branch. Creates a NEW row that joins the addressed sibling's document
+    // (reusing its document_id), COPIES every shared field from the sibling, OVERLAYS the request's
+    // localized fields, and server-sets `locale`. UNIQUE(document_id, locale) rejects a duplicate locale.
+    if (variantLocale !== undefined) {
+      if (method !== 'POST') return errorResponse(405, `method ${method} not allowed`);
+      if (!def.i18n) return errorResponse(400, 'content-type does not support i18n');
+      const locale = validateLocale(variantLocale); // QueryParseError -> 400 (caught below).
+      const id = parseId(idRaw);
+      if (id === null) return errorResponse(404, 'not found');
+      // Validate the request body in 'update' mode (type-checks + coerces each present field; rejects
+      // unknown/system keys) — but a variant whose fields are ALL shared may legitimately carry NO body,
+      // so an empty body is allowed here (the 'update' "at least one field" rule does NOT apply to a
+      // create). We then re-check that every required LOCALIZED field is present (shared required fields
+      // are satisfied by the copy from the sibling).
+      const { data, relationOps } = validateBody(def, body ?? {}, 'variant');
+      for (const reqName of def.requiredOnCreate) {
+        const f = def.writableByName.get(reqName)!;
+        if (f.localized && !(reqName in data)) return errorResponse(400, `missing required field "${reqName}"`);
+      }
+      const row = await ctx.sql.begin(async (tx) => {
+        const sib = await readSiblingForVariant(tx, def, id);
+        if (sib === null) return null; // no such sibling row -> 404.
+        // Merge: shared fields from the sibling FIRST, then overlay the request's localized fields. The
+        // request can only carry localized fields here (a shared key in the body would overwrite the copy
+        // for THIS variant only, diverging siblings); reject a shared key to keep S1 consistency intact.
+        for (const key of Object.keys(data)) {
+          if (!def.writableByName.get(key)!.localized) {
+            throw new BodyParseError(`field "${key}" is shared across locales and cannot be set on a variant create`);
+          }
+        }
+        const merged = { ...sib.shared, ...data };
+        const r = await insertEntry(tx, def, merged, { documentId: sib.documentId, locale });
+        // Per §7 relations are PER-VARIANT (link rows key the physical row id), so any relation ops apply
+        // to the NEW row only — exactly the same applyRelationOps seam as a plain create.
+        await applyRelationOps(tx, def, Number(r['id']), relationOps);
+        return r;
+      });
+      if (row === null) return errorResponse(404, 'not found');
+      await ctx.rebuild(type);
+      return writeOk(201, def, row);
+    }
+
     // Draft & Publish action sub-route (POST /:type/:id/actions/publish|unpublish). Gated FIRST so it
     // never collides with the plain POST-create branch (a create has no `action`).
     if (action !== undefined) {
@@ -105,10 +156,14 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
 
     if (method === 'POST') {
       const { data, relationOps } = validateBody(def, body, 'create');
+      // i18n: a plain create starts a NEW document (fresh document_id via nextval) in the DEFAULT_LOCALE
+      // — the (NOT NULL) `locale` column is server-set here (the body can't carry it). A new locale of an
+      // EXISTING document goes through the variant-create verb above. Non-i18n => opts omitted (unchanged).
+      const opts = def.i18n ? { locale: config.defaultLocale } : undefined;
       // ONE tx: INSERT scalars RETURNING id, then apply the relation ops with that id. A FK 23503 on a
       // non-existent related id rolls the WHOLE tx back -> no orphan ct_ row, no partial link write.
       const row = await ctx.sql.begin(async (tx) => {
-        const r = await insertEntry(tx, def, data);
+        const r = await insertEntry(tx, def, data, opts);
         await applyRelationOps(tx, def, Number(r['id']), relationOps);
         return r;
       });
@@ -146,6 +201,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
   } catch (e) {
     if (e instanceof BodyParseError) return errorResponse(400, e.message);
     if (e instanceof EntryWriteError) return errorResponse(400, e.message);
+    if (e instanceof QueryParseError) return errorResponse(400, e.message); // malformed variant locale slug.
     throw e; // server bug / DB error -> adapter maps to 500
   }
 }

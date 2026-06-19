@@ -55,6 +55,10 @@ export function mapPgError(e: unknown): never {
 /** Bind a single writable value to the form Postgres stores exactly (every value a bound param). */
 function bindValue(field: RegistryField, value: unknown): unknown {
   if (value === null) return null;
+  // A copied json value (variant-create shared-field copy) arrives as RawJson wrapping the verbatim
+  // ::text — bind that text straight to the `::jsonb` placeholder (re-parses to the SAME jsonb value).
+  // The normal write path passes a parsed JS value (body.parser) which is handled by the default arm.
+  if (value instanceof RawJson) return value.raw;
   switch (field.type) {
     case 'i64':
       // The validator produced a canonical digit STRING; bind it so int8 round-trips exactly.
@@ -97,10 +101,13 @@ export async function insertEntry(
   sql: Sql,
   def: ContentTypeDef,
   data: Record<string, unknown>,
-  // INTERNAL reuse seam — never reachable from the wire (body.parser rejects a `document_id` key).
-  // be-03 (draft/publish) + be-06 (i18n) pass an existing parent id so a variant shares its document.
-  // Left undefined here: the document_id column DEFAULTs to nextval('document_id_seq') and auto-allocates.
-  opts?: { documentId?: number },
+  // INTERNAL server-controlled seam — never reachable from the wire (body.parser rejects `document_id`
+  // and `locale` keys via SYSTEM_COLUMN_NAMES). be-03 (draft/publish) + be-06 (i18n) pass an existing
+  // parent id so a variant shares its document; the i18n write path also supplies the variant `locale`.
+  //   - `documentId` left undefined: the column DEFAULTs to nextval('document_id_seq') (auto-allocate).
+  //   - `locale` left undefined: omitted from the INSERT — only an i18n type has the (NOT NULL) column,
+  //     so a plain create on an i18n type MUST pass it (the controller does); a non-i18n type never does.
+  opts?: { documentId?: number; locale?: string },
 ): Promise<Record<string, unknown>> {
   assertTableName(def.tableName); // belt-and-suspenders identifier gate, symmetric with the loader.
   const keys = Object.keys(data);
@@ -110,6 +117,12 @@ export async function insertEntry(
   if (opts?.documentId !== undefined) {
     cols.push('document_id');
     vals.push(opts.documentId);
+    jsonFlags.push(false);
+  }
+  if (opts?.locale !== undefined) {
+    // Server-controlled like document_id: `locale` is a NOT NULL i18n system column the body can't spoof.
+    cols.push('locale');
+    vals.push(opts.locale);
     jsonFlags.push(false);
   }
   for (const key of keys) {
@@ -136,7 +149,19 @@ export async function insertEntry(
   }
 }
 
-/** UPDATE the present fields of entry `id` (+ updated_at=now()); `null` when no row has that id. */
+/**
+ * UPDATE the present fields of entry `id` (+ updated_at=now()); `null` when no row has that id.
+ *
+ * i18n SHARED-FIELD FAN-OUT (S1): on an i18n type a SHARED field (`localized=false`) is conceptually one
+ * value for the whole document, so an update to it must propagate to EVERY locale variant (same
+ * `document_id`). LOCALIZED fields (`localized=true`) stay scoped to the addressed row. We do it in TWO
+ * statements inside the caller's ONE tx:
+ *   1. the addressed-row UPDATE (ALL present fields, both localized + shared) — also confirms the row
+ *      exists (RETURNING the full row, incl. `document_id`), so a missing id is still `null` -> 404.
+ *   2. (i18n + ≥1 shared field present) a sibling UPDATE of ONLY the shared fields, scoped by the
+ *      addressed row's `document_id` and `id <> $id`, so the new shared value lands on every other variant.
+ * For a NON-i18n type `def.i18n` is false => statement 2 never runs => this is BYTE-IDENTICAL to before.
+ */
 export async function updateEntry(sql: Sql, def: ContentTypeDef, id: number, data: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   assertTableName(def.tableName);
   const keys = Object.keys(data);
@@ -157,10 +182,78 @@ export async function updateEntry(sql: Sql, def: ContentTypeDef, id: number, dat
   const text = `UPDATE ${quoteIdent(def.tableName)} SET ${assignments.join(', ')} WHERE ${quoteIdent('id')} = ${idPlaceholder} RETURNING ${returningList(def)}`;
   try {
     const rows = await sql.unsafe(text, vals as never[]);
-    return rows.length ? fromDb(def, rows[0] as Record<string, unknown>) : null;
+    if (rows.length === 0) return null;
+    const row = fromDb(def, rows[0] as Record<string, unknown>);
+
+    // i18n shared-field fan-out: propagate the SHARED assignments to the document's other variants.
+    if (def.i18n) {
+      const sharedKeys = keys.filter((k) => !def.writableByName.get(k)!.localized);
+      if (sharedKeys.length > 0) {
+        const docId = row['document_id'] as number; // present: document_id is a projected field on i18n.
+        const sAssign: string[] = [];
+        const sVals: unknown[] = [];
+        let sp = 1;
+        for (const key of sharedKeys) {
+          const field = def.writableByName.get(key)!;
+          const ph = field.json ? `$${sp}::jsonb` : `$${sp}`;
+          sAssign.push(`${quoteIdent(field.column)} = ${ph}`);
+          sVals.push(bindValue(field, data[key]));
+          sp += 1;
+        }
+        sAssign.push(`${quoteIdent('updated_at')} = now()`);
+        const docPh = `$${sp}`;
+        const idPh = `$${sp + 1}`;
+        sVals.push(docId, id);
+        const sText = `UPDATE ${quoteIdent(def.tableName)} SET ${sAssign.join(', ')} WHERE ${quoteIdent('document_id')} = ${docPh} AND ${quoteIdent('id')} <> ${idPh}`;
+        await sql.unsafe(sText, sVals as never[]);
+      }
+    }
+    return row;
   } catch (e) {
     mapPgError(e);
   }
+}
+
+/**
+ * The raw column snapshot of an i18n sibling row, used by the variant-create verb to COPY shared fields.
+ * `documentId` is the variant-grouping key (reused for the new row). `shared` carries the bound wire-form
+ * value of every SHARED user field (`localized=false`), keyed by engine field name — exactly the shape
+ * {@link insertEntry}'s `data` expects (i64/decimal as STRING, date as Date, json as verbatim `::text`
+ * which binds back through the `::jsonb` placeholder). LOCALIZED fields are NOT copied (the request
+ * supplies them); system columns are excluded.
+ */
+export interface SiblingSnapshot {
+  documentId: number;
+  shared: Record<string, unknown>;
+}
+
+/**
+ * Read the sibling row addressed by `id` on an i18n type and snapshot its `document_id` + every SHARED
+ * user field, for the variant-create verb. SELECTs the shared columns by their registry-validated names
+ * (json as `::text`, wrapped in {@link RawJson} so it re-binds verbatim). Returns `null` when no row has
+ * that id. Caller must have verified `def.i18n`.
+ */
+export async function readSiblingForVariant(sql: Sql, def: ContentTypeDef, id: number): Promise<SiblingSnapshot | null> {
+  assertTableName(def.tableName);
+  const sharedFields = def.writable.filter((f) => !f.localized);
+  const cols = ['document_id', ...sharedFields.map((f) => f.column)];
+  const selectList = cols
+    .map((c) => {
+      const f = sharedFields.find((sf) => sf.column === c);
+      return f?.json ? `${quoteIdent(c)}::text AS ${quoteIdent(c)}` : quoteIdent(c);
+    })
+    .join(', ');
+  const text = `SELECT ${selectList} FROM ${quoteIdent(def.tableName)} WHERE ${quoteIdent('id')} = $1`;
+  const rows = await sql.unsafe(text, [id] as never[]);
+  if (rows.length === 0) return null;
+  const dbRow = rows[0] as Record<string, unknown>;
+  const shared: Record<string, unknown> = {};
+  for (const f of sharedFields) {
+    const v = dbRow[f.column];
+    // json: re-bind the verbatim ::text via a RawJson so insertEntry can splice it through ::jsonb.
+    shared[f.name] = f.json && v !== null && v !== undefined ? new RawJson(v as string) : v;
+  }
+  return { documentId: dbRow['document_id'] as number, shared };
 }
 
 /**

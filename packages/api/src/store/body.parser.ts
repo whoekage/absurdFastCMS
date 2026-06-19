@@ -28,7 +28,13 @@ export class BodyParseError extends Error {
   }
 }
 
-export type WriteMode = 'create' | 'update';
+/**
+ * `create` requires every NOT-NULL-without-default field; `update` (partial) requires at least one
+ * writable/relation field; `variant` (i18n variant create) requires NOTHING (a variant whose fields are
+ * all SHARED is copied from the sibling, so an empty body is valid — the controller re-checks that every
+ * required LOCALIZED field is present). All three type-check + coerce each PRESENT field identically.
+ */
+export type WriteMode = 'create' | 'update' | 'variant';
 
 /**
  * One validated relation mutation parsed off the body. `field` is the relation API key (a Map-lookup key
@@ -80,9 +86,11 @@ export function validateBody(def: ContentTypeDef, raw: unknown, mode: WriteMode)
     for (const req of def.requiredOnCreate) {
       if (!(req in out)) throw new BodyParseError(`missing required field "${req}"`);
     }
-  } else if (Object.keys(out).length === 0 && relationOps.length === 0) {
+  } else if (mode === 'update' && Object.keys(out).length === 0 && relationOps.length === 0) {
     throw new BodyParseError('update body has no writable or relation fields');
   }
+  // mode === 'variant': require NOTHING here (an all-shared variant carries no body) — the caller
+  // re-checks required LOCALIZED fields after merging the sibling's shared copy.
 
   return { data: out, relationOps };
 }

@@ -182,6 +182,41 @@ function handleWriteActionRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, ctx
   });
 }
 
+/**
+ * The i18n VARIANT-CREATE route (`POST /:type/:id/locales/:locale`). Structurally identical to
+ * {@link handleWriteRoute} but reads a THIRD path param (the target locale slug) AND a body (the request
+ * supplies the localized fields). The 4-segment path is structurally distinct from the 2-segment data
+ * routes and the 4-segment `/actions/:action` (the literal `locales` vs `actions` disambiguates), so
+ * route ordering is irrelevant (uWS matches by segment count + literals). Always treated as POST.
+ */
+function handleVariantCreateRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, ctx: WriteContext): void {
+  // Params are positional over the `:`-prefixed segments ONLY (the literal `locales` is not a param):
+  // (0)=:type, (1)=:id, (2)=:locale.
+  const type = req.getParameter(0) ?? '';
+  const idRaw = req.getParameter(1) ?? '';
+  const variantLocale = req.getParameter(2) ?? '';
+  const { aborted } = readBody(res, (raw) => {
+    void (async () => {
+      if (raw === null) return corkSend(res, aborted, errorResponse(413, 'request body too large'));
+      let body: unknown = undefined;
+      if (raw.length > 0) {
+        try {
+          body = JSON.parse(raw.toString('utf8'));
+        } catch {
+          return corkSend(res, aborted, errorResponse(400, 'invalid JSON body'));
+        }
+      }
+      let result: CoreResponse;
+      try {
+        result = await handleWrite(ctx, { method: 'POST', type, idRaw, body, variantLocale });
+      } catch {
+        result = errorResponse(500, 'internal error');
+      }
+      corkSend(res, aborted, result);
+    })();
+  });
+}
+
 /** Which template a builder route is on — drives which getParameter slots to read synchronously. */
 interface CtRouteOpts {
   /** Read getParameter(0) as `:apiId` (false for the `/content-types` collection). */
@@ -313,6 +348,9 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
     // Draft & Publish action sub-route. 3 segments — structurally distinct from the 2-segment data
     // routes, so ordering vs put('/:type/:id') is irrelevant (uWS matches by segment count + literals).
     app.post('/:type/:id/actions/:action', (res, req) => handleWriteActionRoute(res, req, ctx));
+    // i18n variant create: POST /:type/:id/locales/:locale — 4 segments, literal `locales` distinguishes
+    // it from `/actions/:action`; ordering vs the data routes is irrelevant (segment count + literals).
+    app.post('/:type/:id/locales/:locale', (res, req) => handleVariantCreateRoute(res, req, ctx));
     app.post('/:type', (res, req) => handleWriteRoute(res, req, 'POST', false, ctx));
     app.put('/:type/:id', (res, req) => handleWriteRoute(res, req, 'PUT', true, ctx));
     app.del('/:type/:id', (res, req) => handleWriteRoute(res, req, 'DELETE', true, ctx));
