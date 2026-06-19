@@ -20,6 +20,7 @@ import {
   type FieldSpec,
   type UpdateFieldInput,
   type DropResult,
+  type DeclareRelationInput,
 } from './types.ts';
 import { decodeEntry, type DecodeOptions } from './serde.ts';
 
@@ -366,6 +367,24 @@ export class ContentTypesApi {
       opts,
     );
   }
+
+  /**
+   * DECLARE a relation. `POST /content-types/:apiId/relations` with a {@link DeclareRelationInput}
+   * (`field`, `kind`, `target`, optional `inverseField`) → the owner's updated projected definition
+   * (HTTP 201), now carrying the new entry in `relations`. The relation goes LIVE immediately for both
+   * deep filtering (`?filters[field][...]`) and `?populate=field`. Throws {@link NotFoundError} (404)
+   * when the owner or target type is unknown, {@link ConflictError} (409) on a field/relation name clash,
+   * {@link BadRequestError} (400) on an invalid identifier / reserved name / unknown kind.
+   */
+  addRelation(apiId: string, input: DeclareRelationInput, signal?: AbortSignal): Promise<ContentTypeDefinition> {
+    const opts: RequestOptions = { body: input };
+    if (signal) opts.signal = signal;
+    return this.request<ContentTypeDefinition>(
+      'POST',
+      `/content-types/${encodeURIComponent(apiId)}/relations`,
+      opts,
+    );
+  }
 }
 
 /**
@@ -572,11 +591,12 @@ export class AbsurdClient {
   async findOne<T extends Entry = Entry>(
     type: string,
     id: number | string,
-    opts: { populate?: QueryParams['populate'] } = {},
+    opts: { populate?: QueryParams['populate']; status?: QueryParams['status'] } = {},
     signal?: AbortSignal,
   ): Promise<SingleResponse<T>> {
     const params: QueryParams = {};
     if (opts.populate !== undefined) params.populate = opts.populate;
+    if (opts.status !== undefined) params.status = opts.status;
     const reqOpts: RequestOptions = { query: buildQueryString(params) };
     if (signal) reqOpts.signal = signal;
     return this.request<SingleResponse<T>>(
@@ -593,7 +613,7 @@ export class AbsurdClient {
   async findOneOrNull<T extends Entry = Entry>(
     type: string,
     id: number | string,
-    opts: { populate?: QueryParams['populate'] } = {},
+    opts: { populate?: QueryParams['populate']; status?: QueryParams['status'] } = {},
     signal?: AbortSignal,
   ): Promise<SingleResponse<T> | null> {
     try {
@@ -790,6 +810,31 @@ export class AbsurdClient {
     );
   }
 
+  // === Draft & Publish lifecycle ================================================================
+
+  /**
+   * Draft & Publish — PUBLISH. `POST /:type/:id/actions/publish` sets the entry's `published_at` so it
+   * becomes visible to the default (published-only) read. No request body. Returns the updated row as a
+   * {@link SingleResponse} (HTTP 200). Throws {@link NotFoundError} (404) when no row carries the id, or
+   * {@link BadRequestError} (400) when the type does not have Draft & Publish enabled.
+   */
+  async publish<T extends Entry = Entry>(type: string, id: number | string, signal?: AbortSignal): Promise<SingleResponse<T>> {
+    const opts: RequestOptions = {};
+    if (signal) opts.signal = signal;
+    return this.request<SingleResponse<T>>('POST', `/${encodeURIComponent(type)}/${encodeURIComponent(String(id))}/actions/publish`, opts);
+  }
+
+  /**
+   * Draft & Publish — UNPUBLISH. `POST /:type/:id/actions/unpublish` clears `published_at` (back to
+   * draft), hiding the entry from the default read. No request body. Same return/throw contract as
+   * {@link publish}.
+   */
+  async unpublish<T extends Entry = Entry>(type: string, id: number | string, signal?: AbortSignal): Promise<SingleResponse<T>> {
+    const opts: RequestOptions = {};
+    if (signal) opts.signal = signal;
+    return this.request<SingleResponse<T>>('POST', `/${encodeURIComponent(type)}/${encodeURIComponent(String(id))}/actions/unpublish`, opts);
+  }
+
   // === Slice 8.2 — bound collection =============================================================
 
   /**
@@ -828,7 +873,7 @@ export class Collection<T extends Entry = Entry> {
   /** {@link AbsurdClient.findOne} bound to this type. */
   findOne(
     id: number | string,
-    opts?: { populate?: QueryParams['populate'] },
+    opts?: { populate?: QueryParams['populate']; status?: QueryParams['status'] },
     signal?: AbortSignal,
   ): Promise<SingleResponse<T>> {
     return this.client.findOne<T>(this.type, id, opts, signal);
@@ -837,7 +882,7 @@ export class Collection<T extends Entry = Entry> {
   /** {@link AbsurdClient.findOneOrNull} bound to this type (404 → null). */
   findOneOrNull(
     id: number | string,
-    opts?: { populate?: QueryParams['populate'] },
+    opts?: { populate?: QueryParams['populate']; status?: QueryParams['status'] },
     signal?: AbortSignal,
   ): Promise<SingleResponse<T> | null> {
     return this.client.findOneOrNull<T>(this.type, id, opts, signal);
@@ -861,6 +906,16 @@ export class Collection<T extends Entry = Entry> {
   /** {@link AbsurdClient.delete} bound to this type. */
   delete(id: number | string, signal?: AbortSignal): Promise<SingleResponse<T>> {
     return this.client.delete<T>(this.type, id, signal);
+  }
+
+  /** {@link AbsurdClient.publish} bound to this type. */
+  publish(id: number | string, signal?: AbortSignal): Promise<SingleResponse<T>> {
+    return this.client.publish<T>(this.type, id, signal);
+  }
+
+  /** {@link AbsurdClient.unpublish} bound to this type. */
+  unpublish(id: number | string, signal?: AbortSignal): Promise<SingleResponse<T>> {
+    return this.client.unpublish<T>(this.type, id, signal);
   }
 
   /** {@link AbsurdClient.listAll} (offset iterator) bound to this type. */

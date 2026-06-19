@@ -103,6 +103,8 @@ export interface TypeDef {
   apiId: string;
   fields: FieldSpec[];
   relations?: RelationSpec[];
+  /** Opt into Draft & Publish (adds the `published_at` system column). */
+  draftPublish?: boolean;
 }
 
 /**
@@ -127,6 +129,7 @@ export async function withType<T>(
     apiId: def.apiId,
     fields: def.fields,
     ...(def.relations ? { relations: def.relations } : {}),
+    ...(def.draftPublish ? { draftPublish: true } : {}),
   });
   const apiId = row.api_id;
   // Live-sync RAM, mirroring content-type.controller.ts syncDefine().

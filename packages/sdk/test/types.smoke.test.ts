@@ -43,6 +43,9 @@ test('ContentTypeDefinition constructs (cmsType + field options + projected fiel
       },
       { name: 'price', cmsType: 'decimal', nullable: true, system: false, precision: 10, scale: 2 },
     ],
+    relations: [
+      { field: 'author', kind: 'manyToOne', target: 'user', owner: true, inverseField: 'articles' },
+    ],
   };
 
   // wire-format brand aliases.

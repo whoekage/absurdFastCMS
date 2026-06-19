@@ -85,15 +85,57 @@ export interface FieldDefinition {
   scale?: number;
   /** decimal total digits, if present. */
   precision?: number;
+  /**
+   * Constant default value for the field, if the builder projects one. The core `projectDef` does
+   * not currently leak physical `default_value`, so this is usually absent; when present (forward-
+   * compatible) the admin create form prefills the control from it. Kept `unknown` — it is a wire
+   * value (string/number/boolean/JSON), not a form-shaped value.
+   */
+  default?: unknown;
 }
 
 /**
- * A content-type as projected by the builder: its api_id and ordered fields (system id/created_at/
- * updated_at first, then user fields). Returned by the content-type builder routes.
+ * The closed set of relation cardinalities a relation may declare. Mirror of `RelationKind` in
+ * `@absurd/api` (packages/api/src/db/ddl.ts) — a SEPARATE closed union, NOT a {@link CmsType} (relations
+ * never touch the scalar type catalog). The owning side's kind drives the physical link-table UNIQUEs;
+ * the inverse side stores the inverse cardinality (oneToMany↔manyToOne; oneToOne/manyToMany self-inverse).
+ */
+export type RelationKind = 'oneToOne' | 'oneToMany' | 'manyToOne' | 'manyToMany';
+
+/**
+ * One relation as PROJECTED by the api's content-type builder (`projectDef` relations entry). Physical
+ * detail (the link-table name, content_type_id) never leaks. `owner` is true on the side that emitted
+ * the link-table DDL; `inverseField` is present ONLY for a two-way relation (the partner field on the
+ * target). A one-way relation omits `inverseField`.
+ */
+export interface RelationDefinition {
+  /** The relation field / API key on THIS side. */
+  field: string;
+  kind: RelationKind;
+  /** The target content-type api_id (may equal `apiId` for a self-referential relation). */
+  target: string;
+  /** true => this side owns the link table (emitted its DDL); false => the inverse side. */
+  owner: boolean;
+  /** The partner field on the target — present only for a two-way relation. */
+  inverseField?: string;
+}
+
+/**
+ * A content-type as projected by the builder: its api_id, ordered fields (system id/created_at/
+ * updated_at first, then user fields), and declared relations (in `sort` order). `relations` is ALWAYS
+ * present — a scalar-only type returns `relations: []` (no shape drift). Returned by every 2xx builder
+ * route.
  */
 export interface ContentTypeDefinition {
   apiId: string;
   fields: FieldDefinition[];
+  relations: RelationDefinition[];
+  /**
+   * Draft & Publish opt-in. Present and `true` ONLY for a type that enabled Draft & Publish (a
+   * conditional wire key — a non-D&P type omits it). When true, the type has a `published_at` system
+   * field and the lifecycle endpoints (`publish`/`unpublish`) + the `status` read param apply.
+   */
+  draftPublish?: boolean;
 }
 
 // === 1.6 — wire-format note ====================================================================
@@ -236,6 +278,36 @@ export type WriteBody<T = Entry> = { [K in keyof T]?: T[K] | RelationInput } & {
 export interface CreateContentTypeInput {
   apiId: string;
   fields: FieldSpec[];
+  /**
+   * Optional relations to declare AT CREATE TIME. Each is validated server-side; the owner ct_ table is
+   * created before any (possibly self-referential) link-table FK. A two-way relation's `target` must be
+   * an already-existing type (or `apiId` itself for a self-reference). Omit for a scalar-only type.
+   */
+  relations?: DeclareRelationInput[];
+  /**
+   * Enable Model A Draft & Publish for this type (per-type opt-in). When true, the type gains a
+   * `published_at` system column (NULL = draft); a create defaults to DRAFT, reads default to
+   * published-only, and the `publish`/`unpublish` lifecycle actions + the `status` read param apply.
+   * Omit / false for an always-published type. CANNOT be toggled after create in this slice.
+   */
+  draftPublish?: boolean;
+}
+
+/**
+ * The body for `contentTypes.addRelation` — `POST /content-types/:apiId/relations`. Declares ONE
+ * relation on the owner (`:apiId`). `inverseField` PRESENT => two-way (adds the partner field on the
+ * target, no extra DDL); ABSENT => one-way. `target` may equal `:apiId` (self-referential); for a
+ * two-way self relation `field` must differ from `inverseField`. The owner ct_ table must already exist;
+ * the target type must exist. Validated server-side (legal identifier, no collision, valid kind).
+ */
+export interface DeclareRelationInput {
+  /** The relation field / API key on the owner. */
+  field: string;
+  kind: RelationKind;
+  /** The target content-type api_id (may equal `:apiId` for a self-reference). */
+  target: string;
+  /** The partner field on the target — supply to make the relation two-way. */
+  inverseField?: string;
 }
 
 /**

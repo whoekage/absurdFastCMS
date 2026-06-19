@@ -242,13 +242,45 @@ await client.update('article', 1, { tags: { connect: [6], disconnect: [1] } });
 
 ---
 
+## Draft & Publish
+
+Draft & Publish is a **per-type opt-in** (Strapi v5 Model A). Enable it at create time with
+`draftPublish: true` (see the Builder section). When enabled, the type gains a `published_at`
+system field on the wire (an ISO string when published, `null` when a draft):
+
+- **create → draft.** A new entry starts as a draft (`published_at` is `null`) and is hidden from
+  the default read.
+- **default read = published-only.** A `list` / `findOne` with no `status` returns only published
+  entries. Pass `status` to switch:
+
+```ts
+await client.list('post');                       // published only (default)
+await client.list('post', { status: 'published' });
+await client.list('post', { status: 'draft' });  // drafts only
+await client.findOne('post', 1, { status: 'draft' }); // resolve a specific draft (else 404)
+```
+
+- **publish / unpublish.** Set or clear `published_at` (200 → the updated row):
+
+```ts
+await client.publish('post', 1);    // POST /post/1/actions/publish   → now visible by default
+await client.unpublish('post', 1);  // POST /post/1/actions/unpublish → back to draft
+```
+
+`publish`/`unpublish` throw `BadRequestError` (400) on a type without Draft & Publish enabled, and
+`NotFoundError` (404) when no row carries the id. `status` is a no-op (silently ignored) on a non-D&P
+type. A bound `client.collection('post')` exposes `.publish(id)` / `.unpublish(id)` too. You can
+never set `published_at` through `create`/`update` — it is server-managed (rejected as a system field).
+
+---
+
 ## Content-type Builder
 
 `client.contentTypes` covers the runtime-DDL routes. Every 2xx body is a `ContentTypeDefinition`
-(`{ apiId, fields }`) except a type drop, which returns `{ apiId, dropped: true }`. Errors surface
-as the typed subclasses: `ConflictError` (409 exists / clash), `NotFoundError` (404),
+(`{ apiId, fields, relations }`) except a type drop, which returns `{ apiId, dropped: true }`.
+Errors surface as the typed subclasses: `ConflictError` (409 exists / clash), `NotFoundError` (404),
 `BadRequestError` (400 invalid identifier / unknown cmsType / bad enum or option / forbidden
-type-change).
+type-change / unknown relation kind).
 
 > The Builder routes are only mounted when the server runs with a store + registry.
 
@@ -257,7 +289,8 @@ type-change).
 const all = await client.contentTypes.list();
 const def = await client.contentTypes.get('article');
 
-// create (201) — apiId is canonicalised by the server and reflected back
+// create (201) — apiId is canonicalised by the server and reflected back. Optionally declare
+// relations at create time (the owner table is created before any link-table FK).
 const created = await client.contentTypes.create({
   apiId: 'product',
   fields: [
@@ -267,6 +300,10 @@ const created = await client.contentTypes.create({
     { name: 'kind', cmsType: 'enumeration', options: { values: ['physical', 'digital'] } },
     { name: 'meta', cmsType: 'json', options: { nullable: true } },
   ],
+  relations: [{ field: 'vendor', kind: 'manyToOne', target: 'vendor', inverseField: 'products' }],
+  // Opt into Draft & Publish (entries start as drafts; see the Draft & Publish section). Cannot be
+  // toggled after create.
+  draftPublish: true,
 });
 
 // add / update / drop a field
@@ -284,6 +321,33 @@ await client.contentTypes.drop('product'); // -> { apiId: 'product', dropped: tr
 
 `updateField` applies a rename FIRST, then a type change on the new name; at least one of
 `newName` / `cmsType` is required.
+
+### Relations
+
+Declare a relation on an existing type with `addRelation` — `POST /content-types/:apiId/relations`.
+It returns the owner's updated `ContentTypeDefinition`; the new relation goes **live immediately** for
+deep filtering (`filters[field][...]`) and `populate=field`, with no restart.
+
+```ts
+// one-way many-to-many
+await client.contentTypes.addRelation('article', { field: 'tags', kind: 'manyToMany', target: 'tag' });
+
+// two-way: an inverse field appears on the target type's definition
+const def = await client.contentTypes.addRelation('article', {
+  field: 'author',
+  kind: 'manyToOne',
+  target: 'user',
+  inverseField: 'articles', // omit for a one-way relation
+});
+// def.relations -> [{ field: 'author', kind: 'manyToOne', target: 'user', owner: true, inverseField: 'articles' }]
+```
+
+`kind` is one of `oneToOne | oneToMany | manyToOne | manyToMany` (the `RelationKind` union — distinct
+from `CmsType`). `target` may equal `:apiId` for a self-reference (a two-way self relation needs
+`field` ≠ `inverseField`). Every `ContentTypeDefinition` now carries a `relations: RelationDefinition[]`
+array (`{ field, kind, target, owner, inverseField? }`); a scalar-only type returns `relations: []`.
+Errors: `NotFoundError` (404 unknown owner/target), `ConflictError` (409 field/relation name clash),
+`BadRequestError` (400 invalid identifier / reserved name / unknown kind).
 
 The 16 `cmsType`s: `string`, `text`, `email`, `uid`, `enumeration`, `integer`, `biginteger`,
 `float`, `decimal`, `boolean`, `date`, `datetime`, `time`, `json`, `array`, `uuid`. `FieldOptions`

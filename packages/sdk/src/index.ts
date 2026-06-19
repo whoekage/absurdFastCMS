@@ -6,6 +6,8 @@ export type {
   FieldOptions,
   FieldSpec,
   FieldDefinition,
+  RelationKind,
+  RelationDefinition,
   ContentTypeDefinition,
   BigIntegerValue,
   DecimalValue,
@@ -22,6 +24,7 @@ export type {
   WriteBody,
   CreateContentTypeInput,
   UpdateFieldInput,
+  DeclareRelationInput,
   DropResult,
 } from './types.ts';
 export { isKeysetPagination } from './types.ts';
@@ -39,6 +42,7 @@ export type {
   PopulateParam,
   PopulateObject,
   QueryParams,
+  StatusParam,
 } from './filters.ts';
 export { buildQueryString } from './filters.ts';
 

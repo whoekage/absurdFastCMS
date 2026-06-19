@@ -115,6 +115,9 @@ export interface PopulateObject {
   [relation: string]: boolean | { populate?: PopulateParam } | undefined;
 }
 
+/** The Draft & Publish lifecycle selector (Strapi v5; replaced v4 `publicationState`). */
+export type StatusParam = 'draft' | 'published';
+
 /** The full read-query parameter set the builder serializes. All keys optional; `{}` → `''`. */
 export interface QueryParams {
   filters?: FilterObject;
@@ -122,6 +125,11 @@ export interface QueryParams {
   pagination?: PaginationParam;
   fields?: string[];
   populate?: PopulateParam;
+  /**
+   * Draft & Publish lifecycle selector. `published` (the server default when omitted) returns only
+   * published entries; `draft` returns only drafts. No-op on a type without Draft & Publish enabled.
+   */
+  status?: StatusParam;
 }
 
 // === core: a recursive key/value pair accumulator ===============================================
@@ -303,6 +311,7 @@ export function buildQueryString(params: QueryParams): string {
   if (params.pagination !== undefined) emitPagination(params.pagination, out);
   if (params.fields !== undefined) emitFields(params.fields, out);
   if (params.populate !== undefined) emitPopulate('populate', params.populate, out);
+  if (params.status !== undefined) out.push({ key: 'status', value: params.status });
 
   return out.map((p) => `${p.key}=${encodeURIComponent(p.value)}`).join('&');
 }
