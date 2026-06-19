@@ -89,8 +89,15 @@ link tables, inverse rows); reads already execute `populate`. What's missing is 
 ### Phase 4 — Structured content: components & dynamic zones
 - Component schemas, repeatables, dynamic zones; nested editors in the admin.
 
-### Phase 5 — i18n / localization
-- Per-field / per-entry locales, `locale` query param, fallback chains; locale switcher in the admin.
+### Phase 5 — i18n / localization ✅ *(be-06, done)*
+- **Per-type opt-in** (`i18n` flag) + **per-field `localized`** (Strapi-faithful). Locale variants are
+  rows sharing `document_id`; be-06 builds document_id's read-side **conditionally** (i18n types load +
+  index + emit it; non-i18n stay byte-identical). Shared fields use **S1** (every variant row stores all
+  fields; a shared-field write fans out across same-`document_id` rows in one tx — read path untouched).
+  `UNIQUE(document_id, locale)`; `locale` param (omitted→`DEFAULT_LOCALE`, `<code>`, `*`; **no fallback**
+  in v1); variant create via `POST /:type/:id/locales/:locale` (server-controlled seam). Composes with
+  draft/publish (rows keyed by `(document_id, locale)`, each with its own `published_at`). Relations are
+  per-variant in v1. 750/750 tests green. Fallback chains + enabled-locales registry deferred.
 
 ### Phase 6 — Events & versioning
 - Webhooks (hook into the existing ChangeBus event seam); content history / rollback.
