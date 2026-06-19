@@ -82,9 +82,17 @@ link tables, inverse rows); reads already execute `populate`. What's missing is 
   from user writes. `document_id` is NOT used here (publish is a same-row UPDATE) — it stays the variant
   key for i18n. 735/735 tests green. Model A → Model B (separate draft/published rows) is a future upgrade.
 
-### Phase 3 — Media / asset library *(large, isolated)*
-- Multipart upload, storage-provider abstraction (local + S3), `media` field type, image metadata/transforms.
-- Admin: media library + upload widget.
+### Phase 3 — Media / asset library ✅ *(be-04, done)*
+- Storage-provider interface + local-fs + **S3** (`@aws-sdk/client-s3`), env-selected. Multipart upload
+  (`busboy`) with size bounds + filename sanitization; **content-addressed** sha256 keys; `files` asset
+  registry in `0001_init.sql` (hash dedup). Metadata = mime/size/hash + **image dimensions via
+  `image-size`** (pure-JS, NOT sharp). A `media` field type (scalar id / jsonb id-array → `files.id`),
+  validated + populated on read; existing types byte-identical. Admin: media library + picker widget.
+  Tests mock-free: local-fs (real temp dir) + **S3 against real MinIO via Testcontainers**. 807/807 green;
+  `npm audit` clean for the new deps (only pre-existing `autocannon` devDep vulns remain). New deps:
+  `@aws-sdk/client-s3`, `image-size`, `busboy`, `@testcontainers/minio` (dev).
+- **Deferred to a separate slice (be-04b):** image **transforms** (resize / crop / format) via **sharp** —
+  its own run + commits, per the dependency-weight decision.
 
 ### Phase 4 — Structured content: components & dynamic zones
 - Component schemas, repeatables, dynamic zones; nested editors in the admin.
