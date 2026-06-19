@@ -1,6 +1,7 @@
 import type { Engine } from '../store/engine.ts';
-import { parseQuery, QueryParseError } from '../store/query.parser.ts';
+import { parseQuery, QueryParseError, type ParsedQuery } from '../store/query.parser.ts';
 import { InvalidCursorError } from '../store/cursor.codec.ts';
+import type { FilterNode } from '../store/table.ts';
 
 /**
  * uWS-MIGRATION SLICE 0 — the framework-agnostic HTTP request CORE.
@@ -59,6 +60,28 @@ export function errorResponse(status: number, message: string): CoreResponse {
   return { status, contentType: JSON_CT, body: Buffer.from(JSON.stringify({ error: message }), 'utf8') };
 }
 
+/**
+ * AND-merge two optional filter trees into one (either may be undefined). Used to fold the Draft &
+ * Publish status predicate into a query's existing `where` without disturbing it. Strapi semantics:
+ * an explicit `filters[published_at]` (a legit scalar field on a D&P type) ANDs with the status default.
+ */
+function andWhere(a: FilterNode | undefined, b: FilterNode): FilterNode {
+  return a === undefined ? b : { op: 'and', children: [a, b] };
+}
+
+/**
+ * For a Draft & Publish type, derive the `published_at` status predicate to fold into the query. The
+ * DEFAULT (status absent) is published-only (`published_at IS NOT NULL`); `status=draft` -> IS NULL;
+ * `status=published` -> IS NOT NULL. Returns undefined for a NON-D&P type (so the query is byte-identical)
+ * — the parser already 400s a bad status token on any type, so the value here is always draft|published.
+ */
+function statusWhere(engine: Engine, name: string, parsed: ParsedQuery): FilterNode | undefined {
+  if (!engine.isDraftPublish(name)) return undefined;
+  const status = parsed.status ?? 'published'; // DEFAULT = published-only (Strapi v5).
+  const op = status === 'draft' ? 'null' : 'notNull';
+  return { leaf: { field: 'published_at', op, value: true } };
+}
+
 /** Split a path into its non-empty segments: `/article/42` -> `['article', '42']`. */
 function segments(path: string): string[] {
   const out: string[] = [];
@@ -89,6 +112,11 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
     // is the generic message only (no secret / sig / expected-value leak).
     try {
       const parsed = parseQuery(engine.relationParseContext(name), query);
+      // Draft & Publish: for a D&P type, fold the status predicate (default published-only) into the
+      // query's where. For a non-D&P type statusWhere returns undefined => options untouched => the
+      // assembled response (and its cache key) is BYTE-IDENTICAL to before this feature.
+      const sw = statusWhere(engine, name, parsed);
+      if (sw !== undefined) parsed.options.where = andWhere(parsed.options.where, sw);
       // Relations Slice 5: the populate plan reaches respond as a 3rd arg; it resolves + validates it
       // (unknown/scalar populate name -> QueryParseError -> 400) and assembles the nested response.
       return { status: 200, contentType: JSON_CT, body: engine.respond(name, parsed.options, parsed.populate) };
@@ -113,7 +141,11 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
     const query = req.query.startsWith('?') ? req.query.slice(1) : req.query;
     try {
       const parsed = parseQuery(engine.relationParseContext(name), query);
-      const body = engine.respondById(name, Number(idRaw), parsed.populate);
+      // Draft & Publish single-item gate: the addressed row must also satisfy the status predicate
+      // (default published-only) for a D&P type, else 404. Undefined for a non-D&P type => respondById
+      // resolves straight through (byte-identical to before).
+      const sw = statusWhere(engine, name, parsed);
+      const body = engine.respondById(name, Number(idRaw), parsed.populate, sw);
       if (body === null) return errorResponse(404, `not found`);
       return { status: 200, contentType: JSON_CT, body };
     } catch (e) {

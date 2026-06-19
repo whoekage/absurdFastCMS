@@ -200,6 +200,14 @@ export class Engine {
   private readonly schemaShapes = new Map<string, string>();
 
   /**
+   * Per-type Draft & Publish flag, derived from the presence of the synthesized `published_at` field in
+   * the type's schema (the registry only synthesizes it for a D&P type). Set on define/registerDetached/
+   * replaceType, purged on dropType. The read router reads this to decide whether to fold a `status`
+   * predicate into the query; a non-D&P type is never touched (byte-identical reads).
+   */
+  private readonly draftPublishFlags = new Map<string, boolean>();
+
+  /**
    * RELATION STORE: the in-memory CSR {@link Relation} per declared OWNER-side relation, keyed by
    * `ownerApiId + "\u0000" + field` (NUL-joined — api_ids/fields pass `validateIdentifier` and never
    * contain NUL, so `(a,bc)` and `(ab,c)` can never alias). Populated by the loader (boot phase-2 +
@@ -255,6 +263,16 @@ export class Engine {
   /** The current schema version for a type (field-shape counter); 0 if unknown. */
   schemaVersion(name: string): number {
     return this.schemaVersions.get(name) ?? 0;
+  }
+
+  /** Record a type's D&P flag from its field schema (presence of the `published_at` system field). */
+  private trackDraftPublish(name: string, fields: readonly FieldDef[]): void {
+    this.draftPublishFlags.set(name, fields.some((f) => f.name === 'published_at'));
+  }
+
+  /** Whether `name` opted into Model A Draft & Publish (has the `published_at` system column). */
+  isDraftPublish(name: string): boolean {
+    return this.draftPublishFlags.get(name) ?? false;
   }
 
   /** NUL-joined relation key (collision-free: validated api_ids/fields never contain NUL). */
@@ -346,6 +364,7 @@ export class Engine {
       fields.some((f) => f.type === 'i64' || f.type === 'decimal' || f.type === 'json'),
     );
     this.trackSchema(name, fields);
+    this.trackDraftPublish(name, fields);
     return t;
   }
 
@@ -428,6 +447,7 @@ export class Engine {
     this.arenas.set(name, detached.arena);
     this.hasRawField.set(name, detached.hasRawField);
     this.trackSchema(name, detached.table.fields);
+    this.trackDraftPublish(name, detached.table.fields);
   }
 
   /**
@@ -452,6 +472,7 @@ export class Engine {
     // Bump the schema version ONLY if the field shape changed; a pure-data rebuild keeps it, so an
     // outstanding cursor survives a write (the headline write-stability win) but not a DDL.
     this.trackSchema(name, detached.table.fields);
+    this.trackDraftPublish(name, detached.table.fields);
     this.bus.publish(name); // drop ONLY this type's cached responses (frees the old arena's views).
   }
 
@@ -471,6 +492,7 @@ export class Engine {
     // Drop the schema-shape memo but KEEP the version counter: a re-created type with the same name
     // must bump past any version an old cursor was signed under (so a stale cursor never re-validates).
     this.schemaShapes.delete(name);
+    this.draftPublishFlags.delete(name);
     // Purge every relation referencing the dropped type: by KEY (forward relations X owns + inverses
     // keyed on X) AND by stored ENDPOINT object (a SURVIVING partner's two-way inverse that points back
     // at X — keyed on the partner, so missed by the key scan). Deleting from a Map while iterating its
@@ -769,12 +791,22 @@ export class Engine {
    * reuses {@link respondOne}. Returns `null` when no row carries that id (the 404 gate). Requires the
    * content-type to have an eq index on `id`.
    */
-  respondById(name: string, id: number, populate: PopulatePlan = []): Buffer | null {
+  respondById(name: string, id: number, populate: PopulatePlan = [], where?: FilterNode): Buffer | null {
     // Resolve + VALIDATE the plan FIRST (unknown/scalar populate name -> 400) for the single-item path
     // too, BEFORE the id lookup. A populated single-item response is not cached (respondOne is uncached).
     const eff = this.resolvePopulate(name, populate);
-    const rowId = this.table(name).rowIdByEq('id', id);
-    return rowId === undefined ? null : this.respondOne(name, rowId, eff);
+    const t = this.table(name);
+    const rowId = t.rowIdByEq('id', id);
+    if (rowId === undefined) return null;
+    // Draft & Publish single-item gate: when a `where` predicate is supplied (the router folds in the
+    // status -> published_at IS [NOT] NULL leaf for a D&P type), the addressed row must ALSO satisfy it,
+    // else it is invisible at the requested status -> 404. `where` is a pure scalar leaf (no relation
+    // arm), so the resolver is never invoked. When `where` is undefined (every non-D&P / no-status read)
+    // this is byte-identical to before — the row resolves straight through.
+    if (where !== undefined && !t.matchSet({ where }, this.relationResolver(name)).get(rowId)) {
+      return null;
+    }
+    return this.respondOne(name, rowId, eff);
   }
 }
 

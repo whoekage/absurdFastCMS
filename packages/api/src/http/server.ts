@@ -26,16 +26,15 @@ import { config } from '../config.ts';
 const STATUSES = ['draft', 'published', 'archived'];
 
 /**
- * The `article` content-type seed spec. Reproduces migration 0001's article shape so the read path
- * stays byte-identical, with ONE deliberate deviation: `status` is seeded as an `enumeration`
- * (members `['draft','published','archived']`) rather than a free-form varchar(32), so it is
- * eq-indexed (index-plan parity with the old static `defineArticle`) — every test fixture status is a
- * member, and an enum materializes byte-identically to a varchar. `publishedAt` is the FIELD NAME so
- * the physical column is `"publishedAt"` and the wire key is unchanged.
+ * The `article` content-type seed spec — the canonical demo fixture. `status` is seeded as an
+ * `enumeration` (members `['draft','published','archived']`) rather than a free-form varchar(32), so it
+ * is eq-indexed — every test fixture status is a member, and an enum materializes byte-identically to a
+ * varchar. `publishedAt` is the FIELD NAME so the physical column is `"publishedAt"` and the wire key
+ * matches.
  *
- * Nullability matches 0001: title/views/rating nullable; body/status/active/publishedAt NOT NULL. The
- * resulting engine types (i32/date/date | string/text/string/i32/f64/bool/date) carry no i64/decimal/
- * json field, so the table keeps the fast JSON.stringify path -> byte-identical reads.
+ * Nullability: title/views/rating nullable; body/status/active/publishedAt NOT NULL. The resulting
+ * engine types (i32/date/date | string/text/string/i32/f64/bool/date) carry no i64/decimal/json field,
+ * so the table keeps the fast JSON.stringify path -> byte-identical reads.
  */
 export const ARTICLE_SEED_FIELDS: FieldSpec[] = [
   { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
@@ -45,9 +44,7 @@ export const ARTICLE_SEED_FIELDS: FieldSpec[] = [
   { name: 'rating', cmsType: 'float', options: { nullable: true } },
   { name: 'active', cmsType: 'boolean', options: { nullable: false } },
   // WIRE CONTRACT: the field NAME is `publishedAt`, so the physical column AND the wire key are both
-  // `publishedAt`. The old static `articles` table mapped a `published_at` column -> `publishedAt` wire
-  // key; that mapping is GONE. The wire key is preserved ONLY because this field is named `publishedAt`,
-  // so RENAMING this field is a BREAKING wire change for existing clients.
+  // `publishedAt`. RENAMING this field is a BREAKING wire change for existing clients.
   { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
 ];
 
@@ -55,9 +52,8 @@ export const ARTICLE_SEED_FIELDS: FieldSpec[] = [
  * Idempotently seed `article` as a dynamic content-type (content_types + fields + ct_article). A no-op
  * when it already exists; a benign peer-race (ContentTypeExistsError / a 23505 from the DB UNIQUE) is
  * tolerated and swallowed (the subsequent load re-reads the committed meta). Runs through
- * createContentType's own atomic transaction — NO outer transaction here. NOTE: this does NOT touch the
- * legacy static `articles` table (migration 0001), which remains only as the injection canary; the live
- * article data is owned by `ct_article`.
+ * createContentType's own atomic transaction — NO outer transaction here. The live article data is
+ * owned by `ct_article`.
  */
 export async function seedArticleIfAbsent(sql: Sql): Promise<void> {
   if (await getContentType(sql, 'article')) return;

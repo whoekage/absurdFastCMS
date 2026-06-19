@@ -32,7 +32,12 @@ export const SYSTEM_FIELDS: readonly FieldDef[] = [
   { name: 'updated_at', type: 'date' },
 ];
 
-const SYSTEM_COLUMN_NAMES: ReadonlySet<string> = new Set(['id', 'created_at', 'updated_at']);
+// The physical system columns a write body may NOT spoof. NOTE: distinct from SYSTEM_FIELDS above —
+// document_id is a physical column + body-reject only, deliberately NOT a projected field (loader-skip).
+// `published_at` (Draft & Publish): reject it in a public write body on EVERY type (uniform mass-assignment
+// guard) so a client can never spoof publish state through POST/PUT — only the publish/unpublish endpoints
+// set it. Distinct from the article seed's USER field `publishedAt` (camelCase), which stays writable.
+const SYSTEM_COLUMN_NAMES: ReadonlySet<string> = new Set(['id', 'document_id', 'created_at', 'updated_at', 'published_at']);
 
 /** The closed set of valid engine column types (engine_type IS a ColumnType 1:1, validated against this). */
 const KNOWN_COLUMN_TYPES: ReadonlySet<string> = new Set<ColumnType>([
@@ -155,6 +160,13 @@ export interface ContentTypeDef {
   relations: RelationMeta[];
   /** O(1) relation lookup by this side's field name. */
   relationsByField: Map<string, RelationMeta>;
+  /**
+   * Model A Draft & Publish opt-in (per-type). When true, a synthesized nullable `published_at` system
+   * field is appended to `fields` (after the 3 base system fields, before user fields — matching the DDL
+   * column order), and the read path defaults to published-only. When false, NO `published_at` field is
+   * synthesized => no FieldDef/column/SELECT/wire key/index — the read arena is BYTE-IDENTICAL to today.
+   */
+  draftPublish: boolean;
 }
 
 /** Map a positive number out of a jsonb `params` object, or undefined (presence check; 0 is valid). */
@@ -243,6 +255,25 @@ function systemField(def: FieldDef): RegistryField {
   };
 }
 
+/**
+ * The synthesized Draft & Publish `published_at` system field. UNLIKE {@link systemField} it is
+ * NULLABLE (NULL = draft) and carries `hasDefault:true` (kept out of requiredOnCreate) + `system:true`
+ * (kept out of `writable`, so the body parser never accepts it and create never requires it). Engine
+ * type `date` => it loads, coerces, and serializes (ISO-or-null) exactly like created_at/updated_at.
+ */
+function publishedAtField(): RegistryField {
+  return {
+    name: 'published_at',
+    column: 'published_at',
+    type: 'date',
+    cmsType: 'datetime',
+    nullable: true,
+    system: true,
+    hasDefault: true,
+    json: false,
+  };
+}
+
 /** Build the positional {@link ColumnDescriptor} for a resolved field (lockstep with `fields`). */
 function descriptorFor(f: RegistryField): ColumnDescriptor {
   if (f.system && f.name === 'id') return { name: f.name, kind: 'id' };
@@ -268,6 +299,12 @@ function buildIndexPlan(fields: RegistryField[]): IndexPlan {
       eq.push(f.name);
       continue;
     }
+    // Draft & Publish status filtering is purely `published_at IS [NOT] NULL`, resolved DIRECTLY from
+    // the per-column null bitset (table.ts fillPredicate) — O(words), no scan, no eq/sorted index. A
+    // sorted index on `published_at` would only help sort/range queries the status path never issues, so
+    // skip indexing it (mirrors the json skip). Flip to `sorted` here if a future product wants sort-by-
+    // publish-date; the status predicate stays bitset-served either way.
+    if (f.name === 'published_at') continue;
     if (f.type === 'json') continue;
     if (f.type === 'bool' || (f.type === 'string' && f.enumValues !== undefined)) {
       eq.push(f.name);
@@ -317,6 +354,10 @@ function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[], relationRows: Relat
   const tableName = deriveTableName(ct.api_id);
 
   const fields: RegistryField[] = SYSTEM_FIELDS.map(systemField);
+  // D&P opt-in: append the synthesized `published_at` system field AFTER the base system fields and
+  // BEFORE user fields — matching the physical DDL column order (id/document_id/created_at/updated_at/
+  // published_at/...user). For a non-D&P type NO field is pushed => the read arena is byte-identical.
+  if (ct.draft_publish) fields.push(publishedAtField());
   for (const row of fieldRows) fields.push(buildUserField(ct.api_id, row));
 
   const fieldDefs: FieldDef[] = fields.map((f) => ({
@@ -351,6 +392,7 @@ function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[], relationRows: Relat
     indexPlan,
     relations,
     relationsByField,
+    draftPublish: ct.draft_publish,
   };
 }
 

@@ -2,7 +2,7 @@ import type { Sql } from 'postgres';
 import type { Engine } from '../store/engine.ts';
 import type { Registry, ContentTypeDef } from '../store/registry.ts';
 import { validateBody, BodyParseError } from '../store/body.parser.ts';
-import { insertEntry, updateEntry, deleteEntry, serializeEntry, EntryWriteError } from '../db/entry.repository.ts';
+import { insertEntry, updateEntry, deleteEntry, publishEntry, unpublishEntry, serializeEntry, EntryWriteError } from '../db/entry.repository.ts';
 import { applyRelationOps } from '../db/relation.repository.ts';
 import { CANONICAL_INT, JSON_CT, errorResponse, type CoreResponse } from './read.router.ts';
 
@@ -46,15 +46,26 @@ export interface WriteContext {
   sql: Sql;
   /** Refresh + rebuild ONLY this type's RAM storage from Postgres after a committed write. */
   rebuild(type: string): Promise<void>;
+  /**
+   * The publish-time clock. Production returns `new Date()`; tests inject a FIXED Date so a published_at
+   * fixture is byte-deterministic (the publish timestamp is caller-supplied, NOT a SQL `now()`).
+   */
+  publishClock(): Date;
 }
 
 export interface WriteRequest {
   method: string;
   type: string;
-  /** The `:id` path segment for PUT/DELETE (empty for POST). */
+  /** The `:id` path segment for PUT/DELETE/publish (empty for a plain POST create). */
   idRaw: string;
   /** The parsed JSON body (`undefined` when the request carried no body). */
   body: unknown;
+  /**
+   * Draft & Publish action sub-route (`POST /:type/:id/actions/:action`): `publish`/`unpublish` when on
+   * that route, otherwise undefined (a plain create/update/delete). The adapter validates the literal
+   * token before setting this; an unknown token never reaches here.
+   */
+  action?: 'publish' | 'unpublish';
 }
 
 /** Build the write response Buffer: `{"data":<serialized row>,"meta":{}}`, byte-consistent with GET. */
@@ -67,12 +78,31 @@ function writeOk(status: number, def: ContentTypeDef, row: Record<string, unknow
 }
 
 export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise<CoreResponse> {
-  const { method, type, idRaw, body } = req;
+  const { method, type, idRaw, body, action } = req;
   // Registry membership === engine membership (same canonical api_id). Gate BEFORE any SQL.
   const def = ctx.registry().get(type);
   if (def === undefined || !ctx.engine().has(type)) return errorResponse(404, `unknown content-type "${type}"`);
 
   try {
+    // Draft & Publish action sub-route (POST /:type/:id/actions/publish|unpublish). Gated FIRST so it
+    // never collides with the plain POST-create branch (a create has no `action`).
+    if (action !== undefined) {
+      if (method !== 'POST') return errorResponse(405, `method ${method} not allowed`);
+      if (!def.draftPublish) return errorResponse(400, 'content-type does not support draft & publish');
+      const id = parseId(idRaw);
+      if (id === null) return errorResponse(404, 'not found');
+      // ONE statement, wrapped in a tx for symmetry with the other verbs. published_at is set to the
+      // caller-supplied clock (deterministic) on publish, NULL on unpublish.
+      const row = await ctx.sql.begin((tx) =>
+        action === 'publish' ? publishEntry(tx, def, id, ctx.publishClock()) : unpublishEntry(tx, def, id),
+      );
+      if (row === null) return errorResponse(404, 'not found');
+      // Per-type rebuild + per-type cache invalidation (exactly like the other verbs): the publish
+      // immediately changes which rows the default status=published list returns.
+      await ctx.rebuild(type);
+      return writeOk(200, def, row);
+    }
+
     if (method === 'POST') {
       const { data, relationOps } = validateBody(def, body, 'create');
       // ONE tx: INSERT scalars RETURNING id, then apply the relation ops with that id. A FK 23503 on a

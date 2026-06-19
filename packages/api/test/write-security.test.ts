@@ -65,10 +65,11 @@ test('injection via field name -> 400 unknown field, before any SQL; ct_article 
   assert.equal(await tableExists(sql, 'ct_article'), true);
 });
 
-test('mass-assignment: id / created_at / updated_at are rejected (400)', async () => {
+test('mass-assignment: id / document_id / created_at / updated_at are rejected (400)', async () => {
   const ok = { body: 'x', status: 'draft', active: true, publishedAt: '2022-01-01T00:00:00.000Z' };
-  for (const key of ['id', 'created_at', 'updated_at']) {
-    const res = await fetch(`${base}/article`, { method: 'POST', body: JSON.stringify({ ...ok, [key]: key === 'id' ? 99 : '2000-01-01T00:00:00.000Z' }) });
+  for (const key of ['id', 'document_id', 'created_at', 'updated_at']) {
+    const numeric = key === 'id' || key === 'document_id';
+    const res = await fetch(`${base}/article`, { method: 'POST', body: JSON.stringify({ ...ok, [key]: numeric ? 99 : '2000-01-01T00:00:00.000Z' }) });
     assert.equal(res.status, 400, key);
   }
 });

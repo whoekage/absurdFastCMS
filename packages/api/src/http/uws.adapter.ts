@@ -154,6 +154,34 @@ function handleWriteRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, method: s
   });
 }
 
+/**
+ * The Draft & Publish ACTION route (`POST /:type/:id/actions/:action`). Structurally identical to
+ * {@link handleWriteRoute} but reads a THIRD path param (the action token) and validates it ∈
+ * {publish,unpublish} BEFORE dispatch — an unknown token is a 404 (no such action), never reaching the
+ * core. The 3-segment path is structurally distinct from the 2-segment data routes, so route ordering is
+ * irrelevant. Always treated as POST.
+ */
+function handleWriteActionRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, ctx: WriteContext): void {
+  const type = req.getParameter(0) ?? '';
+  const idRaw = req.getParameter(1) ?? '';
+  const actionRaw = req.getParameter(2) ?? '';
+  const { aborted } = readBody(res, () => {
+    void (async () => {
+      if (actionRaw !== 'publish' && actionRaw !== 'unpublish') {
+        return corkSend(res, aborted, errorResponse(404, 'not found'));
+      }
+      let result: CoreResponse;
+      try {
+        // The action sub-route carries no body (the lifecycle change is positional). body=undefined.
+        result = await handleWrite(ctx, { method: 'POST', type, idRaw, body: undefined, action: actionRaw });
+      } catch {
+        result = errorResponse(500, 'internal error');
+      }
+      corkSend(res, aborted, result);
+    })();
+  });
+}
+
 /** Which template a builder route is on — drives which getParameter slots to read synchronously. */
 interface CtRouteOpts {
   /** Read getParameter(0) as `:apiId` (false for the `/content-types` collection). */
@@ -205,7 +233,7 @@ function handleContentTypeRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, met
  * NEVER reassigned on a write — only its per-type storage is swapped — so the read handlers' reference
  * stays valid. Without a store the server is read-only and a write falls to the core's 405.
  */
-export function createServer(engine: Engine, store?: PostgresStore, registry?: Registry): UwsServer {
+export function createServer(engine: Engine, store?: PostgresStore, registry?: Registry, publishClock: () => Date = () => new Date()): UwsServer {
   const app = uWS.App();
   const current = engine;
 
@@ -263,6 +291,8 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
         const def = registry.get(type)!;
         await rebuildType(store.sql, current, def, registry);
       },
+      // Publish clock: real wall-clock by default; tests inject a fixed Date for deterministic fixtures.
+      publishClock,
     };
     // CONTENT-TYPE BUILDER (runtime DDL over HTTP) — registered BEFORE the data `/:type` routes. The
     // `/content-types` prefix can never shadow a real type: '-' is not a legal api_id char, so no
@@ -275,10 +305,14 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
     app.get('/content-types', (res, req) => handleContentTypeRoute(res, req, 'GET', ctCtx, { hasApiId: false }));
     app.get('/content-types/:apiId', (res, req) => handleContentTypeRoute(res, req, 'GET', ctCtx, { hasApiId: true }));
     app.del('/content-types/:apiId', (res, req) => handleContentTypeRoute(res, req, 'DELETE', ctCtx, { hasApiId: true }));
+    app.post('/content-types/:apiId/relations', (res, req) => handleContentTypeRoute(res, req, 'POST', ctCtx, { hasApiId: true, sub: 'relations' }));
     app.post('/content-types/:apiId/fields', (res, req) => handleContentTypeRoute(res, req, 'POST', ctCtx, { hasApiId: true, sub: 'fields' }));
     app.put('/content-types/:apiId/fields/:name', (res, req) => handleContentTypeRoute(res, req, 'PUT', ctCtx, { hasApiId: true, sub: 'fields', hasName: true }));
     app.del('/content-types/:apiId/fields/:name', (res, req) => handleContentTypeRoute(res, req, 'DELETE', ctCtx, { hasApiId: true, sub: 'fields', hasName: true }));
 
+    // Draft & Publish action sub-route. 3 segments — structurally distinct from the 2-segment data
+    // routes, so ordering vs put('/:type/:id') is irrelevant (uWS matches by segment count + literals).
+    app.post('/:type/:id/actions/:action', (res, req) => handleWriteActionRoute(res, req, ctx));
     app.post('/:type', (res, req) => handleWriteRoute(res, req, 'POST', false, ctx));
     app.put('/:type/:id', (res, req) => handleWriteRoute(res, req, 'PUT', true, ctx));
     app.del('/:type/:id', (res, req) => handleWriteRoute(res, req, 'DELETE', true, ctx));

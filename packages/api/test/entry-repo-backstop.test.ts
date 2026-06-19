@@ -51,3 +51,38 @@ test('a real 23505 unique violation maps to a generic EntryWriteError (no SQL/co
     },
   );
 });
+
+// be-02b: document_id is a PHYSICAL system column only. The loader projects strictly from def.fields
+// (SYSTEM_FIELDS stays 3 wide), so insertEntry's returned shape NEVER contains it. These pin the
+// physical behaviour via a DIRECT PG SELECT of the column — NOT via the wire.
+test('a fresh create auto-allocates a unique document_id via the sequence DEFAULT (direct PG)', async () => {
+  const registry = await Registry.build(sql);
+  const def = registry.get('gadget')!;
+  // Plain creates: no opts -> column DEFAULTs to nextval('document_id_seq').
+  const a = (await insertEntry(sql, def, { code: 'doc-a' })) as { id: number };
+  const b = (await insertEntry(sql, def, { code: 'doc-b' })) as { id: number };
+  // Returned shape carries NO document_id key (byte-identical reads / loader-skip).
+  assert.ok(!('document_id' in a));
+  assert.ok(!('document_id' in b));
+  // But the physical column is populated and the two rows got DISTINCT ids.
+  const rows = await sql<{ id: number; document_id: number }[]>`
+    SELECT id, document_id FROM ct_gadget WHERE id IN (${a.id}, ${b.id}) ORDER BY id`;
+  assert.equal(rows.length, 2);
+  assert.equal(typeof rows[0].document_id, 'number');
+  assert.notEqual(rows[0].document_id, rows[1].document_id);
+});
+
+test('the internal reuse seam attaches a second row to the SAME document_id (direct PG)', async () => {
+  const registry = await Registry.build(sql);
+  const def = registry.get('gadget')!;
+  // Parent draws a fresh document_id from the sequence.
+  const parent = (await insertEntry(sql, def, { code: 'variant-parent' })) as { id: number };
+  const [{ document_id: parentDoc }] = await sql<{ document_id: number }[]>`
+    SELECT document_id FROM ct_gadget WHERE id = ${parent.id}`;
+  // The guarded seam: a variant REUSES the parent's document_id (be-03 / be-06 path).
+  const variant = (await insertEntry(sql, def, { code: 'variant-child' }, { documentId: parentDoc })) as { id: number };
+  assert.notEqual(variant.id, parent.id); // distinct PK rows
+  const [{ document_id: variantDoc }] = await sql<{ document_id: number }[]>`
+    SELECT document_id FROM ct_gadget WHERE id = ${variant.id}`;
+  assert.equal(variantDoc, parentDoc); // SAME document
+});

@@ -42,9 +42,13 @@ export const MAX_IDENTIFIER_BYTES = 63;
 /** The reserved per-type table prefix. A user api_id may not start with it (we add it ourselves). */
 export const TABLE_PREFIX = 'ct_';
 /** System columns the generator injects; a user cannot define a field with one of these names. */
-export const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(['id', 'created_at', 'updated_at']);
+// `published_at` (snake_case) is the Draft & Publish system column — reserved on EVERY type (D&P or
+// not), cheap + uniform, so a non-D&P type cannot declare a column that would collide if it later opted
+// in, and a client cannot spoof one. NOTE: `publishedAt` (camelCase, the article seed's USER field) is
+// NOT reserved — only the snake_case underscore form is, so the seed field keeps working byte-identically.
+export const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(['id', 'document_id', 'created_at', 'updated_at', 'published_at']);
 /** Tables/api_ids a user type may not collide with. */
-export const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['content_types', 'content_type_fields', 'content_type_relations', '_migrations', 'articles']);
+export const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['content_types', 'content_type_fields', 'content_type_relations', '_migrations']);
 
 // --- typed error classes (deterministic; never leak a raw PG error) ----------------------------
 
@@ -352,13 +356,31 @@ function columnSpec(name: string, field: ResolvedField): (cb: import('kysely').C
  * `updated_at` both `timestamptz NOT NULL DEFAULT now()`) then the user columns in `sort` order, each
  * with its native pg type via the `sql\`\`` escape hatch, NULL/NOT NULL, enum CHECK, and constant
  * default. Valid even with zero user fields. Returns `{ sql, parameters }` — never executes.
+ *
+ * DRAFT & PUBLISH (Model A, per-type opt-in): when `draftPublish` is true, a nullable snake_case
+ * `published_at timestamptz` system column is injected AFTER `updated_at` and BEFORE the user columns
+ * (matching registry SYSTEM_FIELDS order). NULL = draft (a fresh insert is a draft — NO DEFAULT, so the
+ * column is left NULL and a publish writes it explicitly). With `draftPublish=false` (the DEFAULT) the
+ * emitted SQL string + parameter list are BYTE-IDENTICAL to before this feature — the `if` is the only
+ * change, every existing call site is untouched.
+ *
+ * Alternative considered + REJECTED: `published_at DEFAULT now()`. Model A requires create=draft (NULL);
+ * a default would auto-publish every insert, and `now()` is non-deterministic (breaks byte-exact fixtures).
  */
-export function compileCreateTable(tableName: string, fields: ResolvedField[]): CompiledQuery {
+export function compileCreateTable(tableName: string, fields: ResolvedField[], draftPublish = false): CompiledQuery {
   let builder = compiler.schema
     .createTable(tableName)
     .addColumn('id', 'serial', (cb) => cb.primaryKey().notNull())
+    // Global document_id (i32) — the variant-grouping key for draft/publish + i18n. DEFAULTs from the
+    // shared sequence (0001_init.sql) so a plain INSERT auto-allocates; a variant supplies an existing
+    // value. NOT projected by the loader (not in registry SYSTEM_FIELDS) — reads stay byte-identical.
+    .addColumn('document_id', sql`integer`, (cb) => cb.notNull().defaultTo(sql`nextval('document_id_seq')`))
     .addColumn('created_at', sql`timestamptz`, (cb) => cb.notNull().defaultTo(sql`now()`))
     .addColumn('updated_at', sql`timestamptz`, (cb) => cb.notNull().defaultTo(sql`now()`));
+  if (draftPublish) {
+    // NULL = draft. No DEFAULT (a fresh insert is a draft); publish writes it explicitly.
+    builder = builder.addColumn('published_at', sql`timestamptz`, (cb) => cb);
+  }
   for (const f of fields) {
     builder = builder.addColumn(f.name, sql.raw(f.resolved.pgType), columnSpec(f.name, f));
   }

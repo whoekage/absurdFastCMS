@@ -57,6 +57,8 @@ export interface ContentTypeRow {
   table_name: string;
   created_at: Date;
   updated_at: Date;
+  /** Model A Draft & Publish opt-in: true => the ct_ table has a `published_at` system column. */
+  draft_publish: boolean;
 }
 
 /** A `content_type_fields` row (snake_case as stored). */
@@ -163,7 +165,7 @@ function defaultText(value: unknown): string | null {
  * `sort`) -> CREATE TABLE. A pre-check rejects an existing api_id BEFORE any DDL; the DB UNIQUE on
  * lower(api_id)/lower(table_name) is the atomic backstop for a race.
  */
-export async function createContentType(sql: Sql, params: { apiId: string; fields: FieldSpec[]; relations?: RelationSpec[] }): Promise<ContentTypeRow> {
+export async function createContentType(sql: Sql, params: { apiId: string; fields: FieldSpec[]; relations?: RelationSpec[]; draftPublish?: boolean }): Promise<ContentTypeRow> {
   const tableName = deriveTableName(params.apiId);
   const fields = resolveFields(params.fields);
   const relations = params.relations ?? [];
@@ -186,7 +188,7 @@ export async function createContentType(sql: Sql, params: { apiId: string; field
 
   return runSchemaTx(sql, tableName, async (tx) => {
     const [ct] = await tx<ContentTypeRow[]>`
-      INSERT INTO content_types (api_id, table_name) VALUES (${params.apiId}, ${tableName}) RETURNING *
+      INSERT INTO content_types (api_id, table_name, draft_publish) VALUES (${params.apiId}, ${tableName}, ${params.draftPublish ?? false}) RETURNING *
     `;
     for (let i = 0; i < fields.length; i++) {
       const f = fields[i]!;
@@ -196,7 +198,8 @@ export async function createContentType(sql: Sql, params: { apiId: string; field
       `;
     }
     // The owner ct_ table must exist BEFORE any (possibly self-referential) link-table FK is created.
-    const ddl = compileCreateTable(tableName, fields);
+    // D&P opt-in injects a conditional `published_at` system column (NULL=draft) — see compileCreateTable.
+    const ddl = compileCreateTable(tableName, fields, params.draftPublish ?? false);
     await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
 
     for (const spec of relations) {

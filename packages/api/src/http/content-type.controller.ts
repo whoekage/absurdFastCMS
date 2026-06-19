@@ -1,7 +1,7 @@
 import type { Sql } from 'postgres';
 import type { Engine } from '../store/engine.ts';
 import type { Registry, ContentTypeDef } from '../store/registry.ts';
-import { loadType, rebuildType } from '../db/engine.loader.ts';
+import { loadType, rebuildType, loadAllRelations } from '../db/engine.loader.ts';
 import {
   createContentType,
   addField,
@@ -9,7 +9,9 @@ import {
   changeFieldType,
   dropField,
   dropContentType,
+  addRelation,
   type FieldSpec,
+  type RelationSpec,
 } from '../db/content-type.repository.ts';
 import {
   ContentTypeExistsError,
@@ -25,6 +27,9 @@ import {
   TypeChangeFailedError,
   SchemaChangeConflictError,
   DefaultTypeError,
+  DependentTypesError,
+  UnknownRelationKindError,
+  type RelationKind,
 } from '../db/ddl.ts';
 import { UnknownCmsTypeError, TypeOptionError, EnumValueError, type CmsType, type FieldOptions } from '../db/type.catalog.ts';
 import { JSON_CT, errorResponse, type CoreResponse } from './read.router.ts';
@@ -92,6 +97,21 @@ function projectDef(def: ContentTypeDef): unknown {
       ...(f.scale !== undefined ? { scale: f.scale } : {}),
       ...(f.precision !== undefined ? { precision: f.precision } : {}),
     })),
+    // Relations are physical-detail-free (no linkTable, no content_type_id): each entry carries the
+    // owner-side field key, its cardinality kind, the target api_id, whether THIS side owns the link
+    // table, and (two-way only) the partner field. A scalar-only type returns `relations: []` — no
+    // shape drift for existing consumers (the key is always present, just empty).
+    relations: def.relations.map((r) => ({
+      field: r.field,
+      kind: r.kind,
+      target: r.targetApiId,
+      owner: r.isOwner,
+      ...(r.inverseField !== undefined ? { inverseField: r.inverseField } : {}),
+    })),
+    // Draft & Publish flag. CONDITIONAL key: emitted ONLY for a D&P type, so a non-D&P type's projected
+    // def stays BYTE-IDENTICAL to before this feature — the entire existing builder suite is unaffected
+    // with zero edits, and only NEW D&P tests assert the key. (admin reads this to show the D&P toggle.)
+    ...(def.draftPublish ? { draftPublish: true } : {}),
   };
 }
 
@@ -111,7 +131,7 @@ function isObj(b: unknown): b is Record<string, unknown> {
  * racing a drop) is rethrown so the adapter emits a fixed `500 'internal error'` with no message leak.
  */
 function mapError(e: unknown): CoreResponse {
-  if (e instanceof ContentTypeExistsError || e instanceof FieldExistsError) return errorResponse(409, e.message);
+  if (e instanceof ContentTypeExistsError || e instanceof FieldExistsError || e instanceof DependentTypesError) return errorResponse(409, e.message);
   if (e instanceof ContentTypeNotFoundError || e instanceof FieldNotFoundError) return errorResponse(404, e.message);
   if (
     e instanceof InvalidIdentifierError ||
@@ -120,6 +140,7 @@ function mapError(e: unknown): CoreResponse {
     e instanceof ReservedTableNameError ||
     e instanceof DuplicateFieldError ||
     e instanceof UnknownCmsTypeError ||
+    e instanceof UnknownRelationKindError ||
     e instanceof TypeOptionError ||
     e instanceof EnumValueError ||
     e instanceof DefaultTypeError ||
@@ -161,6 +182,26 @@ async function syncSchema(ctx: ContentTypeContext, apiId: string): Promise<Conte
   return def;
 }
 
+/**
+ * Relation-declaration sync. A relation declaration emits NO ct_ column on either side (the edges live
+ * in a link table), so the owner's read arena is byte-identical — but the owner's def MUST be rebuilt so
+ * its `relations`/`relationsByField` reflect the new row, and `rebuildType`'s `loadAllRelations` re-derives
+ * EVERY relation's edges (incl. this new one + its inverse) against the live Tables, going LIVE for both
+ * filtering and populate with no read-path change.
+ *
+ * For a TWO-WAY relation whose target differs from the owner, the INVERSE meta row lands on the TARGET's
+ * `content_type_relations`. `loadAllRelations` only walks `registry.all()`, so the target's registry def
+ * must also be rebuilt — otherwise the inverse Relation is never re-derived AND a later
+ * `GET /content-types/:target` would not show the inverse. We rebuild the target FIRST so the single
+ * `loadAllRelations` inside the owner's `rebuildType` sees the inverse row too.
+ */
+async function syncRelation(ctx: ContentTypeContext, ownerApiId: string, spec: RelationSpec): Promise<ContentTypeDef> {
+  const twoWay = spec.inverseField !== undefined;
+  const selfRef = spec.target.toLowerCase() === ownerApiId.toLowerCase();
+  if (twoWay && !selfRef) await ctx.registry().rebuildType(ctx.sql, spec.target); // refresh target's relations[] before re-derive.
+  return syncSchema(ctx, ownerApiId); // rebuilds owner def + loadAllRelations (edges go live).
+}
+
 /** Drop sync: engine then registry, synchronously adjacent (no await between -> no torn membership). */
 function syncDrop(ctx: ContentTypeContext, apiId: string): void {
   ctx.engine().dropType(apiId); // has()===false immediately + cache invalidate.
@@ -184,10 +225,34 @@ export async function handleContentTypeRequest(ctx: ContentTypeContext, req: Con
       if (method === 'POST') {
         if (!isObj(body)) return errorResponse(400, 'request body must be a JSON object');
         if (!Array.isArray(body.fields)) return errorResponse(400, 'fields must be an array');
+        // Optional create-time relations: same RAW pass-through; the repo validates each spec + the
+        // owner ct_ table is created BEFORE any (possibly self-referential) link-table FK. A non-array
+        // `relations` is a 400.
+        if (body.relations !== undefined && !Array.isArray(body.relations)) return errorResponse(400, 'relations must be an array');
+        // Draft & Publish opt-in flag: validate it is a boolean if present (else 400). RAW pass-through
+        // doctrine — no SQL is built here; the conditional `published_at` DDL lives in compileCreateTable.
+        if (body.draftPublish !== undefined && typeof body.draftPublish !== 'boolean') return errorResponse(400, 'draftPublish must be a boolean');
+        const relations = body.relations as RelationSpec[] | undefined;
         // RAW pass-through to the validating repo — the api_id + every field name are validated there
         // BEFORE any DDL. The HTTP layer never derives a table name or builds SQL.
-        const ct = await createContentType(ctx.sql, { apiId: body.apiId as string, fields: body.fields as FieldSpec[] });
-        const def = await syncCreate(ctx, ct.api_id); // canonical stored casing.
+        const ct = await createContentType(ctx.sql, {
+          apiId: body.apiId as string,
+          fields: body.fields as FieldSpec[],
+          ...(relations !== undefined ? { relations } : {}),
+          ...(body.draftPublish !== undefined ? { draftPublish: body.draftPublish as boolean } : {}),
+        });
+        // Create-time relations may target OTHER existing types; if any is two-way, its inverse row
+        // landed on a target type, so rebuild every distinct two-way target's def before the owner load
+        // so loadAllRelations (inside syncCreate's loader) re-derives those inverses too.
+        const twoWayTargets = new Set<string>();
+        for (const r of relations ?? []) {
+          if (r.inverseField !== undefined && r.target.toLowerCase() !== ct.api_id.toLowerCase()) twoWayTargets.add(r.target);
+        }
+        for (const t of twoWayTargets) await ctx.registry().rebuildType(ctx.sql, t);
+        const def = await syncCreate(ctx, ct.api_id); // canonical stored casing; define + index + stream.
+        // loadType does NOT load relation edges; if any were declared at create time, derive them now so
+        // the new type's relations go LIVE (Relation objects + inverse on each two-way target).
+        if ((relations ?? []).length > 0) await loadAllRelations(ctx.sql, ctx.engine(), ctx.registry());
         return ok(201, projectDef(def));
       }
       return errorResponse(405, `method ${req.method} not allowed`);
@@ -242,6 +307,28 @@ export async function handleContentTypeRequest(ctx: ContentTypeContext, req: Con
         await dropField(ctx.sql, apiId, fieldName);
         const def = await syncSchema(ctx, apiId);
         return ok(200, projectDef(def));
+      }
+      return errorResponse(405, `method ${req.method} not allowed`);
+    }
+
+    // /content-types/:apiId/relations  (declare a relation on the owner type)
+    if (sub === 'relations') {
+      if (fieldName === undefined) {
+        if (method === 'POST') {
+          if (!isObj(body)) return errorResponse(400, 'request body must be a JSON object');
+          // RAW pass-through to the validating repo: field/kind/target identifiers + collisions are all
+          // checked there (one advisory-locked schema tx), never here. `inverseField` present => two-way.
+          const spec: RelationSpec = {
+            field: body.field as string,
+            kind: body.kind as RelationKind,
+            target: body.target as string,
+            ...(body.inverseField !== undefined ? { inverseField: body.inverseField as string } : {}),
+          };
+          await addRelation(ctx.sql, apiId, spec);
+          const def = await syncRelation(ctx, apiId, spec); // re-derives edges -> filter + populate go live.
+          return ok(201, projectDef(def));
+        }
+        return errorResponse(405, `method ${req.method} not allowed`);
       }
       return errorResponse(405, `method ${req.method} not allowed`);
     }

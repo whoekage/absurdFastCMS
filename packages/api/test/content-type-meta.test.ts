@@ -70,7 +70,7 @@ test('P1 create content-type builds a table matching the meta exactly', async ()
   assert.equal(ct!.table_name, 'ct_post');
   const cols = await physicalColumns(sql, 'ct_post');
   // system cols first, in order, then user cols by sort.
-  assert.deepEqual(cols.map((c) => c.name), ['id', 'created_at', 'updated_at', 'title', 'views', 'amount']);
+  assert.deepEqual(cols.map((c) => c.name), ['id', 'document_id', 'created_at', 'updated_at', 'title', 'views', 'amount']);
   // title is NOT NULL, views nullable, amount nullable.
   assert.equal(cols.find((c) => c.name === 'title')!.nullable, false);
   assert.equal(cols.find((c) => c.name === 'views')!.nullable, true);
@@ -222,13 +222,13 @@ test('P10 drop content-type removes everything atomically', async () => {
 
 // P11 — enum round-trip: allowed value ok, disallowed fails CHECK, injection value is a literal. [5,13]
 test('P11 enumeration CHECK round-trips and an injection value is inert', async () => {
-  await createContentType(sql, { apiId: 'ticket', fields: [{ name: 'status', cmsType: 'enumeration', options: { values: ['open', "a'); DROP TABLE articles;--"] } }] });
+  await createContentType(sql, { apiId: 'ticket', fields: [{ name: 'status', cmsType: 'enumeration', options: { values: ['open', "a'); DROP TABLE content_types;--"] } }] });
   await sql.unsafe(`INSERT INTO "ct_ticket" (status) VALUES ('open')`);
   // a value not in the set fails the CHECK constraint.
   await assert.rejects(() => sql.unsafe(`INSERT INTO "ct_ticket" (status) VALUES ('closed')`));
-  // the injection-y member is a legal VALUE (stored, checked as a literal) — never executed: articles survives.
-  await sql.unsafe(`INSERT INTO "ct_ticket" (status) VALUES ('a''); DROP TABLE articles;--')`);
-  assert.equal(await tableExists(sql, 'articles'), true);
+  // the injection-y member is a legal VALUE (stored, checked as a literal) — never executed: content_types survives.
+  await sql.unsafe(`INSERT INTO "ct_ticket" (status) VALUES ('a''); DROP TABLE content_types;--')`);
+  assert.equal(await tableExists(sql, 'content_types'), true);
   const rows = await sql`SELECT status FROM "ct_ticket" ORDER BY id`;
   assert.equal(rows.length, 2);
 });
@@ -257,7 +257,7 @@ test('P13 concurrent schema changes on one type serialize', async () => {
   // Whatever serialization order, the meta and physical agree on the set of columns.
   const ct = await getContentType(sql, 'conc');
   const fieldNames = (await getFields(sql, ct!.id)).map((f) => f.name).sort();
-  const userCols = cols.filter((c) => !['id', 'created_at', 'updated_at'].includes(c.name)).map((c) => c.name).sort();
+  const userCols = cols.filter((c) => !['id', 'document_id', 'created_at', 'updated_at'].includes(c.name)).map((c) => c.name).sort();
   assert.deepEqual(userCols, fieldNames);
 
   // A racing DUPLICATE add is rejected (FieldExistsError or the DB UNIQUE backstop), never doubled.
@@ -306,7 +306,7 @@ test('P14 postgres.js parsing contract for the new pg types', async () => {
 test('P15 empty content-type creates a system-only table', async () => {
   await createContentType(sql, { apiId: 'bare', fields: [] });
   const cols = await physicalColumns(sql, 'ct_bare');
-  assert.deepEqual(cols.map((c) => c.name), ['id', 'created_at', 'updated_at']);
+  assert.deepEqual(cols.map((c) => c.name), ['id', 'document_id', 'created_at', 'updated_at']);
   const ct = await getContentType(sql, 'bare');
   assert.equal((await getFields(sql, ct!.id)).length, 0);
 });
@@ -325,34 +325,34 @@ test('P16 updated_at column exists and is maintained on write', async () => {
 });
 
 // P17 — the identifier gate is WIRED into the real create/addField/rename entry points: an injection
-//        payload as an api_id or a field name is rejected BEFORE any SQL runs, and articles + the
-//        catalog survive untouched. [1,2,13]
-test('P17 injection identifiers rejected at the real entry points; articles + catalog survive', async () => {
+//        payload as an api_id or a field name is rejected BEFORE any SQL runs, and the meta catalog
+//        survives untouched. [1,2,13]
+test('P17 injection identifiers rejected at the real entry points; catalog survives', async () => {
   // an injection-y api_id -> rejected (an injection payload also fails the ASCII allowlist).
-  await assert.rejects(() => createContentType(sql, { apiId: 'x"; DROP TABLE articles;--', fields: [] }), InvalidIdentifierError);
+  await assert.rejects(() => createContentType(sql, { apiId: 'x"; DROP TABLE content_types;--', fields: [] }), InvalidIdentifierError);
   // a reserved api_id -> ReservedTableNameError (a different gate arm, still pre-SQL).
-  await assert.rejects(() => createContentType(sql, { apiId: 'articles', fields: [] }), ReservedTableNameError);
+  await assert.rejects(() => createContentType(sql, { apiId: 'content_types', fields: [] }), ReservedTableNameError);
   // an injection-y FIELD name -> rejected before any CREATE TABLE.
   await assert.rejects(
     () => createContentType(sql, { apiId: 'safe', fields: [{ name: 'evil" GENERATED ALWAYS AS (1) STORED', cmsType: 'string' }] }),
     InvalidIdentifierError,
   );
-  // nothing leaked: no ct_ table, no content_types row, articles intact.
+  // nothing leaked: no ct_ table, no content_types row, the catalog survives.
   assert.equal(await tableExists(sql, 'ct_safe'), false);
   assert.equal(await getContentType(sql, 'safe'), null);
   assert.equal((await sql`SELECT 1 FROM content_types`).length, 0);
-  assert.equal(await tableExists(sql, 'articles'), true);
+  assert.equal(await tableExists(sql, 'content_types'), true);
 
   // addField / renameField with a malicious target name -> rejected, the type untouched.
   await createContentType(sql, { apiId: 'host', fields: [{ name: 'title', cmsType: 'string' }] });
-  await assert.rejects(() => addField(sql, 'host', { name: 'bad"; DROP TABLE articles;--', cmsType: 'string' }), InvalidIdentifierError);
+  await assert.rejects(() => addField(sql, 'host', { name: 'bad"; DROP TABLE content_types;--', cmsType: 'string' }), InvalidIdentifierError);
   await assert.rejects(() => renameField(sql, 'host', 'title', 'bad" --'), InvalidIdentifierError);
   await assert.rejects(() => dropField(sql, 'host', 'bad" --'), InvalidIdentifierError);
-  assert.equal(await tableExists(sql, 'articles'), true);
+  assert.equal(await tableExists(sql, 'content_types'), true);
   const ct = await getContentType(sql, 'host');
   assert.deepEqual((await getFields(sql, ct!.id)).map((f) => f.name), ['title']);
   const cols = await physicalColumns(sql, 'ct_host');
-  assert.deepEqual(cols.map((c) => c.name), ['id', 'created_at', 'updated_at', 'title']);
+  assert.deepEqual(cols.map((c) => c.name), ['id', 'document_id', 'created_at', 'updated_at', 'title']);
 });
 
 // P18 — case-insensitive duplicate field names are rejected THROUGH createContentType (real path). [23,24]
@@ -389,14 +389,14 @@ test('P19 enum value-set change rejected; meta + physical CHECK stay consistent'
 // P20 — an adversarial constant DEFAULT is neutralized (escaped literal, never executed) and the exact
 //        literal round-trips. Pins that default injection-safety rests on Kysely's escaping. [13,35]
 test('P20 injection-y default is inert and round-trips verbatim', async () => {
-  const evil = "x'); DROP TABLE articles;--";
+  const evil = "x'); DROP TABLE content_types;--";
   await createContentType(sql, { apiId: 'def', fields: [{ name: 'note', cmsType: 'string', options: { default: evil } }] });
-  assert.equal(await tableExists(sql, 'articles'), true);
+  assert.equal(await tableExists(sql, 'content_types'), true);
   // a row that relies on the default bakes the EXACT literal (no SQL executed from it).
   await sql.unsafe(`INSERT INTO "ct_def" (id) VALUES (DEFAULT)`);
   const [row] = await sql<{ note: string }[]>`SELECT note FROM "ct_def"`;
   assert.equal(row!.note, evil);
-  assert.equal(await tableExists(sql, 'articles'), true);
+  assert.equal(await tableExists(sql, 'content_types'), true);
 });
 
 // P21 — non-integer constant defaults round-trip PHYSICALLY through the real addField DDL path: pins

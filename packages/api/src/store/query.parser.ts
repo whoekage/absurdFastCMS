@@ -48,11 +48,20 @@ export interface PopulateNode {
 /** The optional populate plan: which relation fields to expand. Empty when `populate` is absent. */
 export type PopulatePlan = PopulateNode[];
 
+/** The Strapi v5 Draft & Publish lifecycle selector (v5 replaced v4 `publicationState=preview|live`). */
+export type Status = 'draft' | 'published';
+
 /** The parser's full structured output. `where` is omitted when there are no filters. */
 export interface ParsedQuery {
   where?: FilterNode;
   options: QueryOptions;
   populate: PopulatePlan;
+  /**
+   * The Draft & Publish lifecycle selector (`status=draft|published`), when present. VALIDATED here on
+   * EVERY type (a bad token -> 400) but only ACTED ON for a D&P type by the read router; on a non-D&P
+   * type it is a no-op. Absent => the router defaults a D&P type to published-only.
+   */
+  status?: Status;
 }
 
 // --- the Strapi `$op` -> engine ScanOp map ----------------------------------
@@ -717,6 +726,7 @@ export function parseQuery(
   let limit: number | undefined;
   let keysetRaw: RawKeysetOptions | undefined;
   let populate: PopulatePlan = [];
+  let status: Status | undefined;
 
   for (const key of Object.keys(params)) {
     switch (key) {
@@ -743,6 +753,18 @@ export function parseQuery(
       case 'populate':
         populate = parsePopulate(params[key]!);
         break;
+      case 'status': {
+        // Draft & Publish lifecycle selector. Strapi v5 exposes ONLY draft|published (no `all`); a
+        // value outside that set -> 400 on ANY type. The EFFECT (folding a published_at predicate) is
+        // applied by the read router and only for a D&P type; on a non-D&P type the token parses but is
+        // ignored (Strapi-faithful no-op). `status` is a lifecycle selector, NOT a filter/sort field.
+        const v = leafString(params[key]!, 'status');
+        if (v !== 'draft' && v !== 'published') {
+          throw new QueryParseError(`status must be draft|published, got "${v}"`);
+        }
+        status = v;
+        break;
+      }
       default:
         throw new QueryParseError(`unknown query parameter "${key}"`);
     }
@@ -757,5 +779,6 @@ export function parseQuery(
 
   const out: ParsedQuery = { options, populate };
   if (where !== undefined) out.where = where;
+  if (status !== undefined) out.status = status;
   return out;
 }

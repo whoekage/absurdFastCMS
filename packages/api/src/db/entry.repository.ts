@@ -93,12 +93,25 @@ function fromDb(def: ContentTypeDef, dbRow: Record<string, unknown>): Record<str
  * INSERT one entry into ct_<apiId>. `data` keys are already a whitelisted subset of `def.writable`
  * names (the validator ran first). Returns the stored row (engine-named, with its serial id).
  */
-export async function insertEntry(sql: Sql, def: ContentTypeDef, data: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function insertEntry(
+  sql: Sql,
+  def: ContentTypeDef,
+  data: Record<string, unknown>,
+  // INTERNAL reuse seam — never reachable from the wire (body.parser rejects a `document_id` key).
+  // be-03 (draft/publish) + be-06 (i18n) pass an existing parent id so a variant shares its document.
+  // Left undefined here: the document_id column DEFAULTs to nextval('document_id_seq') and auto-allocates.
+  opts?: { documentId?: number },
+): Promise<Record<string, unknown>> {
   assertTableName(def.tableName); // belt-and-suspenders identifier gate, symmetric with the loader.
   const keys = Object.keys(data);
   const cols: string[] = [];
   const vals: unknown[] = [];
   const jsonFlags: boolean[] = [];
+  if (opts?.documentId !== undefined) {
+    cols.push('document_id');
+    vals.push(opts.documentId);
+    jsonFlags.push(false);
+  }
   for (const key of keys) {
     const field = def.writableByName.get(key)!; // guaranteed present by the validator
     cols.push(field.column);
@@ -108,7 +121,8 @@ export async function insertEntry(sql: Sql, def: ContentTypeDef, data: Record<st
 
   try {
     if (cols.length === 0) {
-      // A system-fields-only type: INSERT DEFAULT VALUES (id/created_at/updated_at all defaulted).
+      // A system-fields-only type with no explicit document_id: INSERT DEFAULT VALUES
+      // (id/document_id/created_at/updated_at all defaulted).
       const rows = await sql.unsafe(`INSERT INTO ${quoteIdent(def.tableName)} DEFAULT VALUES RETURNING ${returningList(def)}`);
       return fromDb(def, rows[0] as Record<string, unknown>);
     }
@@ -143,6 +157,38 @@ export async function updateEntry(sql: Sql, def: ContentTypeDef, id: number, dat
   const text = `UPDATE ${quoteIdent(def.tableName)} SET ${assignments.join(', ')} WHERE ${quoteIdent('id')} = ${idPlaceholder} RETURNING ${returningList(def)}`;
   try {
     const rows = await sql.unsafe(text, vals as never[]);
+    return rows.length ? fromDb(def, rows[0] as Record<string, unknown>) : null;
+  } catch (e) {
+    mapPgError(e);
+  }
+}
+
+/**
+ * PUBLISH entry `id` (Model A Draft & Publish): set `published_at` to the CALLER-SUPPLIED `at` Date
+ * (NOT a SQL `now()` — so a publish time is deterministic + pinnable in fixtures) + bump `updated_at`.
+ * Returns the stored row (engine-named, incl. `published_at`); `null` when no row has that id. The
+ * caller must have verified `def.draftPublish` (the column only exists on a D&P type).
+ */
+export async function publishEntry(sql: Sql, def: ContentTypeDef, id: number, at: Date): Promise<Record<string, unknown> | null> {
+  assertTableName(def.tableName);
+  const text = `UPDATE ${quoteIdent(def.tableName)} SET ${quoteIdent('published_at')} = $1, ${quoteIdent('updated_at')} = now() WHERE ${quoteIdent('id')} = $2 RETURNING ${returningList(def)}`;
+  try {
+    const rows = await sql.unsafe(text, [at, id] as never[]);
+    return rows.length ? fromDb(def, rows[0] as Record<string, unknown>) : null;
+  } catch (e) {
+    mapPgError(e);
+  }
+}
+
+/**
+ * UNPUBLISH entry `id`: clear `published_at` to NULL (back to draft) + bump `updated_at`. Returns the
+ * stored row; `null` when no row has that id. Caller must have verified `def.draftPublish`.
+ */
+export async function unpublishEntry(sql: Sql, def: ContentTypeDef, id: number): Promise<Record<string, unknown> | null> {
+  assertTableName(def.tableName);
+  const text = `UPDATE ${quoteIdent(def.tableName)} SET ${quoteIdent('published_at')} = NULL, ${quoteIdent('updated_at')} = now() WHERE ${quoteIdent('id')} = $1 RETURNING ${returningList(def)}`;
+  try {
+    const rows = await sql.unsafe(text, [id] as never[]);
     return rows.length ? fromDb(def, rows[0] as Record<string, unknown>) : null;
   } catch (e) {
     mapPgError(e);

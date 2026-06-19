@@ -231,8 +231,8 @@ test('R13 injection-y field/target reject pre-DDL; over-63-byte hashes to a dist
   assert.ok(await tableExists(sql, r1.link_table));
   assert.ok(await tableExists(sql, r2.link_table));
 
-  // articles + the catalog survive intact.
-  assert.ok(await tableExists(sql, 'articles'));
+  // the meta catalog + ct_book survive intact.
+  assert.ok(await tableExists(sql, 'content_types'));
   assert.ok(await tableExists(sql, 'ct_book'));
 });
 
@@ -333,7 +333,7 @@ test('R20 a forced mid-tx failure leaves neither the link table nor any meta row
   assert.deepEqual(cols.map((c) => c.name), ['id']);
   // ct_book arena unchanged (never has a relation column).
   const bookCols = await physicalColumns(sql, 'ct_book');
-  assert.deepEqual(bookCols.map((c) => c.name), ['id', 'created_at', 'updated_at', 'title']);
+  assert.deepEqual(bookCols.map((c) => c.name), ['id', 'document_id', 'created_at', 'updated_at', 'title']);
   await sql.unsafe(`DROP TABLE "book_authors_lnk"`);
 });
 
