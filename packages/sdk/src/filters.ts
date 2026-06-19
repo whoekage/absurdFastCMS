@@ -118,6 +118,13 @@ export interface PopulateObject {
 /** The Draft & Publish lifecycle selector (Strapi v5; replaced v4 `publicationState`). */
 export type StatusParam = 'draft' | 'published';
 
+/**
+ * i18n locale selector. A locale slug (`'en'`, `'fr'`, `'pt-BR'`) returns only that locale's variants;
+ * `'*'` returns ALL variants (no locale predicate); omitted defaults server-side to DEFAULT_LOCALE. No
+ * fallback — a slug with no variant returns nothing. No-op on a type without i18n enabled.
+ */
+export type LocaleParam = string;
+
 /** The full read-query parameter set the builder serializes. All keys optional; `{}` → `''`. */
 export interface QueryParams {
   filters?: FilterObject;
@@ -130,6 +137,11 @@ export interface QueryParams {
    * published entries; `draft` returns only drafts. No-op on a type without Draft & Publish enabled.
    */
   status?: StatusParam;
+  /**
+   * i18n locale selector. A slug returns only that locale's variants; `'*'` returns all variants; omitted
+   * defaults server-side to DEFAULT_LOCALE (no fallback). No-op on a type without i18n enabled.
+   */
+  locale?: LocaleParam;
 }
 
 // === core: a recursive key/value pair accumulator ===============================================
@@ -312,6 +324,7 @@ export function buildQueryString(params: QueryParams): string {
   if (params.fields !== undefined) emitFields(params.fields, out);
   if (params.populate !== undefined) emitPopulate('populate', params.populate, out);
   if (params.status !== undefined) out.push({ key: 'status', value: params.status });
+  if (params.locale !== undefined) out.push({ key: 'locale', value: params.locale });
 
   return out.map((p) => `${p.key}=${encodeURIComponent(p.value)}`).join('&');
 }

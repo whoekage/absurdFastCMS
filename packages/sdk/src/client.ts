@@ -591,12 +591,13 @@ export class AbsurdClient {
   async findOne<T extends Entry = Entry>(
     type: string,
     id: number | string,
-    opts: { populate?: QueryParams['populate']; status?: QueryParams['status'] } = {},
+    opts: { populate?: QueryParams['populate']; status?: QueryParams['status']; locale?: QueryParams['locale'] } = {},
     signal?: AbortSignal,
   ): Promise<SingleResponse<T>> {
     const params: QueryParams = {};
     if (opts.populate !== undefined) params.populate = opts.populate;
     if (opts.status !== undefined) params.status = opts.status;
+    if (opts.locale !== undefined) params.locale = opts.locale;
     const reqOpts: RequestOptions = { query: buildQueryString(params) };
     if (signal) reqOpts.signal = signal;
     return this.request<SingleResponse<T>>(
@@ -613,7 +614,7 @@ export class AbsurdClient {
   async findOneOrNull<T extends Entry = Entry>(
     type: string,
     id: number | string,
-    opts: { populate?: QueryParams['populate']; status?: QueryParams['status'] } = {},
+    opts: { populate?: QueryParams['populate']; status?: QueryParams['status']; locale?: QueryParams['locale'] } = {},
     signal?: AbortSignal,
   ): Promise<SingleResponse<T> | null> {
     try {
@@ -835,6 +836,35 @@ export class AbsurdClient {
     return this.request<SingleResponse<T>>('POST', `/${encodeURIComponent(type)}/${encodeURIComponent(String(id))}/actions/unpublish`, opts);
   }
 
+  // === i18n — locale variant create =============================================================
+
+  /**
+   * i18n — CREATE A LOCALE VARIANT. `POST /:type/:id/locales/:locale` creates a NEW row that joins the
+   * SAME document as the existing entry `id` (reusing its `document_id`), under a new `locale`. SHARED
+   * (`localized:false`) fields are COPIED from the addressed sibling; the request `data` supplies the
+   * LOCALIZED fields (a shared key in `data` is a 400 — shared values stay in sync via the write path).
+   * `locale` is server-set, NOT a body key. Returns the created variant (HTTP 201).
+   *
+   * Throws {@link BadRequestError} (400) when the type does not have i18n enabled, the locale slug is
+   * malformed, a `(document_id, locale)` already exists (duplicate locale), or a required localized field
+   * is missing; {@link NotFoundError} (404) when no row carries `id`.
+   */
+  async createVariant<T extends Entry = Entry>(
+    type: string,
+    id: number | string,
+    locale: string,
+    data: WriteBody<T> = {} as WriteBody<T>,
+    signal?: AbortSignal,
+  ): Promise<SingleResponse<T>> {
+    const opts: RequestOptions = { body: data };
+    if (signal) opts.signal = signal;
+    return this.request<SingleResponse<T>>(
+      'POST',
+      `/${encodeURIComponent(type)}/${encodeURIComponent(String(id))}/locales/${encodeURIComponent(locale)}`,
+      opts,
+    );
+  }
+
   // === Slice 8.2 — bound collection =============================================================
 
   /**
@@ -873,7 +903,7 @@ export class Collection<T extends Entry = Entry> {
   /** {@link AbsurdClient.findOne} bound to this type. */
   findOne(
     id: number | string,
-    opts?: { populate?: QueryParams['populate']; status?: QueryParams['status'] },
+    opts?: { populate?: QueryParams['populate']; status?: QueryParams['status']; locale?: QueryParams['locale'] },
     signal?: AbortSignal,
   ): Promise<SingleResponse<T>> {
     return this.client.findOne<T>(this.type, id, opts, signal);
@@ -882,7 +912,7 @@ export class Collection<T extends Entry = Entry> {
   /** {@link AbsurdClient.findOneOrNull} bound to this type (404 → null). */
   findOneOrNull(
     id: number | string,
-    opts?: { populate?: QueryParams['populate']; status?: QueryParams['status'] },
+    opts?: { populate?: QueryParams['populate']; status?: QueryParams['status']; locale?: QueryParams['locale'] },
     signal?: AbortSignal,
   ): Promise<SingleResponse<T> | null> {
     return this.client.findOneOrNull<T>(this.type, id, opts, signal);
@@ -916,6 +946,11 @@ export class Collection<T extends Entry = Entry> {
   /** {@link AbsurdClient.unpublish} bound to this type. */
   unpublish(id: number | string, signal?: AbortSignal): Promise<SingleResponse<T>> {
     return this.client.unpublish<T>(this.type, id, signal);
+  }
+
+  /** {@link AbsurdClient.createVariant} bound to this type. */
+  createVariant(id: number | string, locale: string, data?: WriteBody<T>, signal?: AbortSignal): Promise<SingleResponse<T>> {
+    return this.client.createVariant<T>(this.type, id, locale, data, signal);
   }
 
   /** {@link AbsurdClient.listAll} (offset iterator) bound to this type. */

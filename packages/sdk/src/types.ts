@@ -60,6 +60,12 @@ export interface FieldSpec {
   name: string;
   cmsType: CmsType;
   options?: FieldOptions;
+  /**
+   * i18n: whether this field is LOCALIZED (per-locale-variant value) or SHARED across the document's
+   * locale variants. Defaults to `true` (localized) server-side. Only meaningful on an `i18n: true` type
+   * (ignored otherwise). A shared field's value is kept in sync across every variant by the write path.
+   */
+  localized?: boolean;
 }
 
 // === 1.2 — content-type definition (the `projectDef` shape) ====================================
@@ -92,6 +98,13 @@ export interface FieldDefinition {
    * value (string/number/boolean/JSON), not a form-shaped value.
    */
   default?: unknown;
+  /**
+   * i18n per-field localized flag, PROJECTED only for an `i18n: true` type (a non-i18n type omits this
+   * key — a conditional wire key). `true` => the field is per-variant; `false` => shared across the
+   * document's locale variants (write-side kept in sync). The synthesized system fields `document_id`
+   * and `locale` are projected as `localized: false`. The admin reads this to show the per-field toggle.
+   */
+  localized?: boolean;
 }
 
 /**
@@ -136,6 +149,13 @@ export interface ContentTypeDefinition {
    * field and the lifecycle endpoints (`publish`/`unpublish`) + the `status` read param apply.
    */
   draftPublish?: boolean;
+  /**
+   * i18n opt-in. Present and `true` ONLY for a type that enabled localization (a conditional wire key —
+   * a non-i18n type omits it). When true, the type has `document_id` + `locale` system fields, a read
+   * accepts the `locale` param (default {@link AbsurdClientOptions.defaultLocale} server-side), and
+   * `createVariant` adds a new locale of an existing document.
+   */
+  i18n?: boolean;
 }
 
 // === 1.6 — wire-format note ====================================================================
@@ -291,6 +311,14 @@ export interface CreateContentTypeInput {
    * Omit / false for an always-published type. CANNOT be toggled after create in this slice.
    */
   draftPublish?: boolean;
+  /**
+   * Enable i18n (localization) for this type (per-type opt-in). When true, the type gains `document_id`
+   * (variant-grouping key) + `locale` (NOT NULL) system columns and a `UNIQUE(document_id, locale)`; a
+   * plain create starts a NEW document in the default locale, `createVariant` adds another locale of an
+   * existing document (copying shared fields), reads accept `locale` / `locale: '*'`, and each field's
+   * {@link FieldSpec.localized} flag governs per-variant vs shared. Omit / false for a single-locale type.
+   */
+  i18n?: boolean;
 }
 
 /**

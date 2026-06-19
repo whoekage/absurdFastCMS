@@ -274,6 +274,57 @@ never set `published_at` through `create`/`update` — it is server-managed (rej
 
 ---
 
+## Internationalization (i18n)
+
+i18n is a **per-type opt-in**. Enable it at create time with `i18n: true` (see the Builder section).
+An i18n type gains two server-managed system fields on the wire — `document_id` (a **number**, the
+key that groups every locale variant of one document) and `locale` (the variant's locale slug) — and a
+`UNIQUE(document_id, locale)` so a document has at most one row per locale.
+
+Each field is either **localized** (per-variant value) or **shared** (one value across every variant),
+controlled by `localized` on the `FieldSpec` (defaults to `true` = localized). A write to a shared
+field on any variant **fans out** to every sibling variant in one transaction; a write to a localized
+field stays scoped to the addressed variant. Reads never merge — each variant row is self-contained.
+
+- **plain `create` → a NEW document in the default locale.** A normal `create` starts a fresh document
+  (`document_id` auto-allocated) under the server's `DEFAULT_LOCALE`. `locale` is server-set, never a
+  body key.
+
+```ts
+const en = await client.create('page', { title: 'Home', slug: 'home' });
+// en.data.locale === 'en' (DEFAULT_LOCALE), en.data.document_id === <new number>
+```
+
+- **`createVariant(type, id, locale, data?)` → a NEW locale of an EXISTING document.** `POST
+  /:type/:id/locales/:locale` clones the document the entry `id` belongs to into a new `locale`:
+  shared fields are **copied** from the sibling, the `data` you pass supplies the **localized** fields
+  (a shared key in `data` is a 400). Returns the created variant (201).
+
+```ts
+const fr = await client.createVariant('page', en.data.id, 'fr', { title: 'Accueil' });
+// fr.data.document_id === en.data.document_id, fr.data.locale === 'fr', fr.data.slug copied from en
+```
+
+- **read by locale.** Pass `locale` on `list` / `findOne`. Omitted → `DEFAULT_LOCALE`; a slug → only
+  that locale (**no fallback** — a missing variant returns nothing); `'*'` → all variants. Composes
+  with `status` (Draft & Publish) and `filters`/`populate`.
+
+```ts
+await client.list('page');                              // DEFAULT_LOCALE variants
+await client.list('page', { locale: 'fr' });            // fr variants only
+await client.list('page', { locale: '*' });             // every variant
+await client.list('page', { locale: 'fr', status: 'published' }); // composes with Draft & Publish
+await client.findOne('page', id, { locale: 'fr' });
+```
+
+A bound `client.collection('page')` exposes `.createVariant(id, locale, data?)` and accepts `locale`
+on `.list` / `.findOne`. `locale` is a no-op (silently ignored) on a non-i18n type; `document_id` /
+`locale` are NOT emitted for a non-i18n type. **Relations are per-variant in v1** — a relation set on
+one variant is independent of the others (shared-relation sync across siblings is a documented future
+item).
+
+---
+
 ## Content-type Builder
 
 `client.contentTypes` covers the runtime-DDL routes. Every 2xx body is a `ContentTypeDefinition`
@@ -304,6 +355,17 @@ const created = await client.contentTypes.create({
   // Opt into Draft & Publish (entries start as drafts; see the Draft & Publish section). Cannot be
   // toggled after create.
   draftPublish: true,
+});
+
+// An i18n type — `i18n: true` plus per-field `localized` (defaults true). A `shared` field is synced
+// across every locale variant; a localized field is per-variant. See the i18n section.
+await client.contentTypes.create({
+  apiId: 'page',
+  fields: [
+    { name: 'title', cmsType: 'string', localized: true },          // per-locale
+    { name: 'slug', cmsType: 'uid', localized: false },             // shared across variants
+  ],
+  i18n: true,
 });
 
 // add / update / drop a field

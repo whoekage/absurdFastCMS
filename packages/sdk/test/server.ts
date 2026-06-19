@@ -105,6 +105,8 @@ export interface TypeDef {
   relations?: RelationSpec[];
   /** Opt into Draft & Publish (adds the `published_at` system column). */
   draftPublish?: boolean;
+  /** Opt into i18n (adds document_id + locale system columns + UNIQUE(document_id, locale)). */
+  i18n?: boolean;
 }
 
 /**
@@ -130,6 +132,7 @@ export async function withType<T>(
     fields: def.fields,
     ...(def.relations ? { relations: def.relations } : {}),
     ...(def.draftPublish ? { draftPublish: true } : {}),
+    ...(def.i18n ? { i18n: true } : {}),
   });
   const apiId = row.api_id;
   // Live-sync RAM, mirroring content-type.controller.ts syncDefine().
