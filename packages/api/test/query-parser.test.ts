@@ -292,6 +292,12 @@ test('parse: fields and populate', () => {
     { field: 'author', children: [] },
     { field: 'tags', children: [] },
   ]);
+  // be-02: the validated CSV selection is now CARRIED on the result (it used to be discarded).
+  assert.deepEqual(q.fields, ['title', 'status']);
+  // bracket-array form yields the same carried list; an empty/all-blank fields= is a no-op (absent).
+  assert.deepEqual(parseQuery(FIELDS, 'fields[0]=title&fields[1]=status').fields, ['title', 'status']);
+  assert.equal(parseQuery(FIELDS, 'fields=').fields, undefined);
+  assert.equal(parseQuery(FIELDS, 'sort=title:asc').fields, undefined); // no fields param => absent (full-row path)
   // A nested populate records WHICH sub-relation to expand in `children` (not a single integer depth).
   const q2 = parseQuery(FIELDS, 'populate[author][populate]=profile');
   assert.deepEqual(q2.populate, [{ field: 'author', children: [{ field: 'profile', children: [] }] }]);

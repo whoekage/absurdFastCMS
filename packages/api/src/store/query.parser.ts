@@ -92,6 +92,14 @@ export interface ParsedQuery {
    * an i18n type to DEFAULT_LOCALE.
    */
   locale?: string;
+  /**
+   * The sparse field selection (`fields=a,b,c` or `fields[0]=a&fields[1]=b`), when present and non-empty.
+   * VALIDATED here on EVERY type against the column schema (an unknown field -> 400, the SAME gate
+   * `parseLeafOp` uses). The engine ACTS on it as a scalar projection at assembly time, force-including
+   * `id` (Strapi always returns it). Absent / empty => no projection (the full-row zero-copy path is
+   * byte-identical to before). Relations stay populate-governed; `fields` filters scalars only.
+   */
+  fields?: string[];
 }
 
 // --- the Strapi `$op` -> engine ScanOp map ----------------------------------
@@ -758,6 +766,7 @@ export function parseQuery(
   let populate: PopulatePlan = [];
   let status: Status | undefined;
   let locale: string | undefined;
+  let fields: string[] | undefined;
 
   for (const key of Object.keys(params)) {
     switch (key) {
@@ -777,10 +786,13 @@ export function parseQuery(
         keysetRaw = pg.keyset;
         break;
       }
-      case 'fields':
-        // Validated against the schema (selection projection is a later slice; we whitelist here).
-        parseFields(schema, params[key]!);
+      case 'fields': {
+        // Validated against the schema (the SAME unknown-field 400 gate as filters). Carried on the
+        // result ONLY when non-empty, so an empty/all-blank `fields=` stays a no-op (no projection).
+        const f = parseFields(schema, params[key]!);
+        if (f.length > 0) fields = f;
         break;
+      }
       case 'populate':
         populate = parsePopulate(params[key]!);
         break;
@@ -821,5 +833,6 @@ export function parseQuery(
   if (where !== undefined) out.where = where;
   if (status !== undefined) out.status = status;
   if (locale !== undefined) out.locale = locale;
+  if (fields !== undefined) out.fields = fields;
   return out;
 }

@@ -114,17 +114,23 @@ function canonicalFilterToken(tree: FilterNode | undefined, filters: QueryOption
   return tree !== undefined ? 'T' + encodeNode(tree) : encodeFilters(filters ?? []);
 }
 
-export function queryKey(typeName: string, opts: QueryOptions, tree?: FilterNode): string {
+export function queryKey(typeName: string, opts: QueryOptions, tree?: FilterNode, fields?: string[]): string {
   const offset = opts.offset ?? 0;
   const limit = opts.limit ?? Infinity;
   const limitTok = limit === Infinity ? '*' : String(limit);
   const filterTok = canonicalFilterToken(tree, opts.filters);
+  // The projected field SET is folded in sorted, so field ORDER is irrelevant (the projection always
+  // emits in materialize order) but the SET is bound: a `fields=a` response can never be served for a
+  // full-row request, nor for a `fields=a,b` one. The token is ABSENT when fields is undefined/empty, so
+  // an unprojected query's key is byte-identical to before this slice (the additive guarantee).
+  const fieldsTok = fields !== undefined && fields.length > 0 ? '\u0000F' + [...fields].sort().join(',') : '';
   const base =
     JSON.stringify(typeName) +
     '\u0000' + filterTok +
     '\u0000' + encodeSort(opts.sort ?? []) +
     '\u0000' + String(offset) +
-    '\u0000' + limitTok;
+    '\u0000' + limitTok +
+    fieldsTok;
   // Keyset requests share no offset/limit, so without this two distinct cursors (page 2 vs page 5)
   // would COLLIDE on the base key. Append the raw cursor/before tokens + pageSize + withCount.
   // The offset key string is UNCHANGED when keysetRaw is absent (the additive guarantee).

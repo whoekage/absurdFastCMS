@@ -140,7 +140,7 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
       if (lw !== undefined) parsed.options.where = andWhere(parsed.options.where, lw);
       // Relations Slice 5: the populate plan reaches respond as a 3rd arg; it resolves + validates it
       // (unknown/scalar populate name -> QueryParseError -> 400) and assembles the nested response.
-      return { status: 200, contentType: JSON_CT, body: engine.respond(name, parsed.options, parsed.populate) };
+      return { status: 200, contentType: JSON_CT, body: engine.respond(name, parsed.options, parsed.populate, parsed.fields) };
     } catch (e) {
       if (e instanceof QueryParseError || e instanceof InvalidCursorError) return errorResponse(400, e.message);
       throw e;
@@ -172,7 +172,7 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
       const sw = statusWhere(engine, name, parsed);
       const lw = localeWhere(engine, name, parsed);
       const gate = sw === undefined ? lw : lw === undefined ? sw : andWhere(sw, lw);
-      const body = engine.respondById(name, Number(idRaw), parsed.populate, gate);
+      const body = engine.respondById(name, Number(idRaw), parsed.populate, gate, parsed.fields);
       if (body === null) return errorResponse(404, `not found`);
       return { status: 200, contentType: JSON_CT, body };
     } catch (e) {

@@ -565,9 +565,13 @@ export class Engine {
    * self-referential + cyclic populate stop at the frontier. `plan` is already EXECUTION-resolved
    * (validated, `*`-expanded, children resolved against the target type) for THIS row's type.
    */
-  private framePopulated(apiId: string, rowId: number, plan: PopulateNode[], depth: number, parts: Buffer[]): void {
-    const slice = this.arena(apiId).rowSlice(rowId);
-    // Fast path: nothing to expand (empty plan, or past the cap) — emit the frozen slice unchanged.
+  private framePopulated(apiId: string, rowId: number, plan: PopulateNode[], depth: number, parts: Buffer[], ownerFields?: string[]): void {
+    // The OWNER body is either the frozen arena slice (no projection) or a projected scalar subset
+    // (`fields` present). `ownerFields` applies ONLY at this call's level — relation rows recurse with
+    // undefined, so a projected list with populate yields projected owners + FULL related rows (fields
+    // filters scalars only; relations stay populate-governed).
+    const slice = ownerFields !== undefined ? this.projectRow(apiId, rowId, ownerFields) : this.arena(apiId).rowSlice(rowId);
+    // Fast path: nothing to expand (empty plan, or past the cap) — emit the (projected or frozen) body.
     if (plan.length === 0 || depth > POPULATE_DEPTH_CAP) {
       parts.push(slice);
       return;
@@ -660,7 +664,26 @@ export class Engine {
     return [...byField.values()];
   }
 
-  respond(name: string, opts: QueryOptions = {}, populate: PopulatePlan = []): Buffer {
+  /**
+   * Sparse field projection (Strapi v5 `fields`): re-materialize ONE row and serialize ONLY the selected
+   * scalar columns, plus a force-included `id` (Strapi always returns `id`; `documentId` is be-02b, out of
+   * scope). Reuses {@link Table.materialize} + {@link serializeRow} so wire fidelity is preserved BY
+   * CONSTRUCTION — RawJson spliced verbatim, i64/decimal as quoted strings, datetime ISO. Emits keys in
+   * materialize (schema) order so two requests with the same SET but different field ORDER are byte-equal.
+   * NEVER touches the frozen arena bytes; the unprojected path keeps the zero-copy slice.
+   */
+  private projectRow(name: string, rowId: number, fields: string[]): Buffer {
+    const full = this.table(name).materialize(rowId);
+    const keep = new Set(fields);
+    keep.add('id'); // Strapi always returns id; keep the row addressable.
+    const picked: Record<string, unknown> = {};
+    for (const key of Object.keys(full)) {
+      if (keep.has(key)) picked[key] = full[key];
+    }
+    return Buffer.from(serializeRow(picked), 'utf8');
+  }
+
+  respond(name: string, opts: QueryOptions = {}, populate: PopulatePlan = [], fields?: string[]): Buffer {
     // Resolve + VALIDATE the populate plan FIRST so an unknown/scalar name 400s before any byte work
     // (and even on the otherwise-cached path). An empty effective plan (no populate, or `populate=*` on
     // a relation-less type) keeps the UNCHANGED, still-cached, byte-identical fast path below.
@@ -671,24 +694,26 @@ export class Engine {
       // relation-filtered entry, so it could be served STALE. Cheapest correctness-preserving fix:
       // do NOT cache a response whose filter tree contains a relation leaf (skip get + set).
       if (opts.where !== undefined && hasRelationLeaf(opts.where)) {
-        return this.assemble(name, opts, []);
+        return this.assemble(name, opts, [], fields);
       }
       // Pass the nested filter TREE (if any) as the 3rd queryKey arg so cache keys canonicalize
-      // `$and`/`$or`/`$not` shape — trivially-reordered-but-equivalent trees collapse to one entry.
-      const key = queryKey(name, opts, opts.where);
+      // `$and`/`$or`/`$not` shape — trivially-reordered-but-equivalent trees collapse to one entry. The
+      // projected field set is the 4th arg so a `fields=a` response is never served for a full-row request
+      // (or for a different field set) — and an unprojected key stays byte-identical (additive).
+      const key = queryKey(name, opts, opts.where, fields);
       const cached = this.cache.get(key);
       if (cached !== undefined) return cached;
-      const buf = this.assemble(name, opts, []);
+      const buf = this.assemble(name, opts, [], fields);
       this.cache.set(key, name, buf);
       return buf;
     }
     // Non-empty populate: the response depends on related types' bytes that the single-type bus cannot
     // invalidate -> SKIP the cache (get + set), assemble fresh. Cross-type invalidation is slice 7.
-    return this.assemble(name, opts, effPlan);
+    return this.assemble(name, opts, effPlan, fields);
   }
 
   /** The cold assembly path (always byte-identical to a cache hit, which stored exactly this). */
-  private assemble(name: string, opts: QueryOptions, populate: PopulatePlan = []): Buffer {
+  private assemble(name: string, opts: QueryOptions, populate: PopulatePlan = [], fields?: string[]): Buffer {
     const t = this.table(name);
     const arena = this.arena(name);
     // ONE resolver per respond() call, bound to this owner type, so the page, the total, and (in the
@@ -719,10 +744,13 @@ export class Engine {
     const parts: Buffer[] = [HEAD];
     for (let i = 0; i < rowIds.length; i++) {
       if (i > 0) parts.push(COMMA);
-      // No populate: the byte-identical fast path (the frozen slice verbatim). With populate: per-row
-      // re-frame, depth starts at 1 (the owner's DIRECT relations). `populate` is already resolved.
-      if (populate.length === 0) parts.push(arena.rowSlice(rowIds[i]!));
-      else this.framePopulated(name, rowIds[i]!, populate, 1, parts);
+      // No populate: the frozen slice verbatim (fast path) UNLESS a projection is requested, in which case
+      // emit the projected scalar subset. With populate: per-row re-frame, depth starts at 1 (the owner's
+      // DIRECT relations); `fields` (when present) projects the OWNER scalar body, then relations splice as
+      // usual (fields filters scalars only — relations stay populate-governed). `populate` is resolved.
+      if (populate.length === 0) {
+        parts.push(fields !== undefined ? this.projectRow(name, rowIds[i]!, fields) : arena.rowSlice(rowIds[i]!));
+      } else this.framePopulated(name, rowIds[i]!, populate, 1, parts, fields);
     }
     parts.push(tail);
     return Buffer.concat(parts);
@@ -797,12 +825,14 @@ export class Engine {
    * Assemble a SINGLE-item response: `{"data":<row JSON>,"meta":{}}`. Byte-identical to
    * `JSON.stringify({ data: materialize(rowId), meta: {} })`.
    */
-  respondOne(name: string, rowId: number, populate: PopulatePlan = []): Buffer {
+  respondOne(name: string, rowId: number, populate: PopulatePlan = [], fields?: string[]): Buffer {
     const parts: Buffer[] = [Buffer.from('{"data":', 'utf8')];
-    // No populate: the byte-identical fast path. With populate: the SAME recursive framer as the list
-    // path (depth starts at 1). `populate` is assumed already resolved by the caller (respondById).
-    if (populate.length === 0) parts.push(this.arena(name).rowSlice(rowId));
-    else this.framePopulated(name, rowId, populate, 1, parts);
+    // No populate: the frozen slice (fast path) UNLESS a projection is requested. With populate: the SAME
+    // recursive framer as the list path (depth starts at 1), projecting the owner scalar body when `fields`
+    // is present. `populate` is assumed already resolved by the caller (respondById).
+    if (populate.length === 0) {
+      parts.push(fields !== undefined ? this.projectRow(name, rowId, fields) : this.arena(name).rowSlice(rowId));
+    } else this.framePopulated(name, rowId, populate, 1, parts, fields);
     parts.push(Buffer.from(',"meta":{}}', 'utf8'));
     return Buffer.concat(parts);
   }
@@ -813,7 +843,7 @@ export class Engine {
    * reuses {@link respondOne}. Returns `null` when no row carries that id (the 404 gate). Requires the
    * content-type to have an eq index on `id`.
    */
-  respondById(name: string, id: number, populate: PopulatePlan = [], where?: FilterNode): Buffer | null {
+  respondById(name: string, id: number, populate: PopulatePlan = [], where?: FilterNode, fields?: string[]): Buffer | null {
     // Resolve + VALIDATE the plan FIRST (unknown/scalar populate name -> 400) for the single-item path
     // too, BEFORE the id lookup. A populated single-item response is not cached (respondOne is uncached).
     const eff = this.resolvePopulate(name, populate);
@@ -828,7 +858,7 @@ export class Engine {
     if (where !== undefined && !t.matchSet({ where }, this.relationResolver(name)).get(rowId)) {
       return null;
     }
-    return this.respondOne(name, rowId, eff);
+    return this.respondOne(name, rowId, eff, fields);
   }
 }
 
