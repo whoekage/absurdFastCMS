@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>absurdFastCMS Admin</title>
+    <script>
+      // No-FOUC theme bootstrap: apply the persisted dark/light/system choice to <html>
+      // BEFORE React (or any stylesheet paint) so the page never flashes the wrong theme.
+      // Mirrors apps/admin/src/lib/theme.ts (THEME_STORAGE_KEY + resolution rules).
+      (function () {
+        try {
+          var stored = localStorage.getItem('absurd-admin-theme');
+          var theme = stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
+          var dark =
+            theme === 'dark' ||
+            (theme === 'system' &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', dark);
+        } catch (e) {
+          /* localStorage/matchMedia unavailable — fall back to the default light theme. */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

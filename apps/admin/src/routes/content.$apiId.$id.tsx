@@ -1,0 +1,198 @@
+import { createFileRoute, Link } from '@tanstack/react-router';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ChevronLeft, Pencil, Eye, EyeOff } from 'lucide-react';
+import { NotFoundError } from '@absurd/sdk';
+import { api } from '@/lib/api';
+import { contentKeys, errorMessage } from '@/lib/content-manager';
+import { toast } from '@/components/ui/toast';
+import { formatValue } from '@/lib/field-types';
+import {
+  asRelatedRows,
+  populateFromDef,
+  relatedRowLabel,
+  relationFieldsFromDef,
+} from '@/lib/relations';
+import { UnknownType } from '@/components/unknown-type';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+
+export const Route = createFileRoute('/content/$apiId/$id')({
+  component: ViewEntryPage,
+});
+
+function ViewEntryPage() {
+  const { apiId, id } = Route.useParams();
+  const queryClient = useQueryClient();
+
+  const defQuery = useQuery({
+    queryKey: contentKeys.definition(apiId),
+    queryFn: ({ signal }) => api.contentTypes.get(apiId, signal),
+    retry: (count, err) => !(err instanceof NotFoundError) && count < 3,
+  });
+
+  // Relations discovered from the API-projected definition (def.relations).
+  const relationFields = relationFieldsFromDef(defQuery.data);
+  const relationByField = new Map(relationFields.map((r) => [r.field, r]));
+  const populate = populateFromDef(defQuery.data);
+
+  const isDraftPublish = defQuery.data?.draftPublish === true;
+
+  const detailQuery = useQuery({
+    queryKey: [...contentKeys.detail(apiId, id), { populate, dp: isDraftPublish }],
+    queryFn: async ({ signal }) => {
+      const base = populate ? { populate } : {};
+      if (!isDraftPublish) return api.findOne(apiId, id, base, signal);
+      // Model A is single-row: an entry is EITHER published OR a draft. Try published first, fall back
+      // to draft so the admin can view (and then publish) a draft. The status badge is derived from
+      // published_at on the returned row.
+      const pub = await api.findOneOrNull(apiId, id, { ...base, status: 'published' }, signal);
+      if (pub !== null) return pub;
+      return api.findOne(apiId, id, { ...base, status: 'draft' }, signal);
+    },
+    enabled: defQuery.isSuccess,
+    retry: (count, err) => !(err instanceof NotFoundError) && count < 3,
+  });
+
+  const published =
+    isDraftPublish && detailQuery.data?.data != null && detailQuery.data.data.published_at != null;
+
+  const publishMutation = useMutation({
+    mutationFn: () => (published ? api.unpublish(apiId, id) : api.publish(apiId, id)),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: contentKeys.detail(apiId, id) });
+      await queryClient.invalidateQueries({ queryKey: ['content', apiId, 'list'] });
+      toast.success(published ? 'Entry unpublished' : 'Entry published');
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+
+  if (defQuery.error instanceof NotFoundError) {
+    return <UnknownType apiId={apiId} />;
+  }
+
+  const def = defQuery.data;
+  const row = detailQuery.data?.data;
+  const loading = defQuery.isLoading || (defQuery.isSuccess && detailQuery.isLoading);
+  const failed = defQuery.isError || detailQuery.isError || !def || !row;
+
+  return (
+    <section className="mx-auto max-w-2xl space-y-6">
+      <div className="flex items-center justify-between">
+        <Button asChild variant="ghost" size="sm" className="-ml-2">
+          <Link to="/content/$apiId" params={{ apiId }}>
+            <ChevronLeft className="h-4 w-4" />
+            Back to {apiId}
+          </Link>
+        </Button>
+        <div className="flex items-center gap-2">
+          {isDraftPublish && row != null && (
+            <>
+              <Badge variant={published ? 'default' : 'secondary'}>
+                {published ? 'Published' : 'Draft'}
+              </Badge>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => publishMutation.mutate()}
+                disabled={publishMutation.isPending}
+              >
+                {published ? (
+                  <>
+                    <EyeOff className="h-4 w-4" />
+                    Unpublish
+                  </>
+                ) : (
+                  <>
+                    <Eye className="h-4 w-4" />
+                    Publish
+                  </>
+                )}
+              </Button>
+            </>
+          )}
+          <Button asChild variant="outline" size="sm">
+            <Link to="/content/$apiId/$id/edit" params={{ apiId, id }}>
+              <Pencil className="h-4 w-4" />
+              Edit
+            </Link>
+          </Button>
+        </div>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            {apiId} #{id}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : failed ? (
+            <div className="text-sm">
+              <p className="font-medium text-destructive">Could not load this entry</p>
+              <p className="mt-1 text-muted-foreground">
+                {errorMessage(detailQuery.error ?? defQuery.error)}
+              </p>
+            </div>
+          ) : (
+            <dl className="divide-y">
+              {def.fields.map((field) => (
+                <div key={field.name} className="grid grid-cols-3 gap-4 py-3">
+                  <dt className="text-sm font-medium text-muted-foreground">
+                    {field.name}
+                    {field.system && (
+                      <span className="ml-1 text-xs text-muted-foreground/70">(system)</span>
+                    )}
+                  </dt>
+                  <dd className="col-span-2 break-words text-sm">
+                    {formatValue(row[field.name], field)}
+                  </dd>
+                </div>
+              ))}
+
+              {/* Relation fields (populated via ?populate) — rendered from client-side config since the
+                  API does not project relations onto the schema. */}
+              {relationFields.map((rel) => {
+                const rows = asRelatedRows(row[rel.field]);
+                return (
+                  <div key={rel.field} className="grid grid-cols-3 gap-4 py-3">
+                    <dt className="text-sm font-medium text-muted-foreground">
+                      {rel.field}
+                      <span className="ml-1 text-xs text-muted-foreground/70">
+                        (→ {rel.target})
+                      </span>
+                    </dt>
+                    <dd className="col-span-2 break-words text-sm">
+                      {rows.length === 0 ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1.5">
+                          {rows.map((r) => (
+                            <Link
+                              key={String(r.id)}
+                              to="/content/$apiId/$id"
+                              params={{ apiId: rel.target, id: String(r.id) }}
+                            >
+                              <Badge variant="secondary" className="hover:bg-secondary/70">
+                                {relatedRowLabel(r, relationByField.get(rel.field)?.labelField)}
+                                <span className="ml-1 text-xs text-muted-foreground">
+                                  #{String(r.id)}
+                                </span>
+                              </Badge>
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+                    </dd>
+                  </div>
+                );
+              })}
+            </dl>
+          )}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}

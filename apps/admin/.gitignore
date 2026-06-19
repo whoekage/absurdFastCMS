@@ -1,0 +1,6 @@
+dist/
+*.log
+
+# NOTE: src/routeTree.gen.ts (TanStack Router plugin output) is intentionally
+# COMMITTED — the `build` script runs `tsc` before `vite`, so a clean-clone
+# typecheck/build needs the generated route tree present.
