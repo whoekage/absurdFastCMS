@@ -58,9 +58,13 @@ export function filterKind(cmsType: CmsType): FilterKind {
   }
 }
 
-/** Resolve the {@link FilterKind} for a field. */
+/** The be-05 structured-content kinds — never filterable (excluded by {@link isFilterableField}). */
+const COMPONENT_KINDS = new Set<string>(['component', 'component-repeatable', 'dynamiczone']);
+
+/** Resolve the {@link FilterKind} for a field. A be-05 component field is non-filterable -> 'text' fallback. */
 export function fieldFilterKind(field: FieldDefinition): FilterKind {
-  return filterKind(field.cmsType);
+  if (COMPONENT_KINDS.has(field.cmsType)) return 'text';
+  return filterKind(field.cmsType as CmsType);
 }
 
 /**
@@ -72,7 +76,9 @@ export function fieldFilterKind(field: FieldDefinition): FilterKind {
 export function isFilterableField(field: FieldDefinition): boolean {
   // be-04 MEDIA: a media field is an asset-id reference (a multiple one is a json column the parser
   // rejects operators on); filtering by raw file id is not a meaningful admin operation — exclude it.
-  return field.cmsType !== 'json' && field.cmsType !== 'array' && field.cmsType !== 'media';
+  // be-05: a component / component-repeatable / dynamiczone field is a structured jsonb tree — not a
+  // scalar to filter on; exclude it from the field picker + search fallback.
+  return field.cmsType !== 'json' && field.cmsType !== 'array' && field.cmsType !== 'media' && !COMPONENT_KINDS.has(field.cmsType);
 }
 
 /**

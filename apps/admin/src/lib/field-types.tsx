@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ReactNode } from 'react';
-import type { CmsType, FieldDefinition } from '@absurd/sdk';
+import type { CmsType, ComponentFieldKind, FieldDefinition } from '@absurd/sdk';
 import { Input } from '@/components/ui/input';
 import { AutoTextarea } from '@/components/ui/auto-textarea';
 import { Switch } from '@/components/ui/switch';
@@ -496,9 +496,13 @@ const registry: Record<CmsType, FieldTypeHandler> = {
   media: mediaHandler,
 };
 
-/** Resolve the handler for a field's cmsType (falls back to a plain text/string handler). */
-export function getFieldHandler(cmsType: CmsType): FieldTypeHandler {
-  return registry[cmsType] ?? stringHandler;
+/**
+ * Resolve the handler for a field's cmsType (falls back to a plain text/string handler). Accepts the
+ * wider {@link ComponentFieldKind} too: a be-05 component / dynamic-zone field has no scalar handler yet
+ * (the nested editor is a later admin phase), so it falls through to the string handler for now.
+ */
+export function getFieldHandler(cmsType: CmsType | ComponentFieldKind): FieldTypeHandler {
+  return (registry as Record<string, FieldTypeHandler | undefined>)[cmsType] ?? stringHandler;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────

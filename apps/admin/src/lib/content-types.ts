@@ -1,4 +1,4 @@
-import type { CmsType, FieldSpec, FieldOptions } from '@absurd/sdk';
+import type { CmsType, ComponentFieldKind, FieldSpec, FieldOptions } from '@absurd/sdk';
 import { optionMetaFor } from '@/lib/field-types';
 
 // Re-export the shared error-message extractor so the content-type feature has one import surface.
@@ -79,7 +79,7 @@ export function emptyFieldDraft(): FieldDraft {
 /** A draft seeded from an existing field (for the edit-field dialog). */
 export function draftFromField(field: {
   name: string;
-  cmsType: CmsType;
+  cmsType: CmsType | ComponentFieldKind;
   nullable: boolean;
   enumValues?: readonly string[];
   length?: number;
@@ -92,7 +92,9 @@ export function draftFromField(field: {
   return {
     key: `field-${draftSeq}`,
     name: field.name,
-    cmsType: field.cmsType,
+    // be-05: the builder's edit-field dialog does not yet author component fields; a component kind seeds
+    // verbatim (optionMetaFor falls back to NO_OPTIONS) — the dedicated nested editor is a later admin phase.
+    cmsType: field.cmsType as CmsType,
     nullable: field.nullable,
     defaultValue: '',
     enumValues: field.enumValues ? [...field.enumValues] : [],
