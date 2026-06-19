@@ -123,11 +123,13 @@ res.meta.pagination; // OffsetPaginationMeta | KeysetPaginationMeta
 
 ### `findOne<T>(type, id, opts?, signal?)`
 
-`GET /:type/:id`. Throws `NotFoundError` (404) when the id is unknown. `opts.populate` is the
-only read param the single route honors.
+`GET /:type/:id`. Throws `NotFoundError` (404) when the id is unknown. The single route honors
+`opts.populate`, `opts.fields` (sparse selection — see below), and `opts.status` / `opts.locale`.
 
 ```ts
 const { data } = await client.findOne('article', 1, { populate: ['author'] });
+// sparse selection on the single route: only id + the requested scalar columns come back.
+const { data: slim } = await client.findOne('article', 1, { fields: ['title', 'views'] });
 ```
 
 ### `findOneOrNull<T>(type, id, opts?, signal?)`
@@ -611,7 +613,24 @@ client.list('article', { populate: { author: true, tags: true } });
 client.findOne('article', 1, { populate: ['author', 'tags'] });
 ```
 
-> `fields` projection is accepted by the server today but not yet applied (forward-compat).
+### Sparse field selection (`fields`)
+
+`fields` projects the response down to the requested **scalar** columns (Strapi v5). `id` is always
+returned (the row stays addressable); `documentId` and timestamps are not added by a projection.
+Relations are NOT projected — they stay governed by `populate`, so a projected owner can still carry
+fully-shaped related rows. Wire fidelity is preserved on projected rows (biginteger / decimal stay
+quoted strings, datetime ISO, json verbatim). An unknown field name 400s (the same gate as filters).
+
+```ts
+// list: only id + title + views per row
+client.list('article', { fields: ['title', 'views'] });
+
+// single route honors fields too
+client.findOne('article', 1, { fields: ['title'] });
+
+// compose with populate: projected owner scalars + the FULL related author row
+client.list('book', { fields: ['title'], populate: ['author'] });
+```
 
 ---
 

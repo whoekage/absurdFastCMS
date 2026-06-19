@@ -136,6 +136,33 @@ test('findOne() resolves by public id; findOneOrNull() returns null on 404', asy
   }
 });
 
+test('fields: list AND findOne project to id + the requested scalar columns (Strapi v5)', async () => {
+  const server = await startTestServer('read-fields');
+  try {
+    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+      const created = await seedArticle(server.baseUrl, apiId, {
+        title: 'sparse', body: 'long body', status: 'published', views: 7, rating: 2.5, active: true,
+        publishedAt: new Date(Date.UTC(2026, 0, 1)).toISOString(),
+      });
+      const id = created['id'] as number;
+      const client = createClient({ baseUrl: server.baseUrl });
+
+      // LIST: only id + the two requested columns; body/views/etc. dropped.
+      const listRes = await client.list(apiId, { fields: ['title', 'rating'] });
+      assert.deepEqual(Object.keys(listRes.data[0]!).sort(), ['id', 'rating', 'title']);
+      assert.equal(listRes.data[0]!['title'], 'sparse');
+
+      // FINDONE now threads fields too (it was previously ignored on the single route).
+      const oneRes = await client.findOne(apiId, id, { fields: ['title'] });
+      assert.deepEqual(Object.keys(oneRes.data).sort(), ['id', 'title']);
+      assert.equal(oneRes.data['title'], 'sparse');
+      assert.equal(oneRes.data['id'], id);
+    });
+  } finally {
+    await server.close();
+  }
+});
+
 test('count() returns the filtered total without fetching rows', async () => {
   const server = await startTestServer('read-count');
   try {

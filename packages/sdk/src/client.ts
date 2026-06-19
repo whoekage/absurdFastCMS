@@ -584,20 +584,22 @@ export class AbsurdClient {
 
   /**
    * 4.2 — SINGLE. `GET /:type/:id` resolving `id` as the PUBLIC primary key. `opts.populate` threads a
-   * populate spec into the query (the only read param the single route honors). Throws
-   * {@link NotFoundError} (404) when no row carries the id. Use {@link findOneOrNull} for a null-on-404
-   * variant.
+   * populate spec, `opts.fields` a sparse field selection (Strapi v5 — projects scalars, `id` always
+   * returned; relations stay populate-governed), and `opts.status`/`opts.locale` the lifecycle/locale
+   * selectors into the query. Throws {@link NotFoundError} (404) when no row carries the id. Use
+   * {@link findOneOrNull} for a null-on-404 variant.
    */
   async findOne<T extends Entry = Entry>(
     type: string,
     id: number | string,
-    opts: { populate?: QueryParams['populate']; status?: QueryParams['status']; locale?: QueryParams['locale'] } = {},
+    opts: { populate?: QueryParams['populate']; status?: QueryParams['status']; locale?: QueryParams['locale']; fields?: QueryParams['fields'] } = {},
     signal?: AbortSignal,
   ): Promise<SingleResponse<T>> {
     const params: QueryParams = {};
     if (opts.populate !== undefined) params.populate = opts.populate;
     if (opts.status !== undefined) params.status = opts.status;
     if (opts.locale !== undefined) params.locale = opts.locale;
+    if (opts.fields !== undefined) params.fields = opts.fields;
     const reqOpts: RequestOptions = { query: buildQueryString(params) };
     if (signal) reqOpts.signal = signal;
     return this.request<SingleResponse<T>>(
@@ -614,7 +616,7 @@ export class AbsurdClient {
   async findOneOrNull<T extends Entry = Entry>(
     type: string,
     id: number | string,
-    opts: { populate?: QueryParams['populate']; status?: QueryParams['status']; locale?: QueryParams['locale'] } = {},
+    opts: { populate?: QueryParams['populate']; status?: QueryParams['status']; locale?: QueryParams['locale']; fields?: QueryParams['fields'] } = {},
     signal?: AbortSignal,
   ): Promise<SingleResponse<T> | null> {
     try {
@@ -737,12 +739,13 @@ export class AbsurdClient {
     type: string,
     id: number | string,
     def: ContentTypeDefinition,
-    opts: { populate?: QueryParams['populate'] } & DecodeOptions = {},
+    opts: { populate?: QueryParams['populate']; fields?: QueryParams['fields'] } & DecodeOptions = {},
     signal?: AbortSignal,
   ): Promise<SingleResponse<T>> {
-    const { populate, bigints, dates } = opts;
-    const findOpts: { populate?: QueryParams['populate'] } = {};
+    const { populate, fields, bigints, dates } = opts;
+    const findOpts: { populate?: QueryParams['populate']; fields?: QueryParams['fields'] } = {};
     if (populate !== undefined) findOpts.populate = populate;
+    if (fields !== undefined) findOpts.fields = fields;
     const decodeOpts: DecodeOptions = {};
     if (bigints !== undefined) decodeOpts.bigints = bigints;
     if (dates !== undefined) decodeOpts.dates = dates;
@@ -903,7 +906,7 @@ export class Collection<T extends Entry = Entry> {
   /** {@link AbsurdClient.findOne} bound to this type. */
   findOne(
     id: number | string,
-    opts?: { populate?: QueryParams['populate']; status?: QueryParams['status']; locale?: QueryParams['locale'] },
+    opts?: { populate?: QueryParams['populate']; status?: QueryParams['status']; locale?: QueryParams['locale']; fields?: QueryParams['fields'] },
     signal?: AbortSignal,
   ): Promise<SingleResponse<T>> {
     return this.client.findOne<T>(this.type, id, opts, signal);
@@ -912,7 +915,7 @@ export class Collection<T extends Entry = Entry> {
   /** {@link AbsurdClient.findOneOrNull} bound to this type (404 → null). */
   findOneOrNull(
     id: number | string,
-    opts?: { populate?: QueryParams['populate']; status?: QueryParams['status']; locale?: QueryParams['locale'] },
+    opts?: { populate?: QueryParams['populate']; status?: QueryParams['status']; locale?: QueryParams['locale']; fields?: QueryParams['fields'] },
     signal?: AbortSignal,
   ): Promise<SingleResponse<T> | null> {
     return this.client.findOneOrNull<T>(this.type, id, opts, signal);
