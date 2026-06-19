@@ -5,6 +5,11 @@ node_modules/
 dist/
 *.log
 
+# Playwright E2E artifacts (apps/admin).
+test-results/
+playwright-report/
+playwright/.cache/
+
 # Environment files live inside each workspace (packages/api/.env, .env.test) and are gitignored there.
 .env
 .env.test

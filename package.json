@@ -11,6 +11,8 @@
     "apps/*"
   ],
   "scripts": {
+    "dev": "npm run dev --workspace @absurd/api",
+    "dev:admin": "npm run dev --workspace @absurd/admin",
     "test": "npm test --workspace @absurd/api",
     "bench": "npm run bench --workspace @absurd/api",
     "db:up": "npm run db:up --workspace @absurd/api",

@@ -1,0 +1,123 @@
+# absurdFastCMS — Roadmap
+
+An *absurdly fast* headless CMS. Postgres is the source of truth; reads are served from an in-process
+columnar in-memory engine with pre-serialized bytes. The query API speaks Strapi v5's bracket-filter
+syntax, so existing Strapi clients work unchanged.
+
+This roadmap is grounded in (a) a precise inventory of what is built, (b) the table-stakes feature set
+of leading headless CMSs (Strapi v5, Directus, Payload, Contentful, Sanity), and (c) our architecture's
+specific constraints (columnar in-memory read layer, Strapi-v5 emulation, single-instance OSS core).
+
+> **Auth and transactional email are intentionally scheduled LAST** (Phases 8–9), per product decision —
+> the open API is built against first, with auth seams already stubbed in the SDK and HTTP layer.
+
+## Current state (strong foundation)
+
+| Area | Status |
+| --- | --- |
+| Columnar in-memory read engine (serialize-on-write, bitset filter algebra, selectivity planner) | ✅ |
+| Strapi-v5 query API: 24 filter operators, `$and/$or/$not`, sort, offset **and** keyset pagination | ✅ |
+| `populate` (nested, depth-capped) — **parsed and executed** end-to-end | ✅ |
+| Write path: create / partial-update / delete + relation ops (set/connect/disconnect) in one tx | ✅ |
+| Runtime content-type **Builder** over HTTP (create type, add/rename/change-type/drop field, drop type) | ✅ |
+| Typed, zero-dependency SDK (`@absurd/sdk`) at full HTTP parity | ✅ |
+| Admin (`@absurd/admin`): generic content manager, list filter/sort/search, bulk, app-shell, relation UX, Playwright E2E | ✅ |
+| 16 scalar field types (string/text/email/uid/enumeration/integer/biginteger/float/decimal/boolean/date/datetime/json/array/uuid; `time` excluded — engine load path rejects it) | ✅ |
+
+## Gap matrix vs competitor table-stakes
+
+| Capability | Competitors | Us | Gap |
+| --- | --- | --- | --- |
+| Scalar field types + rich text | 5/5 | ✅ scalars · ❌ rich text | med |
+| Relations (o2o/o2m/m2o/m2m) | 5/5 | ⚠️ read+write+DDL exist, **no HTTP declaration / not in projectDef** | **high** |
+| Components / dynamic zones / repeatables | 5/5 | ❌ (raw json only) | high |
+| Query: filter/sort/paginate/**fields** | 5/5 | ✅ except `fields` (sparse selection) | low |
+| `populate` / depth control | 5/5 | ✅ | — |
+| **Draft & Publish** (`status`) | 5/5 | ❌ | **high** |
+| **i18n** (per-field locale) | 5/5 | ❌ | high |
+| **Media library** + image transforms + S3 | 5/5 | ❌ | **high** |
+| Versioning / history / rollback | 5/5 (often paid) | ❌ | med |
+| Webhooks / events | 5/5 | ❌ (ChangeBus exists — natural hook point) | med |
+| GraphQL | 4/5 | ❌ | low (defer) |
+| Scheduled publishing | 5/5 (often paid) | ❌ | low (depends on Draft&Publish) |
+| RBAC / roles / **API tokens** | 5/5 | ❌ | → with auth (last) |
+| Full-text / relevance search | 2/5 native | ⚠️ `$containsi` + opt-in trigram | differentiator |
+
+**Strapi-v5 compatibility to audit:** v5 uses `documentId` (24-char stable id) and a flattened response
+(no `data.attributes`). We must confirm whether we emulate this — the SDK and admin currently key on the
+numeric `id`.
+
+## Phased plan
+
+Ordered by dependency and leverage. Auth (Phase 8) and email (Phase 9) are last by design.
+
+### Phase 0 — Relations over HTTP *(start here — highest leverage)*
+Close the nearly-complete relational layer. The repo layer already supports relations (`addRelation`,
+link tables, inverse rows); reads already execute `populate`. What's missing is the HTTP/SDK surface:
+- HTTP routes to **declare relations** in the Builder (`addRelation` exists in the repo but is unrouted).
+- Emit relations in `projectDef` so a client can **discover** them → admin drops its localStorage relation config (the fe-06 workaround).
+- Finish relation **deep filtering** at the query edge (parser supports it; confirm engine execution).
+- SDK: `contentTypes.addRelation` + relation fields on `ContentTypeDefinition`; admin reads relations from the API.
+- **No migration needed** — `content_type_relations` already exists (migration `0003`).
+
+### Phase 1 — Strapi-v5 read-compat completeness *(cheap, high value)*
+- **be-02 — `fields`** (sparse field selection / projection). The flat `{data,meta}` shape is already
+  v5-compliant (no `attributes` wrapper) — confirmed, no work. `fields` parse already exists but is
+  discarded; the slice wires projection at response-assembly time (re-materialize + serialize the
+  selected columns) without regressing the zero-copy full-row hot path.
+- **be-02b — `document_id` (INTEGER, not string)**. Lay an `i32` `document_id` system column + sequence
+  on every managed type, via the runtime-DDL mechanism (no hand-written migration). It is the grouping
+  key shared by all variants (locales × draft/published) of one logical document — so it is laid now to
+  de-risk **be-03** (draft/publish) and **be-06** (i18n), which reuse a parent's `document_id` per
+  variant. **Deliberately integer, not Strapi's random 24-char string**: it fits the columnar engine's
+  typed-array columns + `EqIndex` (cheapest equality grouping), is a plain JSON number on the wire (no
+  string-conversion cost), and matches our existing `i32` `id` (same ~2.1B ceiling — no new limit).
+  Strapi's string serves cross-env transfer + non-enumerable ids, neither of which binds us.
+
+### Phase 2 — Draft & Publish ✅ *(be-03, done)*
+- **Model A** (single row + `published_at`, null = draft), **per-type opt-in** via a `draft_publish` flag
+  on `content_types`. A type that doesn't enable it is **byte-identical** to before (no column, no wire
+  key, status is a no-op). `status=draft|published` query param (no `all` — Strapi-faithful);
+  `POST /:type/:id/actions/publish|unpublish` (atomic + per-type invalidation). `published_at` reserved
+  from user writes. `document_id` is NOT used here (publish is a same-row UPDATE) — it stays the variant
+  key for i18n. 735/735 tests green. Model A → Model B (separate draft/published rows) is a future upgrade.
+
+### Phase 3 — Media / asset library *(large, isolated)*
+- Multipart upload, storage-provider abstraction (local + S3), `media` field type, image metadata/transforms.
+- Admin: media library + upload widget.
+
+### Phase 4 — Structured content: components & dynamic zones
+- Component schemas, repeatables, dynamic zones; nested editors in the admin.
+
+### Phase 5 — i18n / localization
+- Per-field / per-entry locales, `locale` query param, fallback chains; locale switcher in the admin.
+
+### Phase 6 — Events & versioning
+- Webhooks (hook into the existing ChangeBus event seam); content history / rollback.
+
+### Phase 7 — Scale & infrastructure *(can run in parallel; from the existing API roadmap)*
+- Surgical writes (incremental in-engine update/delete + targeted cache invalidation, no full rebuild).
+- Redis pub/sub `ChangeBus` for multi-instance invalidation. String collation for sorted indexes.
+- Optional: GraphQL.
+
+### Phase 8 — Auth, RBAC, API tokens *(second-to-last, by design)*
+- Admin auth + content-API auth, API tokens (read-only / full / custom), RBAC (roles/permissions,
+  field-level), then SSO/providers. Seams already stubbed: SDK `token`/`getHeaders`/`onUnauthorized`.
+
+### Phase 9 — Transactional email *(last, by design)*
+- Provider abstraction (Nodemailer / SES / Resend), consumed by auth flows (verification / password reset).
+
+## Execution notes
+
+- **Workflows:** each backend phase has a runnable workflow at `.claude/workflows/be-0N-*.js`, mirroring
+  the `fe-0N-*` admin workflows (Implement → Verify → Review, with adversarial review). Run via the
+  Workflow tool with `{ scriptPath }`.
+- **No mocks:** tests are native `node:test` against a real Postgres 18 via Testcontainers
+  (`npm test --workspace @absurd/api`, env from `.env.test`).
+- **Migrations (pre-launch policy):** hand-written SQL, **consolidated into ONE init file**, applied by
+  `src/db/migration.runner.ts`, evolved **in place** — on a schema change, edit the init file and **drop &
+  recreate** the dev DB. **No backfill** (there are no clients / no prod data to preserve). `ct_<apiId>`
+  tables are created by the runtime Builder DDL (`src/db/ddl.ts`), so per-type system columns
+  (id/created_at/updated_at, `document_id`, later `published_at`/`locale`) live there; global objects (e.g.
+  the `document_id` sequence, meta tables) live in the init migration. Revisit once there are real clients.
+- **Never run the dev server** — a dev server is always running in a separate terminal.
