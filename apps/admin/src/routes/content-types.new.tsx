@@ -32,6 +32,7 @@ function NewContentTypePage() {
   const [apiId, setApiId] = useState('');
   const [fields, setFields] = useState<FieldDraft[]>(() => [emptyFieldDraft()]);
   const [draftPublish, setDraftPublish] = useState(false);
+  const [i18n, setI18n] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const createMutation = useMutation({
@@ -83,6 +84,7 @@ function NewContentTypePage() {
       apiId: apiId.trim(),
       fields: fields.map(draftToFieldSpec),
       ...(draftPublish ? { draftPublish: true } : {}),
+      ...(i18n ? { i18n: true } : {}),
     });
   };
 
@@ -129,6 +131,17 @@ function NewContentTypePage() {
               <Switch id="draftPublish" checked={draftPublish} onCheckedChange={setDraftPublish} />
             </div>
 
+            <div className="flex items-center justify-between rounded-md border p-3">
+              <div className="space-y-0.5">
+                <Label htmlFor="i18n">Internationalization (i18n)</Label>
+                <p className="text-xs text-muted-foreground">
+                  Entries get per-locale variants sharing a document. Mark each field Localized
+                  (per-locale) or Shared. Cannot be changed later.
+                </p>
+              </div>
+              <Switch id="i18n" checked={i18n} onCheckedChange={setI18n} />
+            </div>
+
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-medium">Fields</h2>
@@ -137,6 +150,7 @@ function NewContentTypePage() {
                 <FieldRowEditor
                   key={draft.key}
                   draft={draft}
+                  i18n={i18n}
                   onChange={(next) => updateField(index, next)}
                   onRemove={fields.length > 1 ? () => removeField(index) : undefined}
                 />

@@ -107,6 +107,9 @@ function EntryListPage() {
   // Draft & Publish status filter (D&P types only). 'draft' is the admin default so newly-created
   // drafts are immediately visible to publish; 'published' switches to the live view.
   const [statusFilter, setStatusFilter] = useState<'draft' | 'published'>('draft');
+  // i18n locale filter (i18n types only). '*' (all variants) is the admin default so EVERY locale is
+  // listed; a slug narrows to one locale. Sent verbatim to the SDK `locale` param.
+  const [localeFilter, setLocaleFilter] = useState<string>('*');
 
   // Row selection is scoped to the exact result set: when ANYTHING that changes which rows are shown
   // changes — the content type (the route reuses this component instance, so apiId can change without
@@ -147,11 +150,13 @@ function EntryListPage() {
   // The SDK query params derived from the URL state — also the basis of the query key. Populate the
   // configured relations so list cells can show the linked rows.
   const isDraftPublish = def?.draftPublish === true;
+  const isI18n = def?.i18n === true;
   const queryParams = def
     ? {
         ...toQueryParams(search, def, byName),
         ...(populate ? { populate } : {}),
         ...(isDraftPublish ? { status: statusFilter } : {}),
+        ...(isI18n ? { locale: localeFilter } : {}),
       }
     : null;
 
@@ -176,6 +181,23 @@ function EntryListPage() {
   // Append the configured relation fields as extra (non-sortable) columns after the scalar columns.
   const relationColumns = useMemo(() => relationByField, [relationByField]);
   const rows = useMemo(() => listQuery.data?.data ?? [], [listQuery.data]);
+
+  // i18n: accumulate the locales seen across loads so narrowing to one locale doesn't drop the others
+  // from the switcher. Seeded from whatever the current page returned (the default `*` shows all).
+  const [seenLocales, setSeenLocales] = useState<string[]>([]);
+  useEffect(() => {
+    if (!isI18n) return;
+    const present = new Set(seenLocales);
+    let changed = false;
+    for (const r of rows) {
+      const loc = r['locale'];
+      if (typeof loc === 'string' && !present.has(loc)) {
+        present.add(loc);
+        changed = true;
+      }
+    }
+    if (changed) setSeenLocales([...present].sort());
+  }, [rows, isI18n, seenLocales]);
 
   // Build the TanStack column model: a leading selection column, the data columns, and a trailing
   // actions column. Header labels for data columns render the existing URL-driven SortableHeader so
@@ -398,6 +420,25 @@ function EntryListPage() {
                 <SelectContent>
                   <SelectItem value="draft">Drafts</SelectItem>
                   <SelectItem value="published">Published</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
+
+          {/* i18n locale filter (i18n types only). '*' = all variants. */}
+          {isI18n ? (
+            <div className="w-32">
+              <Select value={localeFilter} onValueChange={(v) => setLocaleFilter(v)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="*">All locales</SelectItem>
+                  {seenLocales.map((loc) => (
+                    <SelectItem key={loc} value={loc}>
+                      {loc}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

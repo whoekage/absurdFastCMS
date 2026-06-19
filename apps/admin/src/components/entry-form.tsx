@@ -220,6 +220,16 @@ export function EntryForm({
                     <span className="ml-2 text-xs font-normal text-muted-foreground">
                       {field.cmsType}
                     </span>
+                    {/* i18n: a shared field's value is synced across every locale variant (editing it on
+                        ANY variant updates all). Localized fields are per-variant. */}
+                    {def.i18n === true && field.localized === false && (
+                      <span
+                        className="ml-2 text-xs font-normal text-muted-foreground/80"
+                        title="Shared across all locale variants — editing here updates every locale."
+                      >
+                        shared
+                      </span>
+                    )}
                   </Label>
                   {handler.input({
                     id: fieldId,

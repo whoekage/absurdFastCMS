@@ -46,6 +46,12 @@ export interface FieldDraft {
   precision: string;
   /** decimal scale (string form; empty = unset). */
   scale: string;
+  /**
+   * i18n per-field localized flag (true = per-locale-variant; false = shared across variants). Only
+   * meaningful on an i18n type; defaults to true. Surfaced as a toggle in the field editor when the type
+   * is i18n, and lowered onto the {@link FieldSpec} as `localized`.
+   */
+  localized: boolean;
 }
 
 let draftSeq = 0;
@@ -63,6 +69,7 @@ export function emptyFieldDraft(): FieldDraft {
     length: '',
     precision: '',
     scale: '',
+    localized: true,
   };
 }
 
@@ -75,6 +82,7 @@ export function draftFromField(field: {
   length?: number;
   precision?: number;
   scale?: number;
+  localized?: boolean;
 }): FieldDraft {
   draftSeq += 1;
   return {
@@ -87,6 +95,7 @@ export function draftFromField(field: {
     length: field.length !== undefined ? String(field.length) : '',
     precision: field.precision !== undefined ? String(field.precision) : '',
     scale: field.scale !== undefined ? String(field.scale) : '',
+    localized: field.localized ?? true,
   };
 }
 
@@ -139,9 +148,10 @@ export function draftOptions(draft: FieldDraft): FieldOptions {
   return options;
 }
 
-/** Lower a draft to the wire {@link FieldSpec}. */
+/** Lower a draft to the wire {@link FieldSpec}. The `localized` flag is sent verbatim (server defaults
+ * it to true; harmless to send on a non-i18n type — it is ignored there). */
 export function draftToFieldSpec(draft: FieldDraft): FieldSpec {
-  return { name: draft.name.trim(), cmsType: draft.cmsType, options: draftOptions(draft) };
+  return { name: draft.name.trim(), cmsType: draft.cmsType, options: draftOptions(draft), localized: draft.localized };
 }
 
 /** Interpret the raw `default` string for a draft according to its cmsType. */

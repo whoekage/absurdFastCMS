@@ -13,6 +13,7 @@ import {
   relationFieldsFromDef,
 } from '@/lib/relations';
 import { UnknownType } from '@/components/unknown-type';
+import { LocaleSwitcher } from '@/components/locale-switcher';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -37,11 +38,15 @@ function ViewEntryPage() {
   const populate = populateFromDef(defQuery.data);
 
   const isDraftPublish = defQuery.data?.draftPublish === true;
+  const isI18n = defQuery.data?.i18n === true;
 
   const detailQuery = useQuery({
-    queryKey: [...contentKeys.detail(apiId, id), { populate, dp: isDraftPublish }],
+    queryKey: [...contentKeys.detail(apiId, id), { populate, dp: isDraftPublish, i18n: isI18n }],
     queryFn: async ({ signal }) => {
-      const base = populate ? { populate } : {};
+      // For an i18n type the detail is addressed by a physical row id that belongs to SOME locale, so we
+      // must NOT constrain to the default locale (which would 404 a non-default variant): locale='*'
+      // drops the locale predicate so the addressed variant resolves regardless of its locale.
+      const base = { ...(populate ? { populate } : {}), ...(isI18n ? { locale: '*' as const } : {}) };
       if (!isDraftPublish) return api.findOne(apiId, id, base, signal);
       // Model A is single-row: an entry is EITHER published OR a draft. Try published first, fall back
       // to draft so the admin can view (and then publish) a draft. The status badge is derived from
@@ -86,6 +91,7 @@ function ViewEntryPage() {
           </Link>
         </Button>
         <div className="flex items-center gap-2">
+          {isI18n && row != null && <LocaleSwitcher apiId={apiId} row={row} />}
           {isDraftPublish && row != null && (
             <>
               <Badge variant={published ? 'default' : 'secondary'}>
@@ -144,6 +150,9 @@ function ViewEntryPage() {
                     {field.name}
                     {field.system && (
                       <span className="ml-1 text-xs text-muted-foreground/70">(system)</span>
+                    )}
+                    {isI18n && !field.system && field.localized === false && (
+                      <span className="ml-1 text-xs text-muted-foreground/70">(shared)</span>
                     )}
                   </dt>
                   <dd className="col-span-2 break-words text-sm">

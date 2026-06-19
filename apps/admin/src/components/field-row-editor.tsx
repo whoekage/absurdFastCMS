@@ -20,6 +20,8 @@ interface FieldRowEditorProps {
   onRemove?: (() => void) | undefined;
   /** Lock the field name (e.g. the edit dialog may still allow rename — leave editable by default). */
   disabled?: boolean | undefined;
+  /** When the type is i18n, render a per-field Localized/Shared toggle (hidden otherwise). */
+  i18n?: boolean | undefined;
 }
 
 /**
@@ -27,7 +29,7 @@ interface FieldRowEditorProps {
  * precision+scale) + a nullable checkbox + an optional default. Shared by the create form, the
  * add-field dialog, and the edit-field dialog.
  */
-export function FieldRowEditor({ draft, onChange, onRemove, disabled }: FieldRowEditorProps) {
+export function FieldRowEditor({ draft, onChange, onRemove, disabled, i18n }: FieldRowEditorProps) {
   const meta = optionMetaFor(draft.cmsType);
   const set = (patch: Partial<FieldDraft>) => onChange({ ...draft, ...patch });
 
@@ -132,6 +134,17 @@ export function FieldRowEditor({ draft, onChange, onRemove, disabled }: FieldRow
           />
           Nullable
         </label>
+        {i18n && (
+          <label className="flex items-center gap-2 text-sm" title="Localized: a per-locale value. Unchecked = shared across all locale variants of a document.">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-input"
+              checked={draft.localized}
+              onChange={(e) => set({ localized: e.target.checked })}
+            />
+            Localized
+          </label>
+        )}
         <div className="flex-1 space-y-1.5">
           <Label htmlFor={`${draft.key}-default`}>Default</Label>
           <Input

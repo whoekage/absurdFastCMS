@@ -34,12 +34,16 @@ function EditEntryPage() {
   // Relations + the populate spec are derived from the API-projected definition (def.relations).
   const relationFields = relationFieldsFromDef(defQuery.data);
   const populate = populateFromDef(defQuery.data);
+  const isI18n = defQuery.data?.i18n === true;
 
   const detailQuery = useQuery({
     // Key includes the populate spec so the edit row (with related rows) caches separately from the
     // bare detail-view fetch.
-    queryKey: [...contentKeys.detail(apiId, id), { populate }],
-    queryFn: ({ signal }) => api.findOne(apiId, id, populate ? { populate } : {}, signal),
+    queryKey: [...contentKeys.detail(apiId, id), { populate, i18n: isI18n }],
+    // i18n: address the variant by physical id without a locale predicate (locale='*'), else a
+    // non-default-locale variant would 404 under the default-locale single-item gate.
+    queryFn: ({ signal }) =>
+      api.findOne(apiId, id, { ...(populate ? { populate } : {}), ...(isI18n ? { locale: '*' as const } : {}) }, signal),
     enabled: defQuery.isSuccess,
     retry: (count, err) => !(err instanceof NotFoundError) && count < 3,
   });
