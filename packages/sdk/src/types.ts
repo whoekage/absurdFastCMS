@@ -36,6 +36,19 @@ export type CmsType =
   | 'media';
 
 /**
+ * be-05 — the three STRUCTURED-CONTENT field kinds (reusable components + dynamic zones). Mirror of
+ * `ComponentFieldKind` in `@absurd/api` (packages/api/src/db/type.catalog.ts). Like {@link RelationKind}
+ * these are a SEPARATE closed union, NOT a {@link CmsType}: each is physically a jsonb column whose value
+ * is the inline component instance tree, with params carrying the referenced component api_id(s).
+ *
+ *   component            — ONE instance of a component type ({@link FieldOptions.component}).
+ *   component-repeatable — an ordered ARRAY of instances of one component ({@link FieldOptions.component}).
+ *   dynamiczone          — an ordered ARRAY of instances tagged `__component`, from an allowed-set
+ *                          ({@link FieldOptions.components}).
+ */
+export type ComponentFieldKind = 'component' | 'component-repeatable' | 'dynamiczone';
+
+/**
  * Per-field options the caller may supply when defining a field; each `cmsType` validates only the
  * keys it cares about (server-side). Mirror of `FieldOptions` in the api type catalog.
  */
@@ -57,15 +70,21 @@ export interface FieldOptions {
    * (an ordered array of `files.id`s). Ignored for non-media types.
    */
   multiple?: boolean;
+  /** be-05 `component` / `component-repeatable` only: the referenced component-type api_id. */
+  component?: string;
+  /** be-05 `dynamiczone` only: the allowed component-type api_ids (the zone's allowed-set). */
+  components?: string[];
 }
 
 /**
  * A field the caller wants to define: the user name, its cms_type, and per-type options. Mirror of
- * `FieldSpec` in the api content-type repository — the body shape for create / add-field requests.
+ * `FieldSpec` in the api content-type repository — the body shape for create / add-field requests. A
+ * `cmsType` may be a scalar {@link CmsType} OR a be-05 {@link ComponentFieldKind} (in which case
+ * `options.component` / `options.components` names the referenced component-type(s)).
  */
 export interface FieldSpec {
   name: string;
-  cmsType: CmsType;
+  cmsType: CmsType | ComponentFieldKind;
   options?: FieldOptions;
   /**
    * i18n: whether this field is LOCALIZED (per-locale-variant value) or SHARED across the document's
@@ -86,7 +105,8 @@ export interface FieldSpec {
  */
 export interface FieldDefinition {
   name: string;
-  cmsType: CmsType;
+  /** A scalar {@link CmsType} OR a be-05 {@link ComponentFieldKind} for a component / dynamic-zone field. */
+  cmsType: CmsType | ComponentFieldKind;
   nullable: boolean;
   /** id/created_at/updated_at → true: loaded + materialized, NEVER writable. */
   system: boolean;
@@ -111,6 +131,17 @@ export interface FieldDefinition {
    * omits it). The admin reads it to pick a single-asset picker vs a multi-asset gallery widget.
    */
   multiple?: boolean;
+  /**
+   * be-05: a `component` / `component-repeatable` field's referenced component-type api_id. PROJECTED
+   * only for those kinds (a conditional wire key; every other field omits it). The admin reads it to
+   * render the nested single/repeatable component editor.
+   */
+  component?: string;
+  /**
+   * be-05: a `dynamiczone` field's allowed component-type api_ids. PROJECTED only for a dynamic-zone
+   * field (a conditional wire key). The admin reads it to offer the allowed block types in the zone editor.
+   */
+  components?: string[];
   /**
    * i18n per-field localized flag, PROJECTED only for an `i18n: true` type (a non-i18n type omits this
    * key — a conditional wire key). `true` => the field is per-variant; `false` => shared across the
@@ -414,6 +445,52 @@ export interface UpdateFieldInput {
 export interface DropResult {
   apiId: string;
   dropped: true;
+}
+
+// === be-05 — component types ====================================================================
+//
+// A COMPONENT type is a reusable field group with NO physical table and NO engine presence — pure meta.
+// A content type (or another component) attaches it via a `component` / `component-repeatable` /
+// `dynamiczone` field. Mirror of the api component-type controller (projectComponentDef) + the component
+// repository create body.
+
+/**
+ * A component type as projected by the component builder (`projectComponentDef`): its api_id + ordered
+ * fields. A component field carries the SAME conditional metadata keys as a content-type field
+ * ({@link FieldDefinition}) MINUS the system/relation/i18n keys (a component has none): `enumValues` /
+ * `length` / `scale` / `precision` for scalars, `multiple` for media, `component` / `components` for a
+ * nested component / dynamic-zone field. Returned by every 2xx component-builder route (except a drop).
+ */
+export interface ComponentTypeDefinition {
+  apiId: string;
+  fields: ComponentFieldDefinition[];
+}
+
+/** One field of a component type, as projected by the component builder. */
+export interface ComponentFieldDefinition {
+  name: string;
+  cmsType: CmsType | ComponentFieldKind;
+  nullable: boolean;
+  enumValues?: readonly string[];
+  length?: number;
+  scale?: number;
+  precision?: number;
+  /** media cardinality (be-04). */
+  multiple?: boolean;
+  /** be-05 nested `component` / `component-repeatable` ref. */
+  component?: string;
+  /** be-05 `dynamiczone` allowed-set. */
+  components?: string[];
+}
+
+/**
+ * The body for `componentTypes.create` — `POST /component-types`. The `apiId` + every field name are
+ * validated server-side BEFORE any write. A field referencing another component must point at an
+ * EXISTING component, and the reference must not form a cycle (both rejected 400 at definition time).
+ */
+export interface CreateComponentTypeInput {
+  apiId: string;
+  fields: FieldSpec[];
 }
 
 // === 1.5 — filter operators ====================================================================

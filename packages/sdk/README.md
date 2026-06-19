@@ -510,8 +510,91 @@ Errors: `NotFoundError` (404 unknown owner/target), `ConflictError` (409 field/r
 The 17 `cmsType`s: `string`, `text`, `email`, `uid`, `enumeration`, `integer`, `biginteger`,
 `float`, `decimal`, `boolean`, `date`, `datetime`, `time`, `json`, `array`, `uuid`, `media`.
 `FieldOptions` keys: `length` (varchar sizing), `precision` / `scale` (decimal), `values`
-(enumeration), `multiple` (media single-vs-array), `nullable`, `default`. See
-[Media library & media fields](#media-library--media-fields) for the `media` type.
+(enumeration), `multiple` (media single-vs-array), `component` / `components` (be-05 component
+fields), `nullable`, `default`. See [Media library & media fields](#media-library--media-fields)
+for the `media` type and [Components & dynamic zones](#components--dynamic-zones) below.
+
+---
+
+## Components & dynamic zones
+
+A **component** is a reusable field group (no physical table of its own). Define one with
+`client.componentTypes`, then attach it to a content type (or another component) via a `component`
+(single), `component-repeatable` (array), or `dynamiczone` (heterogeneous array) field — each stored
+as a single jsonb column on the owner. The `cmsType` union for these three is `ComponentFieldKind`
+(distinct from `CmsType`, like `RelationKind`).
+
+```ts
+// define a reusable component (meta-only — no table)
+await client.componentTypes.create({
+  apiId: 'seo',
+  fields: [
+    { name: 'metaTitle', cmsType: 'string', options: { nullable: false } },
+    { name: 'metaDescription', cmsType: 'text' },
+  ],
+});
+await client.componentTypes.create({ apiId: 'hero', fields: [{ name: 'headline', cmsType: 'string' }] });
+
+// attach single / repeatable / dynamic-zone component fields to a content type
+await client.contentTypes.create({
+  apiId: 'page',
+  fields: [
+    { name: 'title', cmsType: 'string', options: { nullable: false } },
+    { name: 'seo', cmsType: 'component', options: { component: 'seo' } },
+    { name: 'sections', cmsType: 'component-repeatable', options: { component: 'hero' } },
+    { name: 'blocks', cmsType: 'dynamiczone', options: { components: ['seo', 'hero'] } },
+  ],
+});
+```
+
+The component-builder surface mirrors `contentTypes`: `list()`, `get(apiId)`, `create(input)`,
+`drop(apiId)`, `addField(apiId, field)`, `dropField(apiId, name)`. Each 2xx body is a
+`ComponentTypeDefinition` (`{ apiId, fields }`) except a drop (`{ apiId, dropped: true }`). A
+content-type / component field's projection carries `component` (single/repeatable ref) or
+`components` (dynamic-zone allowed-set) conditionally.
+
+Definition-time guards (all `BadRequestError` 400 unless noted): a referenced component must already
+exist; a reference **cycle** (A → B → A, including via a dynamic-zone allowed-set) is rejected; a
+malformed spec (a `component` with no ref, an empty `dynamiczone` allowed-set) is rejected. Dropping a
+component still referenced by a content-type or another component is a `ConflictError` (409).
+
+### Writing component values
+
+A write to a component field is validated **recursively** against the referenced component schema(s)
+and stored as jsonb. Each instance is field-by-field type-checked (reusing the same scalar coercion as
+a top-level field, so wire fidelity holds **inside** a component too — biginteger / decimal as strings,
+datetime ISO, nested json verbatim), and the server assigns each instance a stable integer `id`.
+
+```ts
+await client.create('page', {
+  title: 'Home',
+  seo: { metaTitle: 'Welcome', metaDescription: null },        // single
+  sections: [{ headline: 'A' }, { headline: 'B' }],            // repeatable (order preserved)
+  blocks: [                                                    // dynamic zone (tag each block)
+    { __component: 'hero', headline: 'Big' },
+    { __component: 'seo', metaTitle: 'X' },
+  ],
+});
+```
+
+Validation rejects (all `BadRequestError` 400, with a **scoped path** like `field "hero.cta.label"`):
+an unknown nested field; a missing required nested field; a dynamic-zone block with a missing,
+disallowed, or unknown `__component`; nesting deeper than the depth cap; and an oversized instance. A
+**media** field inside a component is an inline `files.id` ref (single id / id array) — it is
+existence-checked in the same write transaction (a dangling id 400s and rolls the whole write back); no
+link table is created.
+
+### Reading component values
+
+Un-populated, a component field echoes its raw stored tree **verbatim** (zero-copy — instance ids and
+array order preserved, `> 2^53` ints intact). A `populate` read of a component field inlines any
+**media** refs inside the tree (single → the asset object or `null`, multiple → an array with dangling
+ids dropped), resolved in one batched lookup:
+
+```ts
+const { data } = await client.findOne('page', 1, { populate: ['seo', 'blocks'] });
+// data.seo.image -> the FileAsset object (was a bare id un-populated)
+```
 
 ---
 

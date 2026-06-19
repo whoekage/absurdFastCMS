@@ -21,6 +21,8 @@ import {
   type UpdateFieldInput,
   type DropResult,
   type DeclareRelationInput,
+  type ComponentTypeDefinition,
+  type CreateComponentTypeInput,
   type FileAsset,
   type FileListResponse,
   type FileListParams,
@@ -439,6 +441,83 @@ export class ContentTypesApi {
 }
 
 /**
+ * be-05 — the COMPONENT-TYPE BUILDER namespace (`client.componentTypes`). A component type is a reusable
+ * field group (no physical table / no engine presence). Covers `GET/POST /component-types`,
+ * `GET/DELETE /component-types/:apiId`, `POST .../fields`, and `DELETE .../fields/:name`. Every 2xx body
+ * is a {@link ComponentTypeDefinition} (the `projectComponentDef` shape) except a drop ({@link DropResult}).
+ * Errors surface as the typed subclasses: {@link ConflictError} (409 exists / in-use / field clash),
+ * {@link NotFoundError} (404), {@link BadRequestError} (400 invalid identifier / unknown cmsType / malformed
+ * component spec / dangling ref / reference cycle).
+ *
+ * ⚠️ Like the content-type builder, these routes are only mounted on a server started WITH a store +
+ * registry; a read-only server answers 404/405.
+ */
+export class ComponentTypesApi {
+  private readonly request: RequestFn;
+
+  constructor(request: RequestFn) {
+    this.request = request;
+  }
+
+  /** LIST. `GET /component-types` → every component-type's projected definition. */
+  list(signal?: AbortSignal): Promise<ComponentTypeDefinition[]> {
+    const opts: RequestOptions = {};
+    if (signal) opts.signal = signal;
+    return this.request<ComponentTypeDefinition[]>('GET', '/component-types', opts);
+  }
+
+  /** GET one. `GET /component-types/:apiId`. Throws {@link NotFoundError} (404) when unknown. */
+  get(apiId: string, signal?: AbortSignal): Promise<ComponentTypeDefinition> {
+    const opts: RequestOptions = {};
+    if (signal) opts.signal = signal;
+    return this.request<ComponentTypeDefinition>('GET', `/component-types/${encodeURIComponent(apiId)}`, opts);
+  }
+
+  /**
+   * CREATE. `POST /component-types` with `{ apiId, fields }` → the new component's definition (201).
+   * Throws {@link ConflictError} (409) when the api_id exists, {@link BadRequestError} (400) on an invalid
+   * identifier / unknown cmsType / malformed component field / dangling component ref / reference cycle.
+   */
+  create(input: CreateComponentTypeInput, signal?: AbortSignal): Promise<ComponentTypeDefinition> {
+    const opts: RequestOptions = { body: input };
+    if (signal) opts.signal = signal;
+    return this.request<ComponentTypeDefinition>('POST', '/component-types', opts);
+  }
+
+  /**
+   * DROP a component. `DELETE /component-types/:apiId` → `{ apiId, dropped: true }`. Throws
+   * {@link ConflictError} (409) when the component is still referenced by a content-type / component
+   * field, {@link NotFoundError} (404) when the api_id is unknown.
+   */
+  drop(apiId: string, signal?: AbortSignal): Promise<DropResult> {
+    const opts: RequestOptions = {};
+    if (signal) opts.signal = signal;
+    return this.request<DropResult>('DELETE', `/component-types/${encodeURIComponent(apiId)}`, opts);
+  }
+
+  /**
+   * ADD a field. `POST /component-types/:apiId/fields` with a {@link FieldSpec} → the updated definition
+   * (201). Throws {@link ConflictError} (409) on a name clash, {@link NotFoundError} (404) when the
+   * component is unknown, {@link BadRequestError} (400) on an invalid spec / dangling ref / cycle.
+   */
+  addField(apiId: string, field: FieldSpec, signal?: AbortSignal): Promise<ComponentTypeDefinition> {
+    const opts: RequestOptions = { body: field };
+    if (signal) opts.signal = signal;
+    return this.request<ComponentTypeDefinition>('POST', `/component-types/${encodeURIComponent(apiId)}/fields`, opts);
+  }
+
+  /**
+   * DROP a field. `DELETE /component-types/:apiId/fields/:name` → the updated definition (200). Throws
+   * {@link NotFoundError} (404) when the component or field is unknown.
+   */
+  dropField(apiId: string, name: string, signal?: AbortSignal): Promise<ComponentTypeDefinition> {
+    const opts: RequestOptions = {};
+    if (signal) opts.signal = signal;
+    return this.request<ComponentTypeDefinition>('DELETE', `/component-types/${encodeURIComponent(apiId)}/fields/${encodeURIComponent(name)}`, opts);
+  }
+}
+
+/**
  * The transport client. Holds the normalized base URL, the resolved `fetch`, and the optional header
  * provider; everything else (read/write/builder methods) is built on the private {@link request} pipeline
  * by later slices. Construct via {@link createClient} or `new AbsurdClient(options)`.
@@ -470,6 +549,12 @@ export class AbsurdClient {
   readonly contentTypes: ContentTypesApi;
 
   /**
+   * be-05 — the component-type builder namespace (`client.componentTypes`). Reuses this client's
+   * {@link request} pipeline for the reusable-component meta routes (`/component-types...`).
+   */
+  readonly componentTypes: ComponentTypesApi;
+
+  /**
    * be-04 MEDIA — the asset-library namespace (`client.assets`): `list` / `get` / `delete` over the
    * `/_files` endpoints. Upload is {@link AbsurdClient.upload} (multipart). Reuses this client's
    * {@link request} pipeline (same retries / timeout / hooks / typed-error tower).
@@ -499,6 +584,7 @@ export class AbsurdClient {
 
     // Bind request so the namespace keeps the right `this` while calling the protected pipeline.
     this.contentTypes = new ContentTypesApi(this.request.bind(this));
+    this.componentTypes = new ComponentTypesApi(this.request.bind(this));
     this.assets = new AssetsApi(this.request.bind(this));
   }
 

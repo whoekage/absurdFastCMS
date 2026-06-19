@@ -94,10 +94,16 @@ function normalizeIntString(s: string): string {
 
 // === 7.1 — schema-aware DECODE (raw wire entry → typed values) ==================================
 
-/** Index a definition's fields by name once, so decode/encode are O(keys) not O(keys × fields). */
+/**
+ * Index a definition's fields by name once, so decode/encode are O(keys) not O(keys × fields). A be-05
+ * component / dynamic-zone field's cmsType is one of the structured-content kinds (not a scalar
+ * {@link CmsType}); it is skipped here so its value passes through {@link decodeValue}'s unknown-type
+ * passthrough verbatim (the inline component tree is already-parsed JSON — no scalar decode applies).
+ */
 function fieldTypeIndex(def: ContentTypeDefinition): Map<string, CmsType> {
   const idx = new Map<string, CmsType>();
-  for (const f of def.fields) idx.set(f.name, f.cmsType);
+  const scalar = new Set<string>(['string', 'text', 'email', 'uid', 'enumeration', 'integer', 'biginteger', 'float', 'decimal', 'boolean', 'date', 'datetime', 'time', 'json', 'array', 'uuid', 'media']);
+  for (const f of def.fields) if (scalar.has(f.cmsType)) idx.set(f.name, f.cmsType as CmsType);
   return idx;
 }
 
