@@ -60,7 +60,7 @@ link tables, inverse rows); reads already execute `populate`. What's missing is 
 - SDK: `contentTypes.addRelation` + relation fields on `ContentTypeDefinition`; admin reads relations from the API.
 - **No migration needed** — `content_type_relations` already exists (migration `0003`).
 
-### Phase 1 — Strapi-v5 read-compat completeness *(cheap, high value)*
+### Phase 1 — Strapi-v5 read-compat completeness ✅ *(be-02 + be-02b, done)*
 - **be-02 — `fields`** (sparse field selection / projection). The flat `{data,meta}` shape is already
   v5-compliant (no `attributes` wrapper) — confirmed, no work. `fields` parse already exists but is
   discarded; the slice wires projection at response-assembly time (re-materialize + serialize the
