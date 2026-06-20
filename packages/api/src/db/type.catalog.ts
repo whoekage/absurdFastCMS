@@ -74,6 +74,14 @@ export interface FieldOptions {
   component?: string;
   /** be-05 dynamiczone only: the allowed component-type api_ids (the zone's allowed-set). */
   components?: string[];
+  /**
+   * be-05b RELATION-INSIDE-COMPONENT only: the target CONTENT-TYPE api_id an inline ref points at. NOTE
+   * this is semantically DISTINCT from a top-level (be-01) relation: a relation field INSIDE a component
+   * stores inline id ref(s) IN the component json (set-by-value, resolved-on-read, NOT independently
+   * queryable) — there is NO link table, NO CSR, NO inverse side. The `multiple` flag above is reused for
+   * cardinality (single ref vs many refs), exactly mirroring a media field.
+   */
+  target?: string;
 }
 
 /** A cms_type resolved against the catalog: the pg literal, the engine intent, and recorded params. */
@@ -223,9 +231,14 @@ export function resolveType(cmsType: CmsType, options?: FieldOptions): ResolvedT
  *   component-repeatable — an ORDERED ARRAY of instances of one component (`params.component`).
  *   dynamiczone          — an ORDERED ARRAY of instances, each tagged `__component`, drawn from an
  *                          allowed-set (`params.components = ["a","b",...]`).
+ *   relation             — be-05b: an INLINE id ref (or array of ids) to a TARGET content-type
+ *                          (`params.target = "<apiId>"`, `params.multiple`). It rides the SAME json-column
+ *                          plumbing as a multiple-media field — set-by-value, existence-checked on write,
+ *                          resolved by the read populate-walk. It is NOT a be-01 link-table relation (no
+ *                          link table, no CSR, no inverse side, not independently queryable).
  */
-export type ComponentFieldKind = 'component' | 'component-repeatable' | 'dynamiczone';
-export const COMPONENT_FIELD_KINDS: ReadonlySet<string> = new Set<ComponentFieldKind>(['component', 'component-repeatable', 'dynamiczone']);
+export type ComponentFieldKind = 'component' | 'component-repeatable' | 'dynamiczone' | 'relation';
+export const COMPONENT_FIELD_KINDS: ReadonlySet<string> = new Set<ComponentFieldKind>(['component', 'component-repeatable', 'dynamiczone', 'relation']);
 
 /** Closed-set test: is this cms_type one of the structured-content component kinds? */
 export function isComponentFieldKind(value: unknown): value is ComponentFieldKind {
@@ -250,8 +263,22 @@ export class ComponentFieldError extends Error {
  * params shape (stored verbatim in content_type_fields.params / component_type_fields.params):
  *   component / component-repeatable -> { kind, component: '<apiId>' }
  *   dynamiczone                      -> { kind, components: ['<apiId>', ...] }
+ *   relation                         -> { kind, target: '<apiId>', multiple }
  */
 export function resolveComponentField(kind: ComponentFieldKind, options?: FieldOptions): ResolvedType {
+  if (kind === 'relation') {
+    // be-05b: an inline id ref to a TARGET content-type. pgType is ALWAYS jsonb (engine `json`) for BOTH
+    // cardinalities (unlike a top-level media single, which is an int4 COLUMN — here the ref always lives
+    // INSIDE a json component column, so json is correct + simpler). SHAPE-only validation of the target
+    // api_id here (a non-empty string with no NUL); its EXISTENCE in `content_types` is checked by the
+    // repository against the live catalog (this module never touches a connection).
+    const target = options?.target;
+    if (typeof target !== 'string' || target.length === 0) {
+      throw new ComponentFieldError('relation requires a target content-type api_id');
+    }
+    if (target.includes(' ')) throw new ComponentFieldError(`relation target ${JSON.stringify(target)} is not a valid api_id`);
+    return { cmsType: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, target, multiple: options?.multiple === true } };
+  }
   if (kind === 'dynamiczone') {
     const components = options?.components;
     if (!Array.isArray(components) || components.length === 0) {

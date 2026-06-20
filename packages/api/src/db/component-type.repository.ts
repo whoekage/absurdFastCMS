@@ -94,6 +94,15 @@ export class ComponentInUseError extends Error {
     this.name = 'ComponentInUseError';
   }
 }
+/** be-05b: thrown when a component's relation field points at a content-type that does not exist. */
+export class RelationTargetNotFoundError extends Error {
+  readonly target: string;
+  constructor(target: string) {
+    super(`relation target content-type ${JSON.stringify(target)} not found`);
+    this.name = 'RelationTargetNotFoundError';
+    this.target = target;
+  }
+}
 
 // --- api_id validation -------------------------------------------------------------------------
 
@@ -152,6 +161,15 @@ function referencedComponents(fields: ResolvedComponentField[]): string[] {
   return [...refs];
 }
 
+/** be-05b: collect the relation TARGET content-type api_id(s) referenced by a batch of resolved fields. */
+function referencedTargets(fields: ResolvedComponentField[]): string[] {
+  const refs = new Set<string>();
+  for (const f of fields) {
+    if (f.params['kind'] === 'relation' && typeof f.params['target'] === 'string') refs.add(f.params['target'] as string);
+  }
+  return [...refs];
+}
+
 // --- pure reads --------------------------------------------------------------------------------
 
 /** All component-types, ordered by id. */
@@ -184,6 +202,22 @@ export async function assertComponentRefsExist(sql: Sql, refs: string[]): Promis
   const present = new Set(rows.map((r) => r.api_id));
   for (const ref of refs) {
     if (!present.has(ref.toLowerCase())) throw new ComponentTypeNotFoundError(ref);
+  }
+}
+
+/**
+ * be-05b: assert every relation-field TARGET in `targets` names an existing CONTENT-TYPE (not a component),
+ * else throw {@link RelationTargetNotFoundError} for the FIRST missing one. Mirror of
+ * {@link assertComponentRefsExist} but against `content_types`. Empty input is a no-op (no query). Runs on
+ * the caller's tx so a dangling target rolls the component-type create/addField back inside its schema tx.
+ */
+export async function assertTargetTypesExist(sql: Sql, targets: string[]): Promise<void> {
+  if (targets.length === 0) return;
+  const unique = [...new Set(targets.map((t) => t.toLowerCase()))];
+  const rows = await sql<{ api_id: string }[]>`SELECT lower(api_id) AS api_id FROM content_types WHERE lower(api_id) = ANY(${unique})`;
+  const present = new Set(rows.map((r) => r.api_id));
+  for (const t of targets) {
+    if (!present.has(t.toLowerCase())) throw new RelationTargetNotFoundError(t);
   }
 }
 
@@ -233,12 +267,14 @@ export async function createComponentType(sql: Sql, params: { apiId: string; fie
   const apiId = validateComponentApiId(params.apiId);
   const fields = resolveComponentFields(params.fields);
   const refs = referencedComponents(fields);
+  const targets = referencedTargets(fields);
 
   const existing = await getComponentType(sql, apiId);
   if (existing !== null) throw new ComponentTypeExistsError(apiId);
 
   return runSchemaTx(sql, `component:${apiId}`, async (tx) => {
     await assertComponentRefsExist(tx, refs); // every referenced component must already exist (400 else).
+    await assertTargetTypesExist(tx, targets); // be-05b: every relation target content-type must exist (400 else).
     await assertNoComponentCycle(tx, apiId, refs); // forbid a definition-time reference cycle (400 else).
     const [cmp] = await tx<ComponentTypeRow[]>`INSERT INTO component_types (api_id) VALUES (${apiId}) RETURNING *`;
     for (let i = 0; i < fields.length; i++) {
@@ -266,9 +302,11 @@ async function lockComponentType(tx: Sql, apiId: string): Promise<ComponentTypeR
 export async function addComponentField(sql: Sql, apiId: string, spec: ComponentFieldSpec): Promise<ComponentFieldRow> {
   const [field] = resolveComponentFields([spec]);
   const refs = referencedComponents([field!]);
+  const targets = referencedTargets([field!]);
   return runSchemaTx(sql, `component:${apiId}`, async (tx) => {
     const cmp = await lockComponentType(tx, apiId);
     await assertComponentRefsExist(tx, refs);
+    await assertTargetTypesExist(tx, targets); // be-05b: relation target content-type must exist (400 else).
     await assertNoComponentCycle(tx, cmp.api_id, refs);
     const dup = await tx`SELECT 1 FROM component_type_fields WHERE component_type_id = ${cmp.id} AND lower(name) = lower(${field!.name})`;
     if (dup.length > 0) throw new FieldExistsError(field!.name);

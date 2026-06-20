@@ -306,6 +306,24 @@ export async function deleteEntry(sql: Sql, def: ContentTypeDef, id: number): Pr
 }
 
 /**
+ * be-05b RELATION-INSIDE-COMPONENT — the WRITE-side referential-integrity check for an inline relation
+ * ref. Given candidate `id`s that a component's relation field points at the content-type `def`, return
+ * the SUBSET that does NOT exist in `def`'s ct_ table (so the caller 400s naming the dangling ids). Mirror
+ * of {@link import('./file.repository.ts').missingFileIds} but against the TARGET ct_ table — the table
+ * identifier comes ONLY from the registry-built `def.tableName` (NEVER client input), the ids are bound.
+ * Runs INSIDE the caller's tx so the check + the row insert/update commit atomically. Empty input -> [].
+ */
+export async function missingEntryIds(sql: Sql, def: ContentTypeDef, ids: number[]): Promise<number[]> {
+  if (ids.length === 0) return [];
+  assertTableName(def.tableName);
+  const unique = [...new Set(ids)];
+  const text = `SELECT ${quoteIdent('id')} FROM ${quoteIdent(def.tableName)} WHERE ${quoteIdent('id')} = ANY($1::int[])`;
+  const rows = await sql.unsafe(text, [unique] as never[]);
+  const present = new Set((rows as { id: number }[]).map((r) => r.id));
+  return unique.filter((id) => !present.has(id));
+}
+
+/**
  * Render a returned row (engine-named, json values wrapped in {@link RawJson}) into the SAME JSON the
  * read engine's `materialize`/`serializeRow` produces: fields in `def.fields` order, date -> ISO,
  * i64 -> quoted string, decimal -> quoted formatDecimal, json -> verbatim spliced, null -> null.

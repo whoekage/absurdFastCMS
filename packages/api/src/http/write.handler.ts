@@ -2,7 +2,7 @@ import type { Sql } from 'postgres';
 import type { Engine } from '../store/engine.ts';
 import type { Registry, ContentTypeDef, ComponentDef } from '../store/registry.ts';
 import { validateBody, BodyParseError } from '../store/body.parser.ts';
-import { insertEntry, updateEntry, deleteEntry, publishEntry, unpublishEntry, readSiblingForVariant, serializeEntry, EntryWriteError } from '../db/entry.repository.ts';
+import { insertEntry, updateEntry, deleteEntry, publishEntry, unpublishEntry, readSiblingForVariant, serializeEntry, missingEntryIds, EntryWriteError } from '../db/entry.repository.ts';
 import { applyRelationOps } from '../db/relation.repository.ts';
 import { missingFileIds } from '../db/file.repository.ts';
 import { RawJson } from '../store/column.ts';
@@ -175,6 +175,94 @@ function collectInstanceMediaIds(registry: Registry, apiId: string, obj: unknown
   }
 }
 
+/**
+ * be-05b RELATION-INSIDE-COMPONENT — assert every inline relation-ref id a write body references actually
+ * exists in its TARGET content-type, INSIDE the caller's tx (so the existence check + the row insert/update
+ * commit atomically). Sibling of {@link assertMediaRefsExist}: the body parser already validated shape +
+ * cardinality + positive-int4; here we gather the referenced ids from the COERCED component trees, BINNED
+ * BY TARGET api_id (different relation fields point at different content-types), then per-target reject (a
+ * 400 via EntryWriteError) any id that names no row. A relation ref can ONLY live inside a component, so the
+ * gate is `def.componentFields.size === 0` (a type with no component field is a byte-identical no-op).
+ *
+ * VISIBILITY NOTE: existence is checked against the WHOLE target table regardless of draft/publish or
+ * locale — referential existence is independent of publish state / locale visibility (a write stores the
+ * id; the READ path applies default-published + default-locale visibility). This mirrors how a media id is
+ * stored regardless of any asset-level state. The variant-create RawJson unwrap is reused identically.
+ */
+async function assertRelationRefsExist(tx: Sql, def: ContentTypeDef, data: Record<string, unknown>, registry: Registry): Promise<void> {
+  if (def.componentFields.size === 0) return;
+  const byTarget = new Map<string, number[]>();
+  for (const [name, cmeta] of def.componentFields) {
+    const v = data[name];
+    if (v === undefined || v === null) continue;
+    const tree = v instanceof RawJson ? JSON.parse(v.raw) : v;
+    collectComponentRelationRefs(registry, cmeta, tree, byTarget);
+  }
+  for (const [target, ids] of byTarget) {
+    if (ids.length === 0) continue;
+    const targetDef = registry.get(target);
+    // A relation target that vanished AFTER the component was defined (no dropContentType guard this slice)
+    // -> the write cannot verify the ref, so reject it cleanly rather than store an unverifiable id.
+    if (targetDef === undefined) throw new EntryWriteError(`relation reference to unknown content-type "${target}"`);
+    const missing = await missingEntryIds(tx, targetDef, ids);
+    if (missing.length > 0) {
+      throw new EntryWriteError(`relation reference to unknown ${target} id(s): ${missing.join(', ')}`);
+    }
+  }
+}
+
+/**
+ * be-05b — recursively gather every INLINE relation-ref id inside a coerced component / component-repeatable
+ * / dynamiczone value, binned BY TARGET content-type api_id, guided by the registry's {@link ComponentDef}
+ * schemas. Mirrors {@link collectComponentMediaIds} (the same component-tree walk), but reads
+ * `cdef.relationRefFields` instead of `cdef.mediaFields` and keys ids by their declared target.
+ */
+function collectComponentRelationRefs(
+  registry: Registry,
+  meta: { kind: string; component?: string; components?: readonly string[] },
+  value: unknown,
+  into: Map<string, number[]>,
+): void {
+  if (value === null || value === undefined) return;
+  if (meta.kind === 'component') {
+    if (meta.component !== undefined) collectInstanceRelationRefs(registry, meta.component, value, into);
+  } else if (meta.kind === 'component-repeatable') {
+    if (Array.isArray(value) && meta.component !== undefined) {
+      for (const entry of value) collectInstanceRelationRefs(registry, meta.component, entry, into);
+    }
+  } else if (meta.kind === 'dynamiczone') {
+    if (Array.isArray(value)) {
+      for (const block of value) {
+        if (typeof block === 'object' && block !== null && typeof (block as Record<string, unknown>)['__component'] === 'string') {
+          collectInstanceRelationRefs(registry, (block as Record<string, unknown>)['__component'] as string, block, into);
+        }
+      }
+    }
+  }
+}
+
+/** Gather inline relation-ref ids (by target) from ONE component instance (recursing nested components). */
+function collectInstanceRelationRefs(registry: Registry, apiId: string, obj: unknown, into: Map<string, number[]>): void {
+  if (typeof obj !== 'object' || obj === null) return;
+  const cdef: ComponentDef | undefined = registry.getComponent(apiId);
+  if (cdef === undefined) return;
+  const o = obj as Record<string, unknown>;
+  for (const [fname, { target, multiple }] of cdef.relationRefFields) {
+    const v = o[fname];
+    if (v === undefined || v === null) continue;
+    const bin = into.get(target) ?? [];
+    if (multiple) {
+      if (Array.isArray(v)) for (const id of v) if (typeof id === 'number') bin.push(id);
+    } else if (typeof v === 'number') {
+      bin.push(v);
+    }
+    if (bin.length > 0) into.set(target, bin);
+  }
+  for (const [fname, cmeta] of cdef.componentFields) {
+    collectComponentRelationRefs(registry, cmeta, o[fname], into);
+  }
+}
+
 /** Build the write response Buffer: `{"data":<serialized row>,"meta":{}}`, byte-consistent with GET. */
 function writeOk(status: number, def: ContentTypeDef, row: Record<string, unknown>): CoreResponse {
   return {
@@ -224,6 +312,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
         }
         const merged = { ...sib.shared, ...data };
         await assertMediaRefsExist(tx, def, merged, ctx.registry()); // be-04/05: any media id (top-level or inline) must exist.
+        await assertRelationRefsExist(tx, def, merged, ctx.registry()); // be-05b: any inline relation-ref id must exist in its target.
         const r = await insertEntry(tx, def, merged, { documentId: sib.documentId, locale });
         // Per §7 relations are PER-VARIANT (link rows key the physical row id), so any relation ops apply
         // to the NEW row only — exactly the same applyRelationOps seam as a plain create.
@@ -264,6 +353,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
       // non-existent related id rolls the WHOLE tx back -> no orphan ct_ row, no partial link write.
       const row = await ctx.sql.begin(async (tx) => {
         await assertMediaRefsExist(tx, def, data, ctx.registry()); // be-04/05: media id(s) must reference real assets (400 else).
+        await assertRelationRefsExist(tx, def, data, ctx.registry()); // be-05b: any inline relation-ref id must exist in its target.
         const r = await insertEntry(tx, def, data, opts);
         await applyRelationOps(tx, def, Number(r['id']), relationOps);
         return r;
@@ -281,6 +371,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
         const r = await updateEntry(tx, def, id, data);
         if (r === null) return null; // missing owner -> abort the tx, do NO link work.
         await assertMediaRefsExist(tx, def, data, ctx.registry()); // be-04/05: any media id(s) in this update must exist (400 else).
+        await assertRelationRefsExist(tx, def, data, ctx.registry()); // be-05b: any inline relation-ref id must exist in its target.
         await applyRelationOps(tx, def, id, relationOps);
         return r;
       });

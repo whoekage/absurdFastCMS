@@ -496,7 +496,7 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
         if (base.status === 200) {
           let body = base.body;
           if (mediaTargets.size > 0) body = (await applyMediaPopulate(sql, body, mediaTargets)).body;
-          if (componentTargets.size > 0) body = (await applyComponentPopulate(sql, reg, body, componentTargets)).body;
+          if (componentTargets.size > 0) body = (await applyComponentPopulate(sql, current, reg, body, componentTargets)).body;
           result = { status: 200, contentType: base.contentType, body };
         } else {
           result = base;

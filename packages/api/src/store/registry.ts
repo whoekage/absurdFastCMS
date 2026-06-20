@@ -119,6 +119,16 @@ export interface RegistryField {
    */
   component?: { kind: ComponentFieldKind; component?: string; components?: readonly string[] };
   /**
+   * be-05b RELATION-INSIDE-COMPONENT: present iff `cmsType === 'relation'` (a component field only) — an
+   * INLINE id ref to a target content-type. The field IS a plain `json` column (`field.json===true`),
+   * emitted verbatim un-populated. `target` is the referenced content-type api_id; `multiple` selects
+   * single-id vs array-of-ids cardinality. The body parser reads it (positive-int4 + cardinality), the
+   * write existence-check reads it (the id(s) must exist in the TARGET ct_ table), and the read populate
+   * post-step reads it (resolve the id(s) via the engine, applying target draft/publish + locale
+   * visibility). Absent for every non-relation field. NOTE this is NOT a be-01 link-table relation.
+   */
+  relationRef?: { target: string; multiple: boolean };
+  /**
    * i18n: true => the field is localized (each locale variant carries its own value); false => shared
    * across the document's locale variants (write-side fan-out keeps siblings in sync — a later slice).
    * Always true for a user field on a non-i18n type (no variants exist, so it is moot); system fields
@@ -303,10 +313,16 @@ function buildUserField(apiId: string, row: FieldRow): RegistryField {
   if (cmsType === 'media') {
     field.media = { multiple: params['multiple'] === true };
   }
-  // be-05 COMPONENT: tag the field with its structural intent from the catalog params. engine_type is
-  // `json` (set above), so `type==='json'` + `field.json===true` already — the column loads/serializes as
-  // RawJson verbatim with NO engine change. This only records kind + the referenced component api_id(s).
-  if (isComponentFieldKind(row.cms_type)) {
+  // be-05b RELATION-INSIDE-COMPONENT: tag an inline relation ref from its catalog params. engine_type is
+  // `json` (set above) so the column loads/serializes as RawJson verbatim — exactly like a media-multiple
+  // / component field. Checked BEFORE the component arm because `relation` IS a ComponentFieldKind, but it
+  // is NOT a structural component (no nested instance tree) so it must NOT populate `field.component`.
+  if (row.cms_type === 'relation') {
+    field.relationRef = { target: params['target'] as string, multiple: params['multiple'] === true };
+  } else if (isComponentFieldKind(row.cms_type)) {
+    // be-05 COMPONENT: tag the field with its structural intent from the catalog params. engine_type is
+    // `json` (set above), so `type==='json'` + `field.json===true` already — the column loads/serializes as
+    // RawJson verbatim with NO engine change. This only records kind + the referenced component api_id(s).
     const kind = row.cms_type as ComponentFieldKind;
     const c: { kind: ComponentFieldKind; component?: string; components?: readonly string[] } = { kind };
     if (typeof params['component'] === 'string') c.component = params['component'];
@@ -564,6 +580,11 @@ export interface ComponentDef {
   componentFields: Map<string, { kind: ComponentFieldKind; component?: string; components?: readonly string[] }>;
   /** Media fields inside this component (inline id refs; the populate seam). */
   mediaFields: Map<string, { multiple: boolean }>;
+  /**
+   * be-05b: relation-ref fields inside this component (inline content-type id refs; the write existence-
+   * check + read populate seam). Empty for a component with no relation field => those walks are no-ops.
+   */
+  relationRefFields: Map<string, { target: string; multiple: boolean }>;
 }
 
 /** Assemble a {@link ComponentDef} from a component_types row + its field rows (reuses buildUserField). */
@@ -579,7 +600,9 @@ function buildComponentDef(cmp: ComponentTypeRow, fieldRows: ComponentFieldRow[]
   for (const f of fields) if (f.component !== undefined) componentFields.set(f.name, f.component);
   const mediaFields = new Map<string, { multiple: boolean }>();
   for (const f of fields) if (f.media !== undefined) mediaFields.set(f.name, f.media);
-  return { apiId: cmp.api_id, fields, fieldsByName, nullableNames, requiredOnCreate, componentFields, mediaFields };
+  const relationRefFields = new Map<string, { target: string; multiple: boolean }>();
+  for (const f of fields) if (f.relationRef !== undefined) relationRefFields.set(f.name, f.relationRef);
+  return { apiId: cmp.api_id, fields, fieldsByName, nullableNames, requiredOnCreate, componentFields, mediaFields, relationRefFields };
 }
 
 /**

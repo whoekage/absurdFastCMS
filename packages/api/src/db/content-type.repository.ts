@@ -1,5 +1,5 @@
 import type { Sql } from 'postgres';
-import { resolveType, resolveComponentField, isComponentFieldKind, classifyTypeChange, type CmsType, type ComponentFieldKind, type FieldOptions, type ResolvedType } from './type.catalog.ts';
+import { resolveType, resolveComponentField, isComponentFieldKind, classifyTypeChange, ComponentFieldError, type CmsType, type ComponentFieldKind, type FieldOptions, type ResolvedType } from './type.catalog.ts';
 import { assertComponentRefsExist } from './component-type.repository.ts';
 import {
   validateFieldName,
@@ -132,6 +132,24 @@ export async function getRelations(sql: Sql, contentTypeId: number): Promise<Rel
 // --- validation helpers ------------------------------------------------------------------------
 
 /**
+ * be-05b GUARD: `relation` is a {@link ComponentFieldKind}, but unlike component/component-repeatable/
+ * dynamiczone it has NO top-level (content-type) form — a relation INSIDE a component is an inline id ref
+ * stored in the component's json (set-by-value, existence-checked on write, populate-resolved on read). A
+ * relation at the TOP LEVEL of a content-type goes through the be-01 LINK-TABLE path ({@link RelationSpec},
+ * a real CSR with an inverse side), NOT this scalar-field path. So reject `cmsType === 'relation'` here:
+ * `resolveComponentField` is shared with the component-type path (the only legitimate caller). Without
+ * this, a top-level relation field would resolve to a bare json column that is never existence-checked nor
+ * populated — a silently-broken field (dangling/arbitrary-json on write, raw value on read).
+ */
+function rejectTopLevelRelation(cmsType: CmsType | ComponentFieldKind): void {
+  if (cmsType === 'relation') {
+    throw new ComponentFieldError(
+      "a `relation` field is only valid INSIDE a component type; declare a top-level relation via the relations[] (link-table) API",
+    );
+  }
+}
+
+/**
  * Validate a batch of field specs: each name passes {@link validateFieldName}, names are unique
  * case-insensitively (DuplicateFieldError), each type resolves, and a supplied default type-checks.
  * Returns the resolved fields paired with their (bound) default values — ready for the DDL builders.
@@ -144,6 +162,12 @@ export function resolveFields(specs: FieldSpec[]): ResolvedField[] {
     const lower = name.toLowerCase();
     if (seen.has(lower)) throw new DuplicateFieldError(name);
     seen.add(lower);
+    // be-05b: `relation` is a component-field-kind that is ONLY valid INSIDE a component type (it has no
+    // top-level form — an inline id ref lives in a component json column, not a ct_ column). Reject it on
+    // the content-type field path BEFORE resolving (otherwise it would resolve to a bare json column that
+    // is never existence-checked on write nor populated on read). Top-level relations go through the be-01
+    // link-table path (RelationSpec), NOT this scalar-field path.
+    rejectTopLevelRelation(spec.cmsType);
     // be-05: a component/component-repeatable/dynamiczone field resolves to a jsonb column via a SIBLING
     // helper (NOT the RESOLVERS record — so the `satisfies Record<CmsType,...>` guard stays exhaustive).
     // A component field never carries a constant default (it is a structured tree, not a scalar).
@@ -258,6 +282,7 @@ async function lockContentType(tx: Sql, apiId: string): Promise<ContentTypeRow> 
  */
 export async function addField(sql: Sql, apiId: string, spec: FieldSpec): Promise<FieldRow> {
   const name = validateFieldName(spec.name);
+  rejectTopLevelRelation(spec.cmsType); // be-05b: `relation` is component-only (see resolveFields).
   const resolved = isComponentFieldKind(spec.cmsType)
     ? resolveComponentField(spec.cmsType, spec.options)
     : resolveType(spec.cmsType, spec.options);

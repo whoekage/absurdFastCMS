@@ -9,6 +9,7 @@ import {
   ComponentTypeNotFoundError,
   ComponentCycleError,
   ComponentInUseError,
+  RelationTargetNotFoundError,
   type ComponentFieldSpec,
 } from '../db/component-type.repository.ts';
 import {
@@ -113,7 +114,8 @@ function mapError(e: unknown): CoreResponse {
     e instanceof TypeOptionError ||
     e instanceof EnumValueError ||
     e instanceof ComponentFieldError ||
-    e instanceof ComponentCycleError
+    e instanceof ComponentCycleError ||
+    e instanceof RelationTargetNotFoundError
   ) {
     return errorResponse(400, e.message);
   }

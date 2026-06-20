@@ -223,6 +223,36 @@ function coerceMedia(field: RegistryField, multiple: boolean, v: unknown): unkno
 }
 
 /**
+ * be-05b RELATION-INSIDE-COMPONENT — validate + normalize an inline relation ref's body value into the
+ * bound wire form, modeled byte-for-byte on {@link coerceMedia}. SINGLE accepts a bare positive-int4 id
+ * (or, leniently, a single-element array) -> a NUMBER stored inline in the json component column. MULTIPLE
+ * accepts an id or an array of ids -> a deduped NUMBER[] stored inline. Every id is a positive int4 (same
+ * MAX_INT4 guard as a media / link-table relation id); a non-int / <=0 / >int4 id is a clean 400. The id's
+ * EXISTENCE in the TARGET content-type is checked later in write.handler (the body parser is sync + has no
+ * DB); a dangling id simply resolves to null/dropped on read. NO link table is touched — the ref is stored
+ * by value inline, distinct from a be-01 link-table relation.
+ */
+function coerceRelationRef(field: RegistryField, multiple: boolean, v: unknown): unknown {
+  const name = field.name;
+  const validId = (x: unknown): x is number =>
+    typeof x === 'number' && Number.isInteger(x) && x > 0 && x <= MAX_INT4;
+  if (!multiple) {
+    if (Array.isArray(v)) {
+      if (v.length === 0) throw new BodyParseError(`relation field "${name}" is single-valued (use null to clear)`);
+      if (v.length > 1) throw new BodyParseError(`relation field "${name}" is single-valued and accepts at most one id`);
+      v = v[0];
+    }
+    if (!validId(v)) throw new BodyParseError(`relation field "${name}" must be a positive integer id`);
+    return v;
+  }
+  const arr = Array.isArray(v) ? v : [v];
+  for (const x of arr) {
+    if (!validId(x)) throw new BodyParseError(`relation field "${name}" must be a positive integer id or an array of them`);
+  }
+  return [...new Set(arr as number[])];
+}
+
+/**
  * be-05 COMPONENT — the RECURSIVE write validator. A component field's body value is validated field-by-
  * field against the referenced component schema and rebuilt into a PLAIN JS tree bound verbatim to the
  * jsonb column (the existing json write path). The walk is the seam where wire fidelity is preserved INSIDE
@@ -330,7 +360,9 @@ function coerceComponentInstance(
       out[key] = null;
       continue;
     }
-    if (cf.component !== undefined) {
+    if (cf.relationRef !== undefined) {
+      out[key] = coerceRelationRef(cf, cf.relationRef.multiple, v);
+    } else if (cf.component !== undefined) {
       out[key] = coerceComponentValue(registry, `${path}.${key}`, cf.component, v, depth + 1, counter);
     } else if (cf.media !== undefined) {
       out[key] = coerceMedia(cf, cf.media.multiple, v);
