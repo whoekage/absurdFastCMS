@@ -3,49 +3,53 @@
 @tailwind utilities;
 
 @layer base {
+  /* ── Lua Admin design tokens ──────────────────────────────────────────────────────────────────
+     Warm-paper light theme + a deep cool-ink dark variant. Brand = indigo (#6366f1) carried in
+     --primary; shadcn --accent stays the subtle hover fill (NOT the brand). Status hues + the link/
+     spark blue live as named Tailwind colors (see tailwind.config.js). HSL triples (hsl(var(--x))). */
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 3.9%;
+    --background: 45 19% 96%; /* #f6f5f2 warm paper */
+    --foreground: 260 6% 10%; /* #18171a ink */
     --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
+    --card-foreground: 260 6% 10%;
     --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
-    --primary: 240 5.9% 10%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 240 10% 3.9%;
-    --radius: 0.5rem;
+    --popover-foreground: 260 6% 10%;
+    --primary: 239 84% 67%; /* #6366f1 indigo brand */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 45 13% 94%; /* #f2f1ee panel */
+    --secondary-foreground: 260 6% 10%;
+    --muted: 45 13% 94%;
+    --muted-foreground: 240 6% 51%; /* #7a7a88 */
+    --accent: 48 11% 91%; /* subtle warm hover fill */
+    --accent-foreground: 260 6% 10%;
+    --destructive: 350 89% 60%; /* #f43f5e rose */
+    --destructive-foreground: 0 0% 100%;
+    --border: 43 16% 89%; /* #e7e5e0 */
+    --input: 43 16% 89%;
+    --ring: 239 84% 67%;
+    --radius: 0.625rem; /* 10px — cards round to xl, controls to md */
   }
 
   .dark {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 10% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 5.9% 10%;
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
+    --background: 250 11% 9%; /* deep cool ink */
+    --foreground: 60 9% 95%; /* #f4f4f2 */
+    --card: 250 12% 12%;
+    --card-foreground: 60 9% 95%;
+    --popover: 250 12% 12%;
+    --popover-foreground: 60 9% 95%;
+    --primary: 241 86% 72%; /* indigo lifted for dark */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 255 10% 15%;
+    --secondary-foreground: 60 9% 95%;
+    --muted: 255 10% 15%;
+    --muted-foreground: 240 7% 60%; /* #92929e */
+    --accent: 255 11% 16%;
+    --accent-foreground: 60 9% 95%;
+    --destructive: 351 95% 71%; /* #fb7185 rose */
+    --destructive-foreground: 0 0% 100%;
+    --border: 255 8% 20%;
+    --input: 255 8% 20%;
+    --ring: 241 86% 72%;
   }
 }
 
@@ -53,7 +57,29 @@
   * {
     @apply border-border;
   }
+  html {
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans;
+  }
+  /* Display face for headings/brand; opt-in via the `font-display` utility (Space Grotesk). */
+  ::selection {
+    background: hsl(var(--primary) / 0.18);
+  }
+  /* Warm scrollbar matching the paper surfaces. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--foreground) / 0.12);
+    border-radius: 8px;
+    border: 3px solid hsl(var(--background));
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--foreground) / 0.2);
   }
 }
