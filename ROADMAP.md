@@ -94,7 +94,7 @@ link tables, inverse rows); reads already execute `populate`. What's missing is 
 - **Deferred to a separate slice (be-04b):** image **transforms** (resize / crop / format) via **sharp** —
   its own run + commits, per the dependency-weight decision.
 
-### Phase 4 — Structured content: components & dynamic zones ✅ *(be-05, done — minus relations-inside)*
+### Phase 4 — Structured content: components & dynamic zones ✅ *(be-05 + be-05b, full parity)*
 - Reusable component types over HTTP (`component_types` + `component_type_fields` in `0001_init.sql`);
   `component` / `component-repeatable` / `dynamiczone` field kinds (jsonb-backed, Strapi wire with inline
   `__component`); single + repeatable + **dynamic zones** + **nesting** (depth cap 10, 256 KiB per-instance
@@ -102,9 +102,10 @@ link tables, inverse rows); reads already execute `populate`. What's missing is 
   errors, stable instance ids + order), emitted **verbatim/zero-copy** on read. **Media refs INSIDE
   components** (inline id, existence-checked, resolved by an opt-in populate-walk). Non-component types
   byte-identical. No filtering across dynamic zones (as Strapi). 830/830 green.
-- **Deferred to be-05b:** **relation refs INSIDE components** (only media-inside shipped). The chosen
-  "full parity" includes relations-inside; be-05b mirrors the media-inside path for relation refs
-  (inline id → existence-check on write → resolve in the populate-walk).
+- **be-05b ✅:** **relation refs INSIDE components** — inline id ref to a target content-type,
+  existence-checked on write, resolved by the populate-walk (applying target draft/publish + i18n
+  visibility); top-level `relation` cmsType rejected (component-only). Mirrors the media-inside path.
+  Full component parity now reached. 844/844 green.
 
 ### Phase 5 — i18n / localization ✅ *(be-06, done)*
 - **Per-type opt-in** (`i18n` flag) + **per-field `localized`** (Strapi-faithful). Locale variants are
