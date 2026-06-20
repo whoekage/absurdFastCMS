@@ -1,19 +1,28 @@
 import { Link } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
-import { Boxes, FileStack, Layers, Plus, Image } from 'lucide-react';
+import { useQueries, useQuery } from '@tanstack/react-query';
+import { FileStack, Layers, Plus, Image, LayoutDashboard, Search, Sparkles } from 'lucide-react';
 import { api } from '@/lib/api';
 import { contentTypeKeys, errorMessage } from '@/lib/content-types';
+import { formatCount } from '@/lib/dashboard';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
+import { cn } from '@/lib/utils';
 
-const navLink =
-  'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground [&.active]:bg-muted [&.active]:font-medium [&.active]:text-foreground';
+// Shared nav-item chrome: a soft indigo-tinted active state with a left accent bar (Lua).
+const navItem =
+  'group relative flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground ' +
+  "[&.active]:bg-primary/10 [&.active]:font-medium [&.active]:text-foreground " +
+  "[&.active]:before:absolute [&.active]:before:inset-y-1 [&.active]:before:-left-2 [&.active]:before:w-1 [&.active]:before:rounded-full [&.active]:before:bg-primary";
+
+const groupLabel =
+  'px-2.5 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70';
 
 /**
- * The persistent left sidebar: brand header, a "Content" section listing every content type from
- * `api.contentTypes.list()` (one link per api_id -> the generic entries manager), and a link to the
- * Content-Type Builder. The type list lives in a scroll-area so a long catalog never pushes the
- * builder link off-screen. The list refetches whenever the builder invalidates `contentTypeKeys.all`.
+ * The persistent Lua left sidebar. A brand block (gradient glyph + product name), a styled
+ * "Search or jump to… ⌘K" affordance, a top "Dashboard" link, a COLLECTIONS group listing every
+ * content type from `api.contentTypes.list()` — each with a REAL right-aligned `api.count()` (a subtle
+ * skeleton until it loads, never a fabricated number) — a SYSTEM group (Schema Builder / Media Library),
+ * and a user footer. The type list lives in a scroll-area so a long catalog never pushes SYSTEM
+ * off-screen. The list refetches whenever the builder invalidates `contentTypeKeys.all`.
  */
 export function Sidebar() {
   const typesQuery = useQuery({
@@ -21,64 +30,166 @@ export function Sidebar() {
     queryFn: ({ signal }) => api.contentTypes.list(signal),
   });
 
-  return (
-    <aside className="flex h-full w-60 shrink-0 flex-col border-r bg-card">
-      <div className="flex h-14 items-center gap-2 px-4">
-        <Boxes className="h-5 w-5 text-primary" />
-        <Link to="/" className="font-semibold tracking-tight">
-          absurdFastCMS
-        </Link>
-      </div>
-      <Separator />
+  const defs = typesQuery.data ?? [];
 
-      <div className="flex items-center gap-2 px-4 pb-1 pt-4 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        <Layers className="h-3.5 w-3.5" />
-        Content
+  // One REAL row-count per type. Held under the dashboard count keys so the sidebar shares the
+  // dashboard's count cache (no duplicate fetches when both are mounted).
+  const counts = useQueries({
+    queries: defs.map((def) => ({
+      queryKey: ['dashboard', 'count', def.apiId] as const,
+      queryFn: ({ signal }: { signal: AbortSignal }) => api.count(def.apiId, undefined, signal),
+      staleTime: 30_000,
+    })),
+  });
+
+  return (
+    <aside className="flex h-full w-64 shrink-0 flex-col border-r bg-card">
+      {/* Brand block */}
+      <div className="flex items-center gap-2.5 px-4 pb-3 pt-4">
+        <Link
+          to="/"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-info text-primary-foreground shadow-card"
+          aria-label="Home"
+        >
+          <Sparkles className="h-5 w-5" />
+        </Link>
+        <div className="min-w-0 leading-tight">
+          <Link to="/" className="font-display text-base font-semibold tracking-tight">
+            Lua
+          </Link>
+          <p className="truncate font-mono text-[10px] text-muted-foreground">v0.1 · edge</p>
+        </div>
       </div>
-      <ScrollArea className="min-h-0 flex-1 px-2">
-        <nav className="space-y-0.5 py-1">
+
+      {/* Search affordance — styled placeholder (command surface lands in a later phase). */}
+      <div className="px-3 pb-2">
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-lg border bg-background/60 px-2.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent"
+        >
+          <Search className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">Search or jump to…</span>
+          <kbd className="ml-auto rounded border bg-muted px-1.5 font-mono text-[10px] text-muted-foreground">
+            ⌘K
+          </kbd>
+        </button>
+      </div>
+
+      <nav className="space-y-0.5 px-3">
+        <Link to="/dashboard" className={navItem} activeOptions={{ exact: true }}>
+          <LayoutDashboard className="h-4 w-4 shrink-0" />
+          Dashboard
+        </Link>
+      </nav>
+
+      <div className={groupLabel}>Collections</div>
+      <ScrollArea className="min-h-0 flex-1 px-3">
+        <nav className="space-y-0.5 pb-1">
           {typesQuery.isLoading ? (
-            <p className="px-2 py-1.5 text-sm text-muted-foreground">Loading…</p>
+            <CollectionsSkeleton />
           ) : typesQuery.isError ? (
             <p
-              className="px-2 py-1.5 text-sm text-destructive"
+              className="px-2.5 py-1.5 text-sm text-destructive"
               title={errorMessage(typesQuery.error)}
             >
               Failed to load types
             </p>
-          ) : (typesQuery.data?.length ?? 0) === 0 ? (
-            <p className="px-2 py-1.5 text-sm text-muted-foreground">No content types yet.</p>
+          ) : defs.length === 0 ? (
+            <p className="px-2.5 py-1.5 text-sm text-muted-foreground">No content types yet.</p>
           ) : (
-            typesQuery.data?.map((def) => (
-              <Link
-                key={def.apiId}
-                to="/content/$apiId"
-                params={{ apiId: def.apiId }}
-                className={navLink}
-              >
-                <FileStack className="h-4 w-4 shrink-0" />
-                <span className="truncate">{def.apiId}</span>
-              </Link>
-            ))
+            defs.map((def, i) => {
+              const c = counts[i];
+              return (
+                <Link
+                  key={def.apiId}
+                  to="/content/$apiId"
+                  params={{ apiId: def.apiId }}
+                  className={navItem}
+                >
+                  <FileStack className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{def.apiId}</span>
+                  <CountChip
+                    loading={c?.isLoading ?? true}
+                    errored={c?.isError ?? false}
+                    value={c?.data}
+                  />
+                </Link>
+              );
+            })
           )}
         </nav>
       </ScrollArea>
 
-      <Separator />
-      <nav className="space-y-0.5 p-2">
-        <Link to="/media" className={navLink} activeOptions={{ exact: true }}>
-          <Image className="h-4 w-4 shrink-0" />
-          Media Library
+      <div className={groupLabel}>System</div>
+      <nav className="space-y-0.5 px-3 pb-2">
+        <Link to="/content-types" className={navItem} activeOptions={{ exact: true }}>
+          <Layers className="h-4 w-4 shrink-0" />
+          Schema Builder
         </Link>
-        <Link to="/content-types/new" className={navLink}>
+        <Link to="/content-types/new" className={navItem}>
           <Plus className="h-4 w-4 shrink-0" />
           New content type
         </Link>
-        <Link to="/content-types" className={navLink} activeOptions={{ exact: true }}>
-          <Layers className="h-4 w-4 shrink-0" />
-          Content-Type Builder
+        <Link to="/media" className={navItem} activeOptions={{ exact: true }}>
+          <Image className="h-4 w-4 shrink-0" />
+          Media Library
         </Link>
       </nav>
+
+      {/* User footer */}
+      <div className="flex items-center gap-2.5 border-t px-4 py-3">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 font-display text-sm font-semibold text-primary">
+          A
+        </span>
+        <div className="min-w-0 leading-tight">
+          <p className="truncate text-sm font-medium">Admin</p>
+          <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <span className="h-1.5 w-1.5 rounded-full bg-success" aria-hidden />
+            live
+          </p>
+        </div>
+      </div>
     </aside>
+  );
+}
+
+/** A right-aligned per-type count: a subtle skeleton until loaded, a dash when the count errors. */
+function CountChip({
+  loading,
+  errored,
+  value,
+}: {
+  loading: boolean;
+  errored: boolean;
+  value: number | undefined;
+}) {
+  if (loading) {
+    return (
+      <span className="ml-auto h-4 w-7 shrink-0 animate-pulse rounded bg-muted" aria-hidden />
+    );
+  }
+  return (
+    <span
+      className={cn(
+        'ml-auto shrink-0 rounded-md px-1.5 font-mono text-[11px] tabular-nums',
+        'bg-muted text-muted-foreground group-[.active]:bg-primary/15 group-[.active]:text-primary',
+      )}
+    >
+      {errored || value === undefined ? '—' : formatCount(value)}
+    </span>
+  );
+}
+
+function CollectionsSkeleton() {
+  return (
+    <div className="space-y-0.5">
+      {[0, 1, 2, 3].map((i) => (
+        <div key={i} className="flex items-center gap-2.5 px-2.5 py-1.5">
+          <span className="h-4 w-4 shrink-0 animate-pulse rounded bg-muted" />
+          <span className="h-4 w-24 animate-pulse rounded bg-muted" />
+          <span className="ml-auto h-4 w-7 animate-pulse rounded bg-muted" />
+        </div>
+      ))}
+    </div>
   );
 }

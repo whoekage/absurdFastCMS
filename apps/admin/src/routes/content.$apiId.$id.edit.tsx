@@ -88,10 +88,10 @@ function EditEntryPage() {
         </Button>
       </div>
 
-      <Card>
+      <Card className="shadow-card">
         <CardHeader>
-          <CardTitle>
-            Edit {apiId} #{id}
+          <CardTitle className="font-display">
+            Edit {apiId} <span className="font-mono text-muted-foreground">#{id}</span>
           </CardTitle>
         </CardHeader>
         <CardContent>

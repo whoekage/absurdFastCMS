@@ -34,6 +34,12 @@ export interface ApiStatusResult {
   isOffline: boolean;
   /** The transport error that made us offline, if any (never an ApiError). */
   error: unknown;
+  /**
+   * The REAL wall-clock duration (ms) of the most recent health probe, measured client-side around the
+   * `fetch`. `null` until the first probe resolves, or while offline (no meaningful timing). This is an
+   * honest measured value — NOT a fabricated live telemetry stream.
+   */
+  latencyMs: number | null;
   /** Imperatively re-run the probe (used by the banner's "Retry" action). */
   refetch: () => void;
 }
@@ -47,9 +53,11 @@ export function useApiStatus(): ApiStatusResult {
   const query = useQuery({
     queryKey: apiHealthKey,
     queryFn: async ({ signal }) => {
-      // We only care that the request reaches the server; the payload is irrelevant.
+      // We only care that the request reaches the server; the payload is irrelevant. We time the probe
+      // around the fetch so the top bar can show a REAL measured round-trip (never a fabricated number).
+      const started = performance.now();
       await api.contentTypes.list(signal);
-      return true as const;
+      return { latencyMs: Math.round(performance.now() - started) };
     },
     retry: false,
     refetchInterval: HEALTH_REFETCH_MS,
@@ -71,6 +79,7 @@ export function useApiStatus(): ApiStatusResult {
     status,
     isOffline: offline,
     error: offline ? query.error : null,
+    latencyMs: offline ? null : (query.data?.latencyMs ?? null),
     refetch: () => void query.refetch(),
   };
 }

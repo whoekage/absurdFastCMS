@@ -8,6 +8,7 @@ import { contentKeys, errorMessage } from '@/lib/content-manager';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import {
   Dialog,
   DialogContent,
@@ -17,6 +18,25 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
+
+// A small per-locale dot palette (Lua). Well-known locales get a stable hue; anything else falls back
+// to a deterministic pick so every variant pill carries a distinct colored dot.
+const LOCALE_DOTS: Record<string, string> = {
+  en: 'bg-info',
+  es: 'bg-warning',
+  fr: 'bg-primary',
+  de: 'bg-success',
+};
+const FALLBACK_DOTS = ['bg-info', 'bg-warning', 'bg-primary', 'bg-success', 'bg-destructive'];
+
+function localeDotClass(locale: string): string {
+  const base = locale.toLowerCase().split('-')[0] ?? locale.toLowerCase();
+  const known = LOCALE_DOTS[base];
+  if (known) return known;
+  let hash = 0;
+  for (let i = 0; i < base.length; i += 1) hash = (hash * 31 + base.charCodeAt(i)) >>> 0;
+  return FALLBACK_DOTS[hash % FALLBACK_DOTS.length] as string;
+}
 
 /**
  * i18n LOCALE SWITCHER for a single entry. Renders ONLY for an i18n type (the caller guards on
@@ -65,36 +85,44 @@ export function LocaleSwitcher({
   return (
     <div className="flex items-center gap-2">
       <Languages className="h-4 w-4 text-muted-foreground" />
-      <div className="flex flex-wrap items-center gap-1.5">
+      {/* Lua segmented locale pills — one rounded track, each variant a pill with a per-locale colored dot. */}
+      <div className="flex flex-wrap items-center gap-0.5 rounded-full border bg-muted/50 p-0.5">
         {variants.map((v) => {
           const loc = String(v['locale'] ?? '');
           const active = loc === currentLocale;
           return (
-            <Button
+            <button
               key={loc}
               type="button"
-              variant={active ? 'default' : 'secondary'}
-              size="sm"
-              className="h-7 px-2.5"
+              className={cn(
+                'flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors',
+                active
+                  ? 'bg-card text-foreground shadow-card'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              aria-pressed={active}
               onClick={() =>
                 active
                   ? undefined
                   : void navigate({ to: '/content/$apiId/$id', params: { apiId, id: String(v['id']) } })
               }
             >
-              {loc}
-            </Button>
+              <span className={cn('h-1.5 w-1.5 rounded-full', localeDotClass(loc))} aria-hidden />
+              {loc.toUpperCase()}
+            </button>
           );
         })}
-      </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogTrigger asChild>
-          <Button type="button" variant="outline" size="sm" className="h-7 px-2.5">
-            <Plus className="h-3.5 w-3.5" />
-            locale
-          </Button>
-        </DialogTrigger>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild>
+            <button
+              type="button"
+              className="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Plus className="h-3 w-3" />
+              locale
+            </button>
+          </DialogTrigger>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add a locale variant</DialogTitle>
@@ -133,7 +161,8 @@ export function LocaleSwitcher({
             </Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+        </Dialog>
+      </div>
     </div>
   );
 }

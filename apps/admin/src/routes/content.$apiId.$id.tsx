@@ -17,6 +17,7 @@ import { UnknownType } from '@/components/unknown-type';
 import { LocaleSwitcher } from '@/components/locale-switcher';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { StatusPill } from '@/components/ui/status-pill';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 export const Route = createFileRoute('/content/$apiId/$id')({
@@ -86,7 +87,7 @@ function ViewEntryPage() {
   const failed = defQuery.isError || detailQuery.isError || !def || !row;
 
   return (
-    <section className="mx-auto max-w-2xl space-y-6">
+    <section className="mx-auto max-w-5xl space-y-6">
       <div className="flex items-center justify-between">
         <Button asChild variant="ghost" size="sm" className="-ml-2">
           <Link to="/content/$apiId" params={{ apiId }}>
@@ -94,92 +95,115 @@ function ViewEntryPage() {
             Back to {apiId}
           </Link>
         </Button>
-        <div className="flex items-center gap-2">
-          {isI18n && row != null && <LocaleSwitcher apiId={apiId} row={row} />}
-          {isDraftPublish && row != null && (
-            <>
-              <Badge variant={published ? 'default' : 'secondary'}>
-                {published ? 'Published' : 'Draft'}
-              </Badge>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => publishMutation.mutate()}
-                disabled={publishMutation.isPending}
-              >
-                {published ? (
-                  <>
-                    <EyeOff className="h-4 w-4" />
-                    Unpublish
-                  </>
-                ) : (
-                  <>
-                    <Eye className="h-4 w-4" />
-                    Publish
-                  </>
-                )}
-              </Button>
-            </>
-          )}
-          <Button asChild variant="outline" size="sm">
-            <Link to="/content/$apiId/$id/edit" params={{ apiId, id }}>
-              <Pencil className="h-4 w-4" />
-              Edit
-            </Link>
-          </Button>
-        </div>
+        <Button asChild variant="outline" size="sm">
+          <Link to="/content/$apiId/$id/edit" params={{ apiId, id }}>
+            <Pencil className="h-4 w-4" />
+            Edit
+          </Link>
+        </Button>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            {apiId} #{id}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : failed ? (
-            <div className="text-sm">
-              <p className="font-medium text-destructive">Could not load this entry</p>
-              <p className="mt-1 text-muted-foreground">
-                {errorMessage(detailQuery.error ?? defQuery.error)}
-              </p>
-            </div>
-          ) : (
-            <dl className="divide-y">
-              {def.fields.map((field) => (
-                <div key={field.name} className="grid grid-cols-3 gap-4 py-3">
-                  <dt className="text-sm font-medium text-muted-foreground">
-                    {field.name}
-                    {field.system && (
-                      <span className="ml-1 text-xs text-muted-foreground/70">(system)</span>
-                    )}
-                    {isI18n && !field.system && field.localized === false && (
-                      <span className="ml-1 text-xs text-muted-foreground/70">(shared)</span>
-                    )}
-                  </dt>
-                  <dd className="col-span-2 break-words text-sm">
-                    {formatValue(row[field.name], field)}
-                  </dd>
-                </div>
-              ))}
+      <h1 className="font-display text-2xl font-semibold tracking-tight">
+        {apiId} <span className="font-mono text-muted-foreground">#{id}</span>
+      </h1>
 
-              {/* Relation fields (populated via ?populate) — rendered from client-side config since the
-                  API does not project relations onto the schema. */}
-              {relationFields.map((rel) => {
-                const rows = asRelatedRows(row[rel.field]);
-                return (
-                  <div key={rel.field} className="grid grid-cols-3 gap-4 py-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_18rem]">
+        {/* Main column — the entry's fields. */}
+        <Card className="shadow-card">
+          <CardHeader>
+            <CardTitle className="font-display">Fields</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : failed ? (
+              <div className="text-sm">
+                <p className="font-medium text-destructive">Could not load this entry</p>
+                <p className="mt-1 text-muted-foreground">
+                  {errorMessage(detailQuery.error ?? defQuery.error)}
+                </p>
+              </div>
+            ) : (
+              <dl className="divide-y">
+                {def.fields.map((field) => (
+                  <div key={field.name} className="grid grid-cols-3 gap-4 py-3">
                     <dt className="text-sm font-medium text-muted-foreground">
-                      {rel.field}
-                      <span className="ml-1 text-xs text-muted-foreground/70">
-                        (→ {rel.target})
-                      </span>
+                      {field.name}
+                      {field.system && (
+                        <span className="ml-1 text-xs text-muted-foreground/70">(system)</span>
+                      )}
+                      {isI18n && !field.system && field.localized === false && (
+                        <span className="ml-1 text-xs text-muted-foreground/70">(shared)</span>
+                      )}
                     </dt>
                     <dd className="col-span-2 break-words text-sm">
+                      {formatValue(row[field.name], field)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Right column — Lua STATUS + RELATIONS panels. */}
+        <div className="space-y-6">
+          {/* STATUS panel: i18n locale tabs + the draft/publish control. Only shown for an opted-in type. */}
+          {row != null && (isI18n || isDraftPublish) && (
+            <Card className="shadow-card">
+              <CardContent className="space-y-4 p-5">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
+                  Status
+                </p>
+                {isI18n && <LocaleSwitcher apiId={apiId} row={row} />}
+                {isDraftPublish && (
+                  <div className="space-y-3">
+                    <StatusPill status={published ? 'published' : 'draft'} />
+                    {published ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => publishMutation.mutate()}
+                        disabled={publishMutation.isPending}
+                      >
+                        <EyeOff className="h-4 w-4" />
+                        Unpublish
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        className="w-full bg-success text-white hover:bg-success/90"
+                        onClick={() => publishMutation.mutate()}
+                        disabled={publishMutation.isPending}
+                      >
+                        <Eye className="h-4 w-4" />
+                        Publish now
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* RELATIONS panel — populated via ?populate; rendered from client-side relation config. */}
+          {row != null && relationFields.length > 0 && (
+            <Card className="shadow-card">
+              <CardContent className="space-y-3 p-5">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
+                  Relations
+                </p>
+                {relationFields.map((rel) => {
+                  const rows = asRelatedRows(row[rel.field]);
+                  return (
+                    <div key={rel.field} className="space-y-1.5">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        {rel.field}
+                        <span className="ml-1 text-muted-foreground/70">(→ {rel.target})</span>
+                      </p>
                       {rows.length === 0 ? (
-                        <span className="text-muted-foreground">—</span>
+                        <span className="text-sm text-muted-foreground">—</span>
                       ) : (
                         <div className="flex flex-wrap gap-1.5">
                           {rows.map((r) => (
@@ -198,14 +222,14 @@ function ViewEntryPage() {
                           ))}
                         </div>
                       )}
-                    </dd>
-                  </div>
-                );
-              })}
-            </dl>
+                    </div>
+                  );
+                })}
+              </CardContent>
+            </Card>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </section>
   );
 }

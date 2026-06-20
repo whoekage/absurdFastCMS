@@ -42,6 +42,7 @@ import { FilterBar } from '@/components/list/filter-bar';
 import { SortableHeader } from '@/components/list/sortable-header';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { StatusPill } from '@/components/ui/status-pill';
 import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from '@/components/ui/toast';
 import {
@@ -255,6 +256,20 @@ function EntryListPage() {
       cell: ({ row }) => <RelationCell value={row.original[rel.field]} config={rel} />,
     }));
 
+    // D&P lifecycle column (D&P types only): a Lua status pill derived from the row's published_at.
+    const statusCol: ColumnDef<Entry>[] = isDraftPublish
+      ? [
+          {
+            id: '__status__',
+            enableHiding: false,
+            header: () => <span className="text-sm font-medium">status</span>,
+            cell: ({ row }) => (
+              <StatusPill status={row.original.published_at != null ? 'published' : 'draft'} />
+            ),
+          },
+        ]
+      : [];
+
     const actions: ColumnDef<Entry> = {
       id: '__actions__',
       enableHiding: false,
@@ -286,10 +301,10 @@ function EntryListPage() {
       },
     };
 
-    return [select, ...data, ...relationCols, actions];
+    return [select, ...data, ...relationCols, ...statusCol, actions];
     // `search` drives header sort indicators; `byName`/`dataColumns` derive from the loaded def.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataColumns, byName, relationColumns, search, apiId]);
+  }, [dataColumns, byName, relationColumns, search, apiId, isDraftPublish]);
 
   const table = useReactTable({
     data: rows,
@@ -372,11 +387,15 @@ function EntryListPage() {
     <section className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{apiId}</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">{apiId}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {total !== undefined
-              ? `${total} entr${total === 1 ? 'y' : 'ies'}`
-              : `Manage ${apiId} entries`}
+            {total !== undefined ? (
+              <>
+                <span className="font-mono">{total}</span> entr{total === 1 ? 'y' : 'ies'}
+              </>
+            ) : (
+              `Manage ${apiId} entries`
+            )}
           </p>
         </div>
         <Button asChild>
