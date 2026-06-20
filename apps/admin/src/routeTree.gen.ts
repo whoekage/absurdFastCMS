@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as MediaIndexRouteImport } from './routes/media.index'
+import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
 import { Route as ContentTypesIndexRouteImport } from './routes/content-types.index'
 import { Route as ArticlesIndexRouteImport } from './routes/articles.index'
 import { Route as ContentTypesNewRouteImport } from './routes/content-types.new'
@@ -31,6 +32,11 @@ const IndexRoute = IndexRouteImport.update({
 const MediaIndexRoute = MediaIndexRouteImport.update({
   id: '/media/',
   path: '/media/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DashboardIndexRoute = DashboardIndexRouteImport.update({
+  id: '/dashboard/',
+  path: '/dashboard/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ContentTypesIndexRoute = ContentTypesIndexRouteImport.update({
@@ -97,6 +103,7 @@ export interface FileRoutesByFullPath {
   '/content-types/new': typeof ContentTypesNewRoute
   '/articles/': typeof ArticlesIndexRoute
   '/content-types/': typeof ContentTypesIndexRoute
+  '/dashboard/': typeof DashboardIndexRoute
   '/media/': typeof MediaIndexRoute
   '/articles/$id/edit': typeof ArticlesIdEditRoute
   '/content/$apiId/$id': typeof ContentApiIdIdRouteWithChildren
@@ -112,6 +119,7 @@ export interface FileRoutesByTo {
   '/content-types/new': typeof ContentTypesNewRoute
   '/articles': typeof ArticlesIndexRoute
   '/content-types': typeof ContentTypesIndexRoute
+  '/dashboard': typeof DashboardIndexRoute
   '/media': typeof MediaIndexRoute
   '/articles/$id/edit': typeof ArticlesIdEditRoute
   '/content/$apiId/$id': typeof ContentApiIdIdRouteWithChildren
@@ -128,6 +136,7 @@ export interface FileRoutesById {
   '/content-types/new': typeof ContentTypesNewRoute
   '/articles/': typeof ArticlesIndexRoute
   '/content-types/': typeof ContentTypesIndexRoute
+  '/dashboard/': typeof DashboardIndexRoute
   '/media/': typeof MediaIndexRoute
   '/articles/$id/edit': typeof ArticlesIdEditRoute
   '/content/$apiId/$id': typeof ContentApiIdIdRouteWithChildren
@@ -145,6 +154,7 @@ export interface FileRouteTypes {
     | '/content-types/new'
     | '/articles/'
     | '/content-types/'
+    | '/dashboard/'
     | '/media/'
     | '/articles/$id/edit'
     | '/content/$apiId/$id'
@@ -160,6 +170,7 @@ export interface FileRouteTypes {
     | '/content-types/new'
     | '/articles'
     | '/content-types'
+    | '/dashboard'
     | '/media'
     | '/articles/$id/edit'
     | '/content/$apiId/$id'
@@ -175,6 +186,7 @@ export interface FileRouteTypes {
     | '/content-types/new'
     | '/articles/'
     | '/content-types/'
+    | '/dashboard/'
     | '/media/'
     | '/articles/$id/edit'
     | '/content/$apiId/$id'
@@ -191,6 +203,7 @@ export interface RootRouteChildren {
   ContentTypesNewRoute: typeof ContentTypesNewRoute
   ArticlesIndexRoute: typeof ArticlesIndexRoute
   ContentTypesIndexRoute: typeof ContentTypesIndexRoute
+  DashboardIndexRoute: typeof DashboardIndexRoute
   MediaIndexRoute: typeof MediaIndexRoute
   ContentApiIdIdRoute: typeof ContentApiIdIdRouteWithChildren
   ContentApiIdNewRoute: typeof ContentApiIdNewRoute
@@ -211,6 +224,13 @@ declare module '@tanstack/react-router' {
       path: '/media'
       fullPath: '/media/'
       preLoaderRoute: typeof MediaIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dashboard/': {
+      id: '/dashboard/'
+      path: '/dashboard'
+      fullPath: '/dashboard/'
+      preLoaderRoute: typeof DashboardIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/content-types/': {
@@ -325,6 +345,7 @@ const rootRouteChildren: RootRouteChildren = {
   ContentTypesNewRoute: ContentTypesNewRoute,
   ArticlesIndexRoute: ArticlesIndexRoute,
   ContentTypesIndexRoute: ContentTypesIndexRoute,
+  DashboardIndexRoute: DashboardIndexRoute,
   MediaIndexRoute: MediaIndexRoute,
   ContentApiIdIdRoute: ContentApiIdIdRouteWithChildren,
   ContentApiIdNewRoute: ContentApiIdNewRoute,

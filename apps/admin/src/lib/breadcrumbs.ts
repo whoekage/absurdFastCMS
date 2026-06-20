@@ -39,7 +39,8 @@ function crumbsForRoute(routeId: string, params: Record<string, string | undefin
 
   switch (routeId) {
     case '/':
-      return [CONTENT];
+    case '/dashboard/':
+      return [{ label: 'Lua' }, { label: 'Dashboard', to: '/dashboard' }];
 
     // --- Generic content manager (schema-driven) ---
     case '/content/$apiId/':
