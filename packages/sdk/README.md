@@ -584,6 +584,41 @@ disallowed, or unknown `__component`; nesting deeper than the depth cap; and an 
 existence-checked in the same write transaction (a dangling id 400s and rolls the whole write back); no
 link table is created.
 
+### Relation refs inside a component
+
+A component (only — there is no top-level form) may declare a `relation` field that holds an **inline id
+ref** (or array of ids, with `options.multiple`) to a **target content-type**. This is a `ComponentFieldKind`,
+**not** a top-level `RelationKind`, and the two are **semantically distinct**:
+
+- a top-level (be-01) relation is a **link table** — a separately-queryable edge set, with an optional
+  inverse side, mutated via `set` / `connect` / `disconnect` ops;
+- an inline relation ref inside a component is **set-by-value**: the id(s) live directly in the component
+  json (no link table, no CSR, no inverse side, not independently queryable), exactly like a media ref.
+
+The target content-type must already exist when the component field is defined (else `BadRequestError`
+400). On write, every referenced id is **existence-checked against the target table** in the same
+transaction — a dangling id, or an id that exists in some *other* type but not the declared target, 400s.
+
+```ts
+await client.contentTypes.create({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false } }] });
+// target must exist BEFORE the component field referencing it is declared
+await client.componentTypes.create({
+  apiId: 'byline',
+  fields: [
+    { name: 'role', cmsType: 'string' },
+    { name: 'writer', cmsType: 'relation', options: { target: 'author' } },          // single id ref
+    { name: 'editors', cmsType: 'relation', options: { target: 'author', multiple: true } }, // id[] ref
+  ],
+});
+await client.create('post', { by: { role: 'lead', writer: 7, editors: [3, 4] } });
+```
+
+On a `populate` read, each inline relation ref is resolved into the target row object(s) — a single ref
+→ the row object (or `null` when dangling/invisible), a many ref → an array of rows (dangling/invisible
+ids dropped). Resolution uses the **same default visibility a top-level `GET /:target/:id` would**:
+**published-only** for a draft/publish target (a draft resolves to `null`/dropped) and the **default
+locale** for an i18n target. Un-populated, the field echoes the bare id(s) verbatim (zero-copy).
+
 ### Reading component values
 
 Un-populated, a component field echoes its raw stored tree **verbatim** (zero-copy — instance ids and

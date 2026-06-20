@@ -45,8 +45,15 @@ export type CmsType =
  *   component-repeatable — an ordered ARRAY of instances of one component ({@link FieldOptions.component}).
  *   dynamiczone          — an ordered ARRAY of instances tagged `__component`, from an allowed-set
  *                          ({@link FieldOptions.components}).
+ *   relation             — be-05b: an INLINE id ref (or array of ids, via {@link FieldOptions.multiple}) to a
+ *                          TARGET content-type ({@link FieldOptions.target}), resolved on read. This is
+ *                          ONLY valid INSIDE a component (it has no top-level form). It is SEMANTICALLY
+ *                          DISTINCT from a top-level (be-01) {@link RelationKind}: an inline ref is stored
+ *                          by-value in the component json (NO link table, NO inverse side, NOT independently
+ *                          queryable) — a default `GET /:type/:id?populate=<field>` resolves it (published-
+ *                          only for a draft/publish target, default-locale for an i18n target).
  */
-export type ComponentFieldKind = 'component' | 'component-repeatable' | 'dynamiczone';
+export type ComponentFieldKind = 'component' | 'component-repeatable' | 'dynamiczone' | 'relation';
 
 /**
  * Per-field options the caller may supply when defining a field; each `cmsType` validates only the
@@ -74,6 +81,12 @@ export interface FieldOptions {
   component?: string;
   /** be-05 `dynamiczone` only: the allowed component-type api_ids (the zone's allowed-set). */
   components?: string[];
+  /**
+   * be-05b `relation` (INSIDE a component) only: the TARGET content-type api_id an inline ref points at.
+   * `multiple` (reused from above) selects single-id vs array-of-ids cardinality. The target must already
+   * exist (checked at component-type definition). Distinct from a top-level (be-01) link-table relation.
+   */
+  target?: string;
 }
 
 /**
@@ -481,6 +494,8 @@ export interface ComponentFieldDefinition {
   component?: string;
   /** be-05 `dynamiczone` allowed-set. */
   components?: string[];
+  /** be-05b `relation` ref target content-type api_id (inline ref; resolved on read). */
+  target?: string;
 }
 
 /**
