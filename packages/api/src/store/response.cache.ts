@@ -14,9 +14,9 @@ import { isSetOp } from './column.ts';
  *  2. {@link ResponseCache} — a BOUNDED LRU over assembled Buffers, capped by entry count AND total
  *     cached bytes (both configurable, sane defaults). Overflow evicts least-recently-used. A
  *     near-unique query stream can never leak: the caps are hard.
- *  3. {@link ChangeBus} / {@link InProcessChangeBus} — the invalidation SEAM. `publish(typeName)`
- *     fans out to subscribers; the cache subscribes and DROPS every entry for that type. A Redis
- *     pub/sub cluster bus is a future drop-in behind this same interface — NOT built here.
+ *  3. {@link ResponseCache.invalidateType} — the invalidation entry point: the engine calls it
+ *     directly on a write to a content-type, DROPPING every cached entry for that type. (Single
+ *     instance — no pub/sub indirection; a cross-instance bus can be reintroduced later if needed.)
  */
 
 // --- key normalization ------------------------------------------------------
@@ -151,31 +151,6 @@ export function filterCanonical(opts: QueryOptions): string {
   return canonicalFilterToken(opts.where, opts.filters);
 }
 
-// --- change bus (invalidation seam) -----------------------------------------
-
-/**
- * The invalidation SEAM. `publish(typeName)` signals that a content-type's data changed; subscribers
- * react (the cache drops that type's entries). A Redis pub/sub cluster bus is a future drop-in behind
- * this same interface.
- */
-export interface ChangeBus {
-  publish(typeName: string): void;
-  subscribe(handler: (typeName: string) => void): void;
-}
-
-/** In-process default bus: a plain synchronous fan-out to local subscribers. */
-export class InProcessChangeBus implements ChangeBus {
-  private readonly handlers: ((typeName: string) => void)[] = [];
-
-  publish(typeName: string): void {
-    for (const h of this.handlers) h(typeName);
-  }
-
-  subscribe(handler: (typeName: string) => void): void {
-    this.handlers.push(handler);
-  }
-}
-
 // --- bounded LRU response cache ---------------------------------------------
 
 interface CacheEntry {
@@ -222,11 +197,10 @@ export class ResponseCache {
   misses = 0;
   evictions = 0;
 
-  constructor(bus: ChangeBus, opts: ResponseCacheOptions = {}) {
+  constructor(opts: ResponseCacheOptions = {}) {
     this.maxEntries = opts.maxEntries ?? DEFAULT_MAX_ENTRIES;
     this.maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
     this.enabled = opts.enabled ?? true;
-    bus.subscribe((typeName) => this.invalidateType(typeName));
   }
 
   /** Current number of cached entries. */
@@ -301,7 +275,7 @@ export class ResponseCache {
     }
   }
 
-  /** Drop EVERY cached entry for one content-type (the ChangeBus invalidation handler). */
+  /** Drop EVERY cached entry for one content-type (called directly by the engine on a write to it). */
   invalidateType(typeName: string): void {
     const set = this.byType.get(typeName);
     if (set === undefined) return;

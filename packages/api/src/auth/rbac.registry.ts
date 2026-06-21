@@ -1,21 +1,16 @@
 import type { Sql } from 'postgres';
-import type { ChangeBus } from '../store/response.cache.ts';
 import type { Principal } from './session.cache.ts';
 
 /**
- * The RBAC REGISTRY — mirrors the content {@link Registry} shape one-for-one: PG is truth, RAM is
- * served, rebuild-on-change via the SAME {@link ChangeBus} seam. Permission rules live in PG
- * (`roles` / `permissions` / `role_permissions` / `user_roles`); at boot (and on any RBAC mutation) a
- * SINGLE join query folds them into a `Map<userId, Set<action>>`. A {@link checkPermission} call is then
- * a pure in-memory `Map.get(userId).has(action)` set test → ZERO Postgres on the hot path (asserted by a
- * query-counter test).
+ * The RBAC REGISTRY — mirrors the content {@link Registry} shape: PG is truth, RAM is served. Permission
+ * rules live in PG (`roles` / `permissions` / `role_permissions` / `user_roles`); at boot (and on any RBAC
+ * mutation) a SINGLE join query folds them into a `Map<userId, Set<action>>`. A {@link checkPermission} call
+ * is then a pure in-memory `Map.get(userId).has(action)` set test → ZERO Postgres on the hot path (asserted
+ * by a query-counter test).
  *
- * Invalidation reuses the content-registry seam: any mutation to an RBAC table publishes
- * `'rbac:invalidate'` on the bus → {@link rebuild} re-reads PG. (Mutation ROUTES are a later slice; the
- * seam exists now so this slice is byte-stable and the future slice flips it on with no shape change.)
+ * Invalidation is a DIRECT call: an RBAC mutation (a later slice) calls {@link rebuild} to re-read PG.
+ * (Single instance — no pub/sub indirection; a cross-instance invalidation bus can be reintroduced later.)
  */
-
-const INVALIDATE_TOPIC = 'rbac:invalidate';
 
 interface PermRow {
   user_id: string;
@@ -28,15 +23,8 @@ export class RbacRegistry {
 
   private readonly sql: Sql;
 
-  constructor(sql: Sql, bus: ChangeBus) {
+  constructor(sql: Sql) {
     this.sql = sql;
-    // Same invalidation seam as the content registry: a single `rbac:invalidate` topic triggers a full
-    // rebuild. Other topics (content-type names, session:evict:*) are ignored. Fire-and-forget like the
-    // response-cache subscriber; a rebuild failure is surfaced by the rebuild's own error, not swallowed
-    // silently into a corrupt map (the old map stays served until a successful rebuild replaces it).
-    bus.subscribe((topic) => {
-      if (topic === INVALIDATE_TOPIC) void this.rebuild();
-    });
   }
 
   /**

@@ -604,8 +604,8 @@ test('a non-empty populated response is NOT cached (no cache hit on identical re
   const engine = await boot();
   const first = get(engine, '/book', 'populate=author');
   assert.equal(first.status, 200);
-  // Slice 5 cache-correctness invariant: a populated response depends on the TARGET type's bytes the
-  // single-type bus cannot invalidate, so it MUST skip get+set (else it serves stale after a related
+  // Slice 5 cache-correctness invariant: a populated response depends on the TARGET type's bytes that
+  // single-type invalidation cannot cover, so it MUST skip get+set (else it serves stale after a related
   // write). A second identical populated GET must register NO cache hit.
   const hitsBefore = engine.cache.hits;
   const second = get(engine, '/book', 'populate=author');

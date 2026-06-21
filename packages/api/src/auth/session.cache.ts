@@ -13,9 +13,9 @@ import { OffHeapSessionStore } from './session.store.ts';
  * large buffers, not millions of long-lived heap objects.
  *
  * SINGLE-INSTANCE: eviction is a LOCAL `store.delete(token)` driven by better-auth's `session.delete.after`
- * DB hook (logout/revoke) and lazily on read for expiry — no ChangeBus, no cross-instance fan-out. A future
- * multi-instance deployment reintroduces a pub/sub evict seam (and an L2/Redis tier); today, one process
- * owns the cache and the durable session row, so a local delete is sufficient and correct.
+ * DB hook (logout/revoke) and lazily on read for expiry — a plain local delete. Single instance: one process
+ * owns the cache and the durable session row, so a local delete is sufficient and correct. (A multi-instance
+ * deployment would reintroduce a cross-instance evict mechanism + an L2/Redis tier later.)
  */
 
 /**
@@ -117,8 +117,8 @@ export class SessionCache {
   }
 
   /**
-   * Evict one session from the cache (the logout/revoke hook). A local off-heap delete — no bus, single
-   * instance. Idempotent (deleting an absent token is a no-op).
+   * Evict one session from the cache (the logout/revoke hook). A local off-heap delete, single instance.
+   * Idempotent (deleting an absent token is a no-op).
    */
   evict(token: string): void {
     this.store.delete(token);

@@ -1,22 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Engine } from '../src/store/engine.ts';
-import {
-  ResponseCache,
-  InProcessChangeBus,
-  queryKey,
-} from '../src/store/response.cache.ts';
+import { ResponseCache, queryKey } from '../src/store/response.cache.ts';
 import { type FieldDef, type QueryOptions } from '../src/store/table.ts';
 
 /**
  * API-VERTICAL SLICE 1 — assembled-buffer response cache.
  *
- * Doctrine: NO mocks. A REAL Engine (real Table + columns + InProcessChangeBus) drives every test.
- * Correctness is proven by an equivalence ORACLE: the uncached (cache-disabled) assemble is the
- * source of truth, and a cache HIT must be BYTE-IDENTICAL to it. We further prove: a write
- * invalidates (no stale serve), the normalized key collapses trivially-reordered queries to one
- * entry, the bounded LRU never exceeds its caps and re-assembles an evicted query correctly, and the
- * ChangeBus drops only the written type. Deterministic seeded LCG, no Math.random.
+ * Doctrine: NO mocks. A REAL Engine (real Table + columns) drives every test. Correctness is proven by
+ * an equivalence ORACLE: the uncached (cache-disabled) assemble is the source of truth, and a cache HIT
+ * must be BYTE-IDENTICAL to it. We further prove: a write invalidates (no stale serve), the normalized
+ * key collapses trivially-reordered queries to one entry, the bounded LRU never exceeds its caps and
+ * re-assembles an evicted query correctly, and invalidating a type drops only that type. Deterministic
+ * seeded LCG, no Math.random.
  */
 
 function lcg(seed: number): () => number {
@@ -269,9 +265,9 @@ test('LRU byte bound: total cached bytes never exceeds maxBytes', () => {
   }
 });
 
-// --- 6. ChangeBus: publish drops the type; other types untouched -----------
+// --- 6. invalidateType drops the type; other types untouched ----------------
 
-test('ChangeBus: publish drops the published type only; other types untouched', () => {
+test('invalidateType drops only that type; other types untouched', () => {
   const engine = new Engine();
   engine.define('alpha', [{ name: 'n', type: 'i32' }]);
   engine.define('beta', [{ name: 'n', type: 'i32' }]);
@@ -286,7 +282,7 @@ test('ChangeBus: publish drops the published type only; other types untouched', 
   engine.respond('beta', { limit: 100 });
   assert.equal(engine.cache.size, 2, 'both types cached');
 
-  engine.bus.publish('alpha'); // a manual publish (the seam) — no actual write
+  engine.cache.invalidateType('alpha'); // a direct invalidation (the seam) — no actual write
   assert.equal(engine.cache.size, 1, 'alpha dropped, beta survives');
   // beta still serves a hit
   const hitsBefore = engine.cache.hits;
@@ -294,23 +290,10 @@ test('ChangeBus: publish drops the published type only; other types untouched', 
   assert.equal(engine.cache.hits, hitsBefore + 1, 'beta was still a hit');
 });
 
-test('InProcessChangeBus fans out to multiple subscribers', () => {
-  const bus = new InProcessChangeBus();
-  const seenA: string[] = [];
-  const seenB: string[] = [];
-  bus.subscribe((t) => seenA.push(t));
-  bus.subscribe((t) => seenB.push(t));
-  bus.publish('x');
-  bus.publish('y');
-  assert.deepEqual(seenA, ['x', 'y']);
-  assert.deepEqual(seenB, ['x', 'y']);
-});
-
 // --- 7. cache toggle ---------------------------------------------------------
 
 test('cache can be toggled off (no storage, always cold)', () => {
-  const bus = new InProcessChangeBus();
-  const cache = new ResponseCache(bus, { enabled: false });
+  const cache = new ResponseCache({ enabled: false });
   cache.set('k', 'doc', Buffer.from('hello'));
   assert.equal(cache.size, 0, 'disabled cache stores nothing');
   assert.equal(cache.get('k'), undefined, 'disabled cache never hits');

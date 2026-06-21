@@ -7,20 +7,18 @@ import { runMigrations } from '../src/db/migration.runner.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { RbacRegistry } from '../src/auth/rbac.registry.ts';
 import type { Principal } from '../src/auth/session.cache.ts';
-import { InProcessChangeBus } from '../src/store/response.cache.ts';
 
 /**
  * be-09a — the RBAC registry over REAL `roles`/`permissions`/`role_permissions`/`user_roles` rows + REAL
  * Postgres (per-file clone). NO MOCKS. Proves: a boot rebuild folds the join into RAM; checkPermission is
  * a PURE in-memory set test firing ZERO Postgres (asserted by a postgres.js `debug` query counter on the
- * shared handle); deny-by-default for unknown user/permission; and the ChangeBus `rbac:invalidate` seam
- * rebuilds when a role_permissions row changes.
+ * shared handle); deny-by-default for unknown user/permission; and a direct `rebuild()` re-reads PG after a
+ * role_permissions row changes.
  */
 
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let sql: Sql;
 let queryCount = 0;
-let bus: InProcessChangeBus;
 let rbac: RbacRegistry;
 let userId: string;
 
@@ -54,8 +52,7 @@ before(async () => {
     SELECT ${userId}, id FROM roles WHERE name = 'editor'
   `;
 
-  bus = new InProcessChangeBus();
-  rbac = new RbacRegistry(sql, bus);
+  rbac = new RbacRegistry(sql);
   await rbac.rebuild();
 });
 
@@ -84,7 +81,7 @@ test('checkPermission resolves seeded grants and denies by default — with ZERO
   assert.equal(queryCount, 0, 'a permission check MUST fire ZERO Postgres queries (pure RAM)');
 });
 
-test('the registry rebuilds when a role_permissions row changes (ChangeBus rbac:invalidate seam)', async () => {
+test('the registry rebuilds when a role_permissions row changes (direct rebuild)', async () => {
   // Before: content.delete is NOT granted.
   assert.equal(rbac.checkPermission(principal(userId), 'content.delete'), false);
 
@@ -94,10 +91,8 @@ test('the registry rebuilds when a role_permissions row changes (ChangeBus rbac:
     SELECT r.id, p.id FROM roles r, permissions p
     WHERE r.name = 'editor' AND p.action = 'content.delete'
   `;
-  // The mutation seam: publishing rbac:invalidate triggers an async rebuild. Publish, then await a
-  // rebuild explicitly to make the test deterministic (the subscriber fires void this.rebuild()).
-  bus.publish('rbac:invalidate');
-  await rbac.rebuild(); // deterministic await of the same rebuild the seam kicks off.
+  // The invalidation seam is a direct call: an RBAC mutation (a later slice) calls rebuild() to re-read PG.
+  await rbac.rebuild();
 
   assert.equal(
     rbac.checkPermission(principal(userId), 'content.delete'),
@@ -110,7 +105,7 @@ test('rebuild on EMPTY tables yields an all-deny registry', async () => {
   const empty = await createFileDatabase('authrbacempty');
   try {
     await runMigrations(empty.url);
-    const r = new RbacRegistry(empty.sql, new InProcessChangeBus());
+    const r = new RbacRegistry(empty.sql);
     await r.rebuild();
     assert.equal(r.checkPermission(principal('anyone'), 'content.read'), false);
     assert.equal(r.permissionsOf('anyone').size, 0);

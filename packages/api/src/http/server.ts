@@ -19,9 +19,9 @@ import { config } from '../config.ts';
  * + {@link Registry} from Postgres at boot, and serves the uWebSockets.js app over it.
  *
  * SHARED-NOTHING, single-instance: the process builds its OWN Engine (columns, indexes, response
- * cache) — a self-contained read replica. FUTURE: the ChangeBus becomes a Redis pub/sub bus so a
- * write in a multi-instance deployment invalidates every instance's response cache. {@link seed}
- * remains an in-code data generator for benchmarks/fixtures (NOT the boot path).
+ * cache) — a self-contained read replica, and a write invalidates its own cache directly. (Multi-instance
+ * cross-process invalidation is a later concern, reintroduced only when there is more than one instance.)
+ * {@link seed} remains an in-code data generator for benchmarks/fixtures (NOT the boot path).
  *
  * Server construction ({@link createServer}) is intentionally SEPARATE from listening so tests drive
  * a real uWS server on a free port and never go through this entrypoint.
@@ -134,19 +134,18 @@ export async function start(port: number): Promise<void> {
   const { engine, registry } = await store.loadWithRegistry({ cursorCodec: cursorCodecFromEnv() });
 
   // AUTH (be-09a) — build the provider over the SAME postgres.js driver (a dedicated auth handle bound to
-  // the same DATABASE_URL), the session RAM cache, and the RBAC registry, all sharing the engine's
-  // ChangeBus so session-evict + rbac-invalidate fan out on the same seam as content invalidation. The
-  // RBAC registry is loaded at boot exactly where the content Registry loads. This slice GATES NOTHING:
-  // the auth instance is mounted at /auth/*, but the cache + registry are constructed for later route
-  // gating — existing routes stay open by design (scope fence).
+  // the same DATABASE_URL), the off-heap session cache, and the RBAC registry. The RBAC registry is loaded
+  // at boot exactly where the content Registry loads. This slice GATES NOTHING: the auth instance is mounted
+  // at /auth/*, but the cache + registry are constructed for later route gating — existing routes stay open
+  // by design (scope fence).
   setAuthSql(store.sql); // auth shares the boot store's handle (one driver, one DATABASE_URL).
   // The cache references `auth` lazily (a thunk) so it can be built BEFORE the auth instance whose
   // delete-hook evicts it — see SessionCache's constructor doc for the cycle this breaks. The cache is
-  // off-heap (ArrayBuffer-backed); single instance, so eviction is a local delete (no ChangeBus).
+  // off-heap (ArrayBuffer-backed); single instance, so eviction is a local delete.
   let auth: ReturnType<typeof buildAuth>;
   const sessionCache = new SessionCache(() => auth);
   auth = buildAuth({ sessionEvictor: sessionCache });
-  const rbac = new RbacRegistry(store.sql, engine.bus);
+  const rbac = new RbacRegistry(store.sql);
   await rbac.rebuild();
   void sessionCache;
   void rbac;

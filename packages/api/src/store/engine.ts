@@ -13,10 +13,8 @@ import {
 } from './cursor.codec.ts';
 import {
   ResponseCache,
-  InProcessChangeBus,
   queryKey,
   filterCanonical,
-  type ChangeBus,
   type ResponseCacheOptions,
 } from './response.cache.ts';
 
@@ -162,8 +160,6 @@ const POPULATE_DEPTH_CAP = 2;
  * wrapper), and round-trips through `JSON.parse` back to the same object.
  */
 export interface EngineOptions {
-  /** Inject a custom ChangeBus (e.g. a future Redis bus). Defaults to {@link InProcessChangeBus}. */
-  bus?: ChangeBus;
   /** Response-cache tuning (caps, enabled). See {@link ResponseCacheOptions}. */
   cache?: ResponseCacheOptions;
   /**
@@ -184,9 +180,8 @@ export class Engine {
    */
   private readonly hasRawField = new Map<string, boolean>();
 
-  /** The invalidation seam: insert() publishes here; the response cache subscribes. */
-  readonly bus: ChangeBus;
-  /** The bounded-LRU assembled-buffer cache (the SLICE 1 hot-path lever). */
+  /** The bounded-LRU assembled-buffer cache (the SLICE 1 hot-path lever). A write calls
+   * `cache.invalidateType(name)` directly to drop that type's entries. */
   readonly cache: ResponseCache;
   /** The HMAC cursor codec (undefined unless wired at the composition root). */
   private readonly codec: CursorCodec | undefined;
@@ -245,8 +240,7 @@ export class Engine {
   private readonly relationKinds = new Map<string, RelationKind>();
 
   constructor(opts: EngineOptions = {}) {
-    this.bus = opts.bus ?? new InProcessChangeBus();
-    this.cache = new ResponseCache(this.bus, opts.cache);
+    this.cache = new ResponseCache(opts.cache);
     this.codec = opts.cursorCodec;
   }
 
@@ -302,7 +296,7 @@ export class Engine {
    * Install (or overwrite) the {@link Relation} for `(ownerApiId, field)`. Last-write-wins (NO
    * "already defined" guard, unlike {@link registerDetached}) — both the boot phase and the per-write
    * refresh call this, and a re-derive simply replaces the prior entry that referenced the now-stale
-   * Table. Does NOT bump schemaVersion or publish on the bus: a relation load/refresh touches ONLY this
+   * Table. Does NOT bump schemaVersion or invalidate the cache: a relation load/refresh touches ONLY this
    * Map, so the unpopulated read arena and plain keyset cursors stay valid.
    */
   setRelation(ownerApiId: string, field: string, rel: Relation, targetApiId: string, kind: RelationKind): void {
@@ -449,7 +443,7 @@ export class Engine {
     this.arena(name).append(json);
     // A write to this type invalidates every cached response for it (no stale serve). Predicate-
     // aware partial invalidation is a later optimization; for this slice we drop the whole type.
-    this.bus.publish(name);
+    this.cache.invalidateType(name);
     return rowId;
   }
 
@@ -477,7 +471,7 @@ export class Engine {
    * warming once), THEN calls this — which does the three Map writes + the per-type cache
    * invalidation in ONE synchronous burst (no await between them, so a synchronous GET can never
    * observe a torn state: it sees either the whole old slot or the whole new one). Dropping the old
-   * Table+arena refs makes them GC-eligible once `bus.publish` -> `invalidateType` releases this
+   * Table+arena refs makes them GC-eligible once `cache.invalidateType` releases this
    * type's cached Buffer VIEWS (which pinned the old arena's ArrayBuffer).
    *
    * Throws if `name` is NOT already defined (replace != define; {@link define} still throws on an
@@ -494,7 +488,7 @@ export class Engine {
     this.trackSchema(name, detached.table.fields);
     this.trackDraftPublish(name, detached.table.fields);
     this.trackI18n(name, detached.table.fields);
-    this.bus.publish(name); // drop ONLY this type's cached responses (frees the old arena's views).
+    this.cache.invalidateType(name); // drop ONLY this type's cached responses (frees the old arena's views).
   }
 
   /**
@@ -531,7 +525,7 @@ export class Engine {
         this.relationKinds.delete(k);
       }
     }
-    this.bus.publish(name); // ResponseCache.invalidateType drops this type's cached Buffers (frees arena views).
+    this.cache.invalidateType(name); // ResponseCache.invalidateType drops this type's cached Buffers (frees arena views).
   }
 
   /** Compute Strapi-style pagination meta from a total count and the query's offset/limit. */
@@ -689,8 +683,8 @@ export class Engine {
     // a relation-less type) keeps the UNCHANGED, still-cached, byte-identical fast path below.
     const effPlan = this.resolvePopulate(name, populate);
     if (effPlan.length === 0) {
-      // Relations Slice 4: a relation-filtered response depends on the TARGET type's data, but the bus
-      // only publishes the WRITTEN type. A write to the target would NOT invalidate this owner's
+      // Relations Slice 4: a relation-filtered response depends on the TARGET type's data, but a write
+      // only invalidates the WRITTEN type. A write to the target would NOT invalidate this owner's
       // relation-filtered entry, so it could be served STALE. Cheapest correctness-preserving fix:
       // do NOT cache a response whose filter tree contains a relation leaf (skip get + set).
       if (opts.where !== undefined && hasRelationLeaf(opts.where)) {
@@ -707,8 +701,8 @@ export class Engine {
       this.cache.set(key, name, buf);
       return buf;
     }
-    // Non-empty populate: the response depends on related types' bytes that the single-type bus cannot
-    // invalidate -> SKIP the cache (get + set), assemble fresh. Cross-type invalidation is slice 7.
+    // Non-empty populate: the response depends on related types' bytes that single-type invalidation
+    // cannot cover -> SKIP the cache (get + set), assemble fresh. Cross-type invalidation is slice 7.
     return this.assemble(name, opts, effPlan, fields);
   }
 
@@ -878,7 +872,7 @@ export class Engine {
 /**
  * True if a {@link FilterNode} tree contains a RELATION leaf anywhere (Relations Slice 4). Drives the
  * cache-skip in {@link Engine.respond}: a relation-filtered response depends on a sibling type's data
- * that the single-type invalidation bus does not cover, so it is not cached this slice.
+ * that single-type invalidation does not cover, so it is not cached this slice.
  */
 function hasRelationLeaf(node: FilterNode): boolean {
   if ('relation' in node) return true;
