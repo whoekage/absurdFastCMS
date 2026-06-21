@@ -141,9 +141,10 @@ export async function start(port: number): Promise<void> {
   // gating — existing routes stay open by design (scope fence).
   setAuthSql(store.sql); // auth shares the boot store's handle (one driver, one DATABASE_URL).
   // The cache references `auth` lazily (a thunk) so it can be built BEFORE the auth instance whose
-  // delete-hook evicts it — see SessionCache's constructor doc for the cycle this breaks.
+  // delete-hook evicts it — see SessionCache's constructor doc for the cycle this breaks. The cache is
+  // off-heap (ArrayBuffer-backed); single instance, so eviction is a local delete (no ChangeBus).
   let auth: ReturnType<typeof buildAuth>;
-  const sessionCache = new SessionCache(() => auth, engine.bus);
+  const sessionCache = new SessionCache(() => auth);
   auth = buildAuth({ sessionEvictor: sessionCache });
   const rbac = new RbacRegistry(store.sql, engine.bus);
   await rbac.rebuild();

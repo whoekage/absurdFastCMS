@@ -1,35 +1,30 @@
-import type { ChangeBus } from '../store/response.cache.ts';
 import type { Auth } from './auth.ts';
+import { OffHeapSessionStore } from './session.store.ts';
 
 /**
- * The SESSION RAM CACHE — Postgres is durable truth, this Map is derived state. A WARM validation is a
- * SINGLE `Map.get(token)` + a TTL compare → ZERO Postgres. PG is touched ONLY on a miss/expiry (one
+ * The SESSION cache — Postgres is durable truth, this is derived state. A WARM validation is a single
+ * off-heap probe + a TTL compare → ZERO Postgres. PG is touched ONLY on a miss/expiry (one
  * `auth.api.getSession` read) or never (a cold instance just re-misses and repopulates). This is the
  * hot-path win the slice exists for, asserted by a query-counter test.
  *
- * Eviction is event-driven, not polled: a logout/revoke deletes the `session` row → better-auth's
- * `session.delete.after` DB hook calls {@link SessionCache.evict} → local `Map.delete` PLUS a
- * `ChangeBus.publish('session:evict:<token>')` so a future Redis bus fans the eviction to every
- * instance (mirroring the response-cache invalidation seam). Expiry is handled LAZILY on read (the TTL
- * check) — no timer. The cache reuses the SAME string-topic ChangeBus as the content registry, on a
- * `session:evict:` namespace, so no interface change is needed.
+ * Storage is an {@link OffHeapSessionStore}, NOT a JS `Map`: all session state lives in ArrayBuffer-backed
+ * typed arrays + byte arenas (the same off-heap discipline as the engine's columns), so the GC never
+ * traces it entry-by-entry and there is no 2^24 Map ceiling. Millions of live sessions cost a handful of
+ * large buffers, not millions of long-lived heap objects.
+ *
+ * SINGLE-INSTANCE: eviction is a LOCAL `store.delete(token)` driven by better-auth's `session.delete.after`
+ * DB hook (logout/revoke) and lazily on read for expiry — no ChangeBus, no cross-instance fan-out. A future
+ * multi-instance deployment reintroduces a pub/sub evict seam (and an L2/Redis tier); today, one process
+ * owns the cache and the durable session row, so a local delete is sufficient and correct.
  */
-
-const EVICT_PREFIX = 'session:evict:';
 
 /**
  * The resolved caller identity our routes will later gate on (this slice attaches it nowhere — scope
- * fence). `userId` keys the RBAC registry; `sessionToken` keys this cache + the evict bus.
+ * fence). `userId` keys the RBAC registry; `sessionToken` keys this cache.
  */
 export interface Principal {
   userId: string;
   sessionToken: string;
-}
-
-interface Entry {
-  principal: Principal;
-  /** epoch ms; the session row's expiresAt. A warm hit past this is evicted + treated as a miss. */
-  expiresAt: number;
 }
 
 /**
@@ -55,10 +50,17 @@ export function readSessionToken(headers: Headers): string | null {
   return null;
 }
 
+/** Default cadence of the background expiry sweep (ms). */
+const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
+/** A full sweep pass completes over roughly this many ticks (scan budget = recordCount / this). */
+const SWEEP_PASSES = 20;
+/** Floor on the per-tick scan budget so a small store still sweeps promptly. */
+const MIN_SWEEP_BUDGET = 4096;
+
 export class SessionCache {
-  private readonly map = new Map<string, Entry>();
+  private readonly store: OffHeapSessionStore;
   private readonly auth: () => Auth;
-  private readonly bus: ChangeBus;
+  private readonly sweepTimer: ReturnType<typeof setInterval> | null;
 
   /**
    * `auth` is supplied as a THUNK to break the construction cycle: the auth instance's
@@ -66,52 +68,64 @@ export class SessionCache {
    * the cache needs the auth instance to call `getSession` on a miss. The thunk lets the cache be built
    * first and the auth instance assigned immediately after (resolved lazily on the first miss, never at
    * construction).
+   *
+   * `initialSlots` only sizes the off-heap table's first allocation; it grows by doubling, so this is a
+   * starting hint, not a cap. `sweepIntervalMs` is the cadence of the background ACTIVE-EXPIRY sweep that
+   * evicts sessions which expired without ever being re-validated (0 disables it — used by tests that
+   * drive `pruneExpired` directly). The timer is `unref`'d, so it NEVER keeps the process alive.
    */
-  constructor(auth: () => Auth, bus: ChangeBus) {
+  constructor(auth: () => Auth, initialSlots?: number, sweepIntervalMs: number = DEFAULT_SWEEP_INTERVAL_MS) {
     this.auth = auth;
-    this.bus = bus;
-    // Cross-instance eviction: a `session:evict:<token>` message (local or, in future, from Redis) drops
-    // the entry. The same publish is what THIS instance emits in evict(), so a local publish is a no-op
-    // re-delete (idempotent). Non-matching topics (content-type names, rbac:*) are ignored.
-    this.bus.subscribe((topic) => {
-      if (topic.startsWith(EVICT_PREFIX)) this.map.delete(topic.slice(EVICT_PREFIX.length));
-    });
+    this.store = new OffHeapSessionStore(initialSlots);
+    if (sweepIntervalMs > 0) {
+      this.sweepTimer = setInterval(() => {
+        const total = this.store.recordCount();
+        if (total === 0) return;
+        this.store.pruneExpired(Date.now(), Math.max(MIN_SWEEP_BUDGET, Math.ceil(total / SWEEP_PASSES)));
+      }, sweepIntervalMs);
+      this.sweepTimer.unref?.(); // a background sweep must not hold the event loop open
+    } else {
+      this.sweepTimer = null;
+    }
+  }
+
+  /** Stop the background expiry sweep (clean test teardown; the process exit handles it in prod). */
+  stop(): void {
+    if (this.sweepTimer !== null) clearInterval(this.sweepTimer);
   }
 
   /**
    * Resolve the {@link Principal} for a request, or null when unauthenticated. THE HOT PATH: a warm,
-   * unexpired token returns from the Map with ZERO Postgres. A miss/expiry does the ONLY PG read
-   * (`auth.api.getSession`) and repopulates. A token-less request short-circuits to a PG read only if
-   * better-auth might authenticate by another means (it returns null fast otherwise).
+   * unexpired token returns from the off-heap store with ZERO Postgres. A miss/expiry does the ONLY PG
+   * read (`auth.api.getSession`) and repopulates. A token-less request short-circuits to a PG read only
+   * if better-auth might authenticate by another means (it returns null fast otherwise).
    */
   async validate(headers: Headers): Promise<Principal | null> {
     const token = readSessionToken(headers);
     if (token !== null) {
-      const hit = this.map.get(token);
-      if (hit !== undefined) {
-        if (hit.expiresAt > Date.now()) return hit.principal; // WARM HIT — zero PG
-        this.map.delete(token); // expired → evict locally, fall through to a fresh PG read
+      const hit = this.store.get(token);
+      if (hit !== null) {
+        if (hit.expiresAt > Date.now()) return { userId: hit.userId, sessionToken: token }; // WARM HIT — zero PG
+        this.store.delete(token); // expired → evict locally, fall through to a fresh PG read
       }
     }
     // MISS / expiry / no-token: the single Postgres touch.
     const s = await this.auth().api.getSession({ headers });
     if (s === null) return null;
-    const principal: Principal = { userId: s.user.id, sessionToken: s.session.token };
-    this.map.set(s.session.token, { principal, expiresAt: +new Date(s.session.expiresAt) });
-    return principal;
+    this.store.set(s.session.token, s.user.id, +new Date(s.session.expiresAt));
+    return { userId: s.user.id, sessionToken: s.session.token };
   }
 
   /**
-   * Evict one session from the cache (the logout/revoke hook). Drops the local entry AND publishes the
-   * eviction on the ChangeBus so every instance (today: just this one) drops it too. Idempotent.
+   * Evict one session from the cache (the logout/revoke hook). A local off-heap delete — no bus, single
+   * instance. Idempotent (deleting an absent token is a no-op).
    */
   evict(token: string): void {
-    this.map.delete(token);
-    this.bus.publish(`${EVICT_PREFIX}${token}`);
+    this.store.delete(token);
   }
 
-  /** Test/diagnostic: current cached entry count (NOT a public route surface). */
+  /** Test/diagnostic: current live cached entry count (NOT a public route surface). */
   size(): number {
-    return this.map.size;
+    return this.store.size();
   }
 }

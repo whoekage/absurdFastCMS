@@ -8,7 +8,6 @@ import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
 import { buildAuth } from '../src/auth/auth.ts';
 import { SessionCache, readSessionToken } from '../src/auth/session.cache.ts';
-import { InProcessChangeBus } from '../src/store/response.cache.ts';
 
 /**
  * be-09a — the SESSION provider + RAM cache over a REAL uWS-less better-auth instance + REAL Postgres
@@ -33,11 +32,12 @@ before(async () => {
   sql = postgres(db.url, { max: 4, prepare: true, debug: () => { queryCount++; } });
   setAuthSql(sql);
   // Build the cache first (thunk to auth), then the auth instance wired to evict it (mirrors server.ts).
-  cache = new SessionCache(() => auth, new InProcessChangeBus());
+  cache = new SessionCache(() => auth);
   auth = buildAuth({ sessionEvictor: cache, baseURL: 'http://localhost' });
 });
 
 after(async () => {
+  cache.stop(); // clear the background expiry-sweep timer so the test process tears down clean
   await closeAuth(); // no-op end: the handle is test-injected, the test owns it.
   await sql.end();
   await db.sql.end();
