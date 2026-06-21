@@ -7,6 +7,10 @@ import { createContentType, getContentType, type FieldSpec } from '../db/content
 import { ContentTypeExistsError } from '../db/ddl.ts';
 import { createServer } from './uws.adapter.ts';
 import { cursorCodecFromEnv } from '../db/engine.loader.ts';
+import { buildAuth } from '../auth/auth.ts';
+import { setAuthSql } from '../auth/auth.dialect.ts';
+import { SessionCache } from '../auth/session.cache.ts';
+import { RbacRegistry } from '../auth/rbac.registry.ts';
 import { config } from '../config.ts';
 
 /**
@@ -128,7 +132,25 @@ export async function start(port: number): Promise<void> {
   await seedArticleIfAbsent(store.sql);
   // Wire the keyset cursor codec (HMAC over CURSOR_SECRET) once at the composition root.
   const { engine, registry } = await store.loadWithRegistry({ cursorCodec: cursorCodecFromEnv() });
-  const server = createServer(engine, store, registry); // store + registry enable POST/PUT/DELETE
+
+  // AUTH (be-09a) — build the provider over the SAME postgres.js driver (a dedicated auth handle bound to
+  // the same DATABASE_URL), the session RAM cache, and the RBAC registry, all sharing the engine's
+  // ChangeBus so session-evict + rbac-invalidate fan out on the same seam as content invalidation. The
+  // RBAC registry is loaded at boot exactly where the content Registry loads. This slice GATES NOTHING:
+  // the auth instance is mounted at /auth/*, but the cache + registry are constructed for later route
+  // gating — existing routes stay open by design (scope fence).
+  setAuthSql(store.sql); // auth shares the boot store's handle (one driver, one DATABASE_URL).
+  // The cache references `auth` lazily (a thunk) so it can be built BEFORE the auth instance whose
+  // delete-hook evicts it — see SessionCache's constructor doc for the cycle this breaks.
+  let auth: ReturnType<typeof buildAuth>;
+  const sessionCache = new SessionCache(() => auth, engine.bus);
+  auth = buildAuth({ sessionEvictor: sessionCache });
+  const rbac = new RbacRegistry(store.sql, engine.bus);
+  await rbac.rebuild();
+  void sessionCache;
+  void rbac;
+
+  const server = createServer(engine, store, registry, undefined, auth); // store+registry enable writes; auth mounts /auth/*
   await server.listen(port);
   const rows = engine.has('article') ? engine.rowCount('article') : 0;
   console.log(`ready on ${port} (${rows} article rows from postgres)`);

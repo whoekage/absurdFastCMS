@@ -4,3 +4,5 @@ dist/
 .env
 .env.test
 .DS_Store
+.storage/
+.auth-schema.sql

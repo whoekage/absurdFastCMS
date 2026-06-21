@@ -13,6 +13,8 @@ import { mediaPopulateTargets, stripMediaPopulate, applyMediaPopulate } from './
 import { componentPopulateTargets, applyComponentPopulate } from './component.populate.ts';
 import { getStorageProvider } from '../storage/index.ts';
 import { listTypes, inspectType } from '../store/inspect.ts';
+import { handleAuthRoute } from '../auth/auth.bridge.ts';
+import type { Auth } from '../auth/auth.ts';
 import { config } from '../config.ts';
 
 /**
@@ -454,7 +456,13 @@ function handleFilesRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, method: '
  * NEVER reassigned on a write — only its per-type storage is swapped — so the read handlers' reference
  * stays valid. Without a store the server is read-only and a write falls to the core's 405.
  */
-export function createServer(engine: Engine, store?: PostgresStore, registry?: Registry, publishClock: () => Date = () => new Date()): UwsServer {
+export function createServer(
+  engine: Engine,
+  store?: PostgresStore,
+  registry?: Registry,
+  publishClock: () => Date = () => new Date(),
+  auth?: Auth,
+): UwsServer {
   const app = uWS.App();
   const current = engine;
 
@@ -527,6 +535,30 @@ export function createServer(engine: Engine, store?: PostgresStore, registry?: R
       if (result === null) writeJson(res, 404, { error: `unknown content-type "${type}"` });
       else writeJson(res, 200, result);
     });
+  }
+
+  // AUTH (better-auth provider) — mounted under the `/auth/...` prefix BEFORE the `/:type` data routes.
+  // CRITICAL uWS ROUTING NOTES (verified against uWS v20.52):
+  //  1. A bare `/auth/*` WILDCARD does NOT outrank the data route `/:type/:id` for a 2-segment path — uWS
+  //     ranks a parameter route above a wildcard, so `/auth/get-session` would match `/:type/:id`
+  //     (type='auth', id='get-session') and hit the read core → a spurious 404.
+  //  2. A LITERAL-PREFIXED PARAMETER route `/auth/:p` outranks `/:type/:id` ONLY when registered with the
+  //     SAME method specificity. A method-specific `app.get('/:type/:id')` BEATS an `app.any('/auth/:p')`.
+  //     So the 2-segment auth routes must be registered with the SAME concrete verbs (get/post/put/del),
+  //     not `any`, to win over the data GET routes.
+  // We therefore register the concrete verbs for the 2-segment `/auth/:p` form (covers GET /get-session,
+  // POST /sign-out, ...) PLUS an `any('/auth/*')` for the deeper paths (/sign-in/email, /sign-up/email,
+  // /api-key/*), all funnelling through the one Fetch bridge. The leading literal `auth` also means a
+  // content-type can never be named `auth` and shadow these in reverse; reads of OTHER types are
+  // byte-untouched. Mounted only when an auth instance is supplied (a read-only/test-only server omits it
+  // → /auth falls to the core's 404). This slice gates NOTHING — it only proxies the provider.
+  if (auth !== undefined) {
+    const onAuth = (res: uWS.HttpResponse, req: uWS.HttpRequest): void => handleAuthRoute(res, req, auth);
+    app.get('/auth/:p', onAuth);
+    app.post('/auth/:p', onAuth);
+    app.put('/auth/:p', onAuth);
+    app.del('/auth/:p', onAuth);
+    app.any('/auth/*', onAuth);
   }
 
   // LIST: /:type  — read everything off `req` synchronously, then delegate to the core.

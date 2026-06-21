@@ -18,6 +18,13 @@ type NodeEnv = 'development' | 'test' | 'production';
 const DEV_CURSOR_SECRET = 'absurdFastCMS-dev-only-cursor-secret-do-not-use-in-prod';
 
 /**
+ * The DEV-ONLY default secret for the better-auth provider (signs session cookies + hashes at rest).
+ * Production MUST set AUTH_SECRET (or BETTER_AUTH_SECRET); this constant only keeps dev/test working
+ * without extra config. NEVER logged — only the absence (in production) is warned about.
+ */
+const DEV_AUTH_SECRET = 'absurdFastCMS-dev-only-auth-secret-do-not-use-in-prod';
+
+/**
  * Cached values to ensure consistent validation across multiple calls
  */
 const cache: Record<string, string | boolean | number | null> = {};
@@ -100,6 +107,34 @@ function getCursorSecret(): string {
   }
   
   cache.cursorSecret = secret;
+  return secret;
+}
+
+/**
+ * Get AUTH_SECRET for the better-auth provider (cookie signing + at-rest hashing).
+ *
+ * Reads AUTH_SECRET, falling back to BETTER_AUTH_SECRET (better-auth's own env name) so either works.
+ * The DEV_AUTH_SECRET source-published constant is the dev/test fallback. In production, falling back
+ * emits a warning (forgeable sessions otherwise). NEVER logs the secret itself — only its absence.
+ */
+function getAuthSecret(): string {
+  if ('authSecret' in cache) return cache.authSecret as string;
+
+  const secret = process.env.AUTH_SECRET ?? process.env.BETTER_AUTH_SECRET;
+
+  if (secret === undefined || secret === '') {
+    const nodeEnv = getNodeEnv();
+    if (nodeEnv !== 'development' && nodeEnv !== 'test') {
+      console.warn(
+        '[auth] AUTH_SECRET is not set; falling back to the INSECURE source-published dev secret. ' +
+        'Set AUTH_SECRET in production — sessions/tokens are forgeable otherwise.',
+      );
+    }
+    cache.authSecret = DEV_AUTH_SECRET;
+    return DEV_AUTH_SECRET;
+  }
+
+  cache.authSecret = secret;
   return secret;
 }
 
@@ -255,6 +290,10 @@ export const config = {
   
   get cursorSecret(): string {
     return getCursorSecret();
+  },
+
+  get authSecret(): string {
+    return getAuthSecret();
   },
   
   get testDatabaseUrl(): string | undefined {

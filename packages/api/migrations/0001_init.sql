@@ -130,3 +130,60 @@ CREATE TABLE IF NOT EXISTS "files" (
 );
 -- Content-addressed dedup: identical bytes upload once. A re-upload of the same hash returns the row.
 CREATE UNIQUE INDEX IF NOT EXISTS "files_hash_uq" ON "files" ("hash");
+
+-- ============================================================================================
+-- better-auth (generated, do not edit by hand) — be-09a
+-- ============================================================================================
+-- Emitted by `@better-auth/cli@1.4.21 generate` (Kysely adapter) from src/auth/auth.cli.ts (core
+-- emailAndPassword + DB sessions + the @better-auth/api-key plugin's `apikey` table) and FOLDED here
+-- VERBATIM (only `IF NOT EXISTS` added for runner idempotency, and the bare `create` upcased). better-auth
+-- NEVER runs its own migrations at runtime — runMigrations() owns the whole schema. Credential password
+-- hashes live in `account.password` (better-auth hashes at rest); these are the ONLY tables that hold an
+-- auth secret. To regenerate after an auth-config change: re-run the CLI against an EMPTY database and
+-- re-fold the diff. Per migration-policy: ONE consolidated init file, drop & recreate, no backfill.
+CREATE TABLE IF NOT EXISTS "user" ("id" text not null primary key, "name" text not null, "email" text not null unique, "emailVerified" boolean not null, "image" text, "createdAt" timestamptz default CURRENT_TIMESTAMP not null, "updatedAt" timestamptz default CURRENT_TIMESTAMP not null);
+
+CREATE TABLE IF NOT EXISTS "session" ("id" text not null primary key, "expiresAt" timestamptz not null, "token" text not null unique, "createdAt" timestamptz default CURRENT_TIMESTAMP not null, "updatedAt" timestamptz not null, "ipAddress" text, "userAgent" text, "userId" text not null references "user" ("id") on delete cascade);
+
+CREATE TABLE IF NOT EXISTS "account" ("id" text not null primary key, "accountId" text not null, "providerId" text not null, "userId" text not null references "user" ("id") on delete cascade, "accessToken" text, "refreshToken" text, "idToken" text, "accessTokenExpiresAt" timestamptz, "refreshTokenExpiresAt" timestamptz, "scope" text, "password" text, "createdAt" timestamptz default CURRENT_TIMESTAMP not null, "updatedAt" timestamptz not null);
+
+CREATE TABLE IF NOT EXISTS "verification" ("id" text not null primary key, "identifier" text not null, "value" text not null, "expiresAt" timestamptz not null, "createdAt" timestamptz default CURRENT_TIMESTAMP not null, "updatedAt" timestamptz default CURRENT_TIMESTAMP not null);
+
+CREATE TABLE IF NOT EXISTS "apikey" ("id" text not null primary key, "configId" text not null, "name" text, "start" text, "referenceId" text not null, "prefix" text, "key" text not null, "refillInterval" integer, "refillAmount" integer, "lastRefillAt" timestamptz, "enabled" boolean, "rateLimitEnabled" boolean, "rateLimitTimeWindow" integer, "rateLimitMax" integer, "requestCount" integer, "remaining" integer, "lastRequest" timestamptz, "expiresAt" timestamptz, "createdAt" timestamptz not null, "updatedAt" timestamptz not null, "permissions" text, "metadata" text);
+
+CREATE INDEX IF NOT EXISTS "session_userId_idx" on "session" ("userId");
+CREATE INDEX IF NOT EXISTS "account_userId_idx" on "account" ("userId");
+CREATE INDEX IF NOT EXISTS "verification_identifier_idx" on "verification" ("identifier");
+CREATE INDEX IF NOT EXISTS "apikey_configId_idx" on "apikey" ("configId");
+CREATE INDEX IF NOT EXISTS "apikey_referenceId_idx" on "apikey" ("referenceId");
+CREATE INDEX IF NOT EXISTS "apikey_key_idx" on "apikey" ("key");
+
+-- ============================================================================================
+-- RBAC registry tables (hand-written) — be-09a
+-- ============================================================================================
+-- The permission rules the in-memory RbacRegistry folds into a Map<userId, Set<action>> at boot (PG =
+-- truth, RAM = served; a check is a pure in-memory set test). UNIFIED IDENTITY: user_roles.user_id is an
+-- FK to the better-auth "user"(id) (text) — no separate identity store. These tables hold NO secrets.
+-- ON DELETE CASCADE everywhere so dropping a user/role/permission tidies its assignments. Pre-launch:
+-- drop & recreate, no backfill.
+CREATE TABLE IF NOT EXISTS "roles" (
+	"id"   serial PRIMARY KEY NOT NULL,
+	"name" text UNIQUE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "permissions" (
+	"id"     serial PRIMARY KEY NOT NULL,
+	"action" text UNIQUE NOT NULL          -- e.g. 'content.read', 'content.write'
+);
+
+CREATE TABLE IF NOT EXISTS "role_permissions" (
+	"role_id"       integer NOT NULL REFERENCES "roles"("id") ON DELETE CASCADE,
+	"permission_id" integer NOT NULL REFERENCES "permissions"("id") ON DELETE CASCADE,
+	PRIMARY KEY ("role_id", "permission_id")
+);
+
+CREATE TABLE IF NOT EXISTS "user_roles" (
+	"user_id" text    NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,
+	"role_id" integer NOT NULL REFERENCES "roles"("id") ON DELETE CASCADE,
+	PRIMARY KEY ("user_id", "role_id")
+);
