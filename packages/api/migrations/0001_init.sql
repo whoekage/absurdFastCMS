@@ -187,3 +187,45 @@ CREATE TABLE IF NOT EXISTS "user_roles" (
 	"role_id" integer NOT NULL REFERENCES "roles"("id") ON DELETE CASCADE,
 	PRIMARY KEY ("user_id", "role_id")
 );
+
+-- be-09b: seed the COARSE permission actions + the four default roles + their grants.
+-- Idempotent (ON CONFLICT DO NOTHING) so a re-run / drop-recreate is safe. NO user_roles seeded here —
+-- role GRANTS to users come ONLY from the advisory-locked first-admin bootstrap (see auth.ts), never a body.
+INSERT INTO "permissions" ("action") VALUES
+  ('content.read'),     -- defined for completeness; NOT enforced this slice (reads are public by config)
+  ('content.create'),
+  ('content.update'),
+  ('content.delete'),
+  ('content.publish'),
+  ('builder.manage'),   -- content-type + component-type mutations
+  ('media.upload')
+ON CONFLICT ("action") DO NOTHING;
+
+INSERT INTO "roles" ("name") VALUES
+  ('super-admin'), ('editor'), ('author'), ('viewer')
+ON CONFLICT ("name") DO NOTHING;
+
+-- super-admin = EVERY permission.
+INSERT INTO "role_permissions" ("role_id", "permission_id")
+  SELECT r.id, p.id FROM "roles" r CROSS JOIN "permissions" p WHERE r.name = 'super-admin'
+ON CONFLICT DO NOTHING;
+
+-- editor = full CRUD + publish + media, NO builder.manage.
+INSERT INTO "role_permissions" ("role_id", "permission_id")
+  SELECT r.id, p.id FROM "roles" r JOIN "permissions" p
+    ON p.action IN ('content.read','content.create','content.update','content.delete','content.publish','media.upload')
+  WHERE r.name = 'editor'
+ON CONFLICT DO NOTHING;
+
+-- author = create + update + read + media (row-level "own" scoping is be-09e; coarse here = create+update).
+INSERT INTO "role_permissions" ("role_id", "permission_id")
+  SELECT r.id, p.id FROM "roles" r JOIN "permissions" p
+    ON p.action IN ('content.read','content.create','content.update','media.upload')
+  WHERE r.name = 'author'
+ON CONFLICT DO NOTHING;
+
+-- viewer = read only.
+INSERT INTO "role_permissions" ("role_id", "permission_id")
+  SELECT r.id, p.id FROM "roles" r JOIN "permissions" p ON p.action = 'content.read'
+  WHERE r.name = 'viewer'
+ON CONFLICT DO NOTHING;

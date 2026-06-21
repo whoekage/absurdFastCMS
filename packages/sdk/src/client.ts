@@ -39,18 +39,18 @@ import { decodeEntry, type DecodeOptions } from './serde.ts';
  * For the common static-token case, prefer {@link ClientOptions.token} (which is sugar that populates
  * exactly this header); reach for `getHeaders` only when the header is dynamic / async.
  *
- * Forward-compat note: the @absurd/api server has NO auth yet (README roadmap: "AuthN/authZ — gate the
- * Builder (and writes) behind an admin scope"). Until that lands, whatever this returns is simply sent
- * and ignored by the open server — this seam is a no-op against today's API.
+ * be-09b: the @absurd/api server now GATES the Builder + every write + media upload behind session-resolved
+ * RBAC (reads stay public). The primary credential is the better-auth session COOKIE (sent automatically via
+ * `credentials: 'include'`); this header slot remains the seam for a future Bearer/API-token scheme.
  */
 export type HeaderProvider = () => Record<string, string> | Promise<Record<string, string>>;
 
 /**
  * Slice 9.2 — the UNAUTHORIZED hook. Invoked (and `await`ed) when a response comes back `401`, just
- * before the {@link UnauthorizedError} is thrown. It is a no-op SEAM for a future token-refresh /
- * login-redirect: an implementation can clear a cached token, kick off a refresh, or redirect to a login
- * flow. The error is STILL thrown after the hook resolves (this slice does not retry-after-refresh — that
- * wires up when the api gains an auth scope; see the README roadmap item). Receives the request
+ * before the {@link UnauthorizedError} is thrown. A SEAM for login-redirect / token-refresh: an
+ * implementation can redirect to the login flow or kick off a refresh. be-09b: the api now gates the
+ * Builder + writes + media upload, so this fires for real when an unauthenticated caller hits one. The
+ * error is STILL thrown after the hook resolves (no retry-after-refresh yet). Receives the request
  * coordinates plus the parsed error body. May be async.
  */
 export type UnauthorizedHook = (ctx: {
@@ -190,14 +190,14 @@ export class ApiError extends Error {
 /** 400 — malformed request (bad query / body / identifier). Maps to the api's QueryParseError etc. */
 export class BadRequestError extends ApiError {}
 /**
- * 401 — UNAUTHENTICATED (missing / invalid / expired credentials). Slice 9 forward-compat: the api has
- * no auth yet, so this never fires against today's open server; it lands when the api gains an auth scope
- * (README roadmap: "gate the Builder (and writes) behind an admin scope"). See {@link UnauthorizedHook}.
+ * 401 — UNAUTHENTICATED (missing / invalid / expired session). be-09b: fires when an unauthenticated caller
+ * hits a gated write/builder/media route (no/invalid session cookie). Reads stay public, so a GET never
+ * 401s. See {@link UnauthorizedHook} (the `onUnauthorized` login-redirect seam).
  */
 export class UnauthorizedError extends ApiError {}
 /**
- * 403 — FORBIDDEN (authenticated but lacking the required scope/permission, e.g. a non-admin hitting the
- * Builder once it is gated). Slice 9 forward-compat — see {@link UnauthorizedError}.
+ * 403 — FORBIDDEN (authenticated but lacking the required permission, e.g. a `viewer` session hitting the
+ * Builder or a write). be-09b: the session resolved a Principal but RBAC denied the action.
  */
 export class ForbiddenError extends ApiError {}
 /** 404 — unknown content-type or no row for the given id. */
@@ -637,7 +637,11 @@ export class AbsurdClient {
 
       // Slice 8.3 — fold the caller's signal together with a per-attempt timeout signal (fresh each try).
       const { signal, dispose } = this.buildSignal(opts.signal, timeoutMs);
-      const init: RequestInit = { method, headers };
+      // be-09b — send the better-auth session cookie cross-origin so the browser admin authenticates against
+      // the now-gated write/builder/media routes. `include` attaches cookies even on a cross-origin request
+      // (the dev proxy + a prod API origin differ from the admin origin); a no-cookie caller simply stays
+      // unauthenticated (a public read still works; a gated write 401s).
+      const init: RequestInit = { method, headers, credentials: 'include' };
       if (bodyStr !== undefined) init.body = bodyStr; // narrows to string (exactOptionalPropertyTypes)
       if (signal) init.signal = signal;
 
@@ -678,9 +682,10 @@ export class AbsurdClient {
 
       if (!res.ok) {
         const message = messageFromBody(parsed) ?? res.statusText ?? `HTTP ${res.status}`;
-        // Slice 9.2 — fire the no-op auth seam on a 401 (token-refresh / login-redirect hook), then
-        // still throw the typed UnauthorizedError. (No retry-after-refresh yet — that lands when the api
-        // gains an auth scope; see README roadmap "gate the Builder (and writes) behind an admin scope".)
+        // be-09b — fire the auth seam on a 401 (login-redirect / token-refresh hook), then still throw the
+        // typed UnauthorizedError. The api now gates writes/builder/media: an unauthenticated caller gets
+        // this 401; a 403 (authenticated, under-privileged) surfaces as ForbiddenError. (No retry-after-
+        // refresh yet — a Bearer/API-token refresh flow is a later slice.)
         if (res.status === 401 && this.onUnauthorized) {
           await this.onUnauthorized({ status: 401, method, url, body: parsed });
         }

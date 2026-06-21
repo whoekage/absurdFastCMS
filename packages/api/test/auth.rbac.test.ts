@@ -39,17 +39,20 @@ before(async () => {
   sql = postgres(db.url, { max: 4, prepare: true, debug: () => { queryCount++; } });
 
   userId = await seedUser(sql, 'rbac@example.com');
-  // Seed a real RBAC graph: an `editor` role with content.read + content.write, assigned to the user.
-  await sql`INSERT INTO roles (name) VALUES ('editor'), ('viewer')`;
-  await sql`INSERT INTO permissions (action) VALUES ('content.read'), ('content.write'), ('content.delete')`;
+  // be-09b: 0001_init now SEEDS the four default roles + the coarse permission actions, so this test uses
+  // its OWN isolated role (`rbac-test-role`) + custom permission actions (ON CONFLICT-safe) to stay
+  // independent of the seeded taxonomy. The role starts with content.read + content.write only.
+  await sql`INSERT INTO roles (name) VALUES ('rbac-test-role') ON CONFLICT (name) DO NOTHING`;
+  await sql`INSERT INTO permissions (action) VALUES ('content.read'), ('content.write'), ('content.delete') ON CONFLICT (action) DO NOTHING`;
   await sql`
     INSERT INTO role_permissions (role_id, permission_id)
     SELECT r.id, p.id FROM roles r, permissions p
-    WHERE r.name = 'editor' AND p.action IN ('content.read', 'content.write')
+    WHERE r.name = 'rbac-test-role' AND p.action IN ('content.read', 'content.write')
+    ON CONFLICT DO NOTHING
   `;
   await sql`
     INSERT INTO user_roles (user_id, role_id)
-    SELECT ${userId}, id FROM roles WHERE name = 'editor'
+    SELECT ${userId}, id FROM roles WHERE name = 'rbac-test-role'
   `;
 
   rbac = new RbacRegistry(sql);
@@ -85,11 +88,12 @@ test('the registry rebuilds when a role_permissions row changes (direct rebuild)
   // Before: content.delete is NOT granted.
   assert.equal(rbac.checkPermission(principal(userId), 'content.delete'), false);
 
-  // Grant content.delete to the editor role with a REAL row.
+  // Grant content.delete to the test role with a REAL row.
   await sql`
     INSERT INTO role_permissions (role_id, permission_id)
     SELECT r.id, p.id FROM roles r, permissions p
-    WHERE r.name = 'editor' AND p.action = 'content.delete'
+    WHERE r.name = 'rbac-test-role' AND p.action = 'content.delete'
+    ON CONFLICT DO NOTHING
   `;
   // The invalidation seam is a direct call: an RBAC mutation (a later slice) calls rebuild() to re-read PG.
   await rbac.rebuild();
@@ -101,7 +105,9 @@ test('the registry rebuilds when a role_permissions row changes (direct rebuild)
   );
 });
 
-test('rebuild on EMPTY tables yields an all-deny registry', async () => {
+test('rebuild with NO user_roles yields an all-deny registry (unknown user)', async () => {
+  // be-09b: the migration now seeds roles/permissions/role_permissions, but NO user_roles — so a fresh db
+  // still grants NOBODY anything (the only auto-grant is the advisory-locked first-admin bootstrap).
   const empty = await createFileDatabase('authrbacempty');
   try {
     await runMigrations(empty.url);

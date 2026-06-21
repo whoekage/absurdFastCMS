@@ -15,6 +15,8 @@ import { getStorageProvider } from '../storage/index.ts';
 import { listTypes, inspectType } from '../store/inspect.ts';
 import { handleAuthRoute } from '../auth/auth.bridge.ts';
 import type { Auth } from '../auth/auth.ts';
+import type { SessionCache, Principal } from '../auth/session.cache.ts';
+import type { RbacRegistry } from '../auth/rbac.registry.ts';
 import { config } from '../config.ts';
 
 /**
@@ -64,6 +66,8 @@ const STATUS_LINE: Record<number, string> = {
   200: '200 OK',
   201: '201 Created',
   400: '400 Bad Request',
+  401: '401 Unauthorized',
+  403: '403 Forbidden',
   404: '404 Not Found',
   405: '405 Method Not Allowed',
   409: '409 Conflict',
@@ -135,96 +139,11 @@ function corkSend(res: uWS.HttpResponse, aborted: () => boolean, result: CoreRes
 }
 
 /**
- * A write route: capture the params synchronously, read the body, then run the async write core and
- * cork the response back. `hasId` distinguishes POST (/:type) from PUT/DELETE (/:type/:id).
+ * be-09b — the data WRITE routes (POST/PUT/DELETE /:type[/:id]), the D&P action sub-route, and the i18n
+ * variant-create are now registered INLINE inside {@link createServer} so each can be wrapped by the
+ * per-route RBAC gate (the gate must close over `sessionCache`/`rbac`). The shared async dispatch shape
+ * (413/400/500 handling + corkSend) is preserved verbatim at each gated registration site.
  */
-function handleWriteRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, method: string, hasId: boolean, ctx: WriteContext): void {
-  const type = req.getParameter(0) ?? '';
-  const idRaw = hasId ? (req.getParameter(1) ?? '') : '';
-  const { aborted } = readBody(res, (raw) => {
-    void (async () => {
-      if (raw === null) return corkSend(res, aborted, errorResponse(413, 'request body too large'));
-      let body: unknown = undefined;
-      if (raw.length > 0) {
-        try {
-          body = JSON.parse(raw.toString('utf8'));
-        } catch {
-          return corkSend(res, aborted, errorResponse(400, 'invalid JSON body'));
-        }
-      }
-      let result: CoreResponse;
-      try {
-        result = await handleWrite(ctx, { method, type, idRaw, body });
-      } catch {
-        result = errorResponse(500, 'internal error');
-      }
-      corkSend(res, aborted, result);
-    })();
-  });
-}
-
-/**
- * The Draft & Publish ACTION route (`POST /:type/:id/actions/:action`). Structurally identical to
- * {@link handleWriteRoute} but reads a THIRD path param (the action token) and validates it ∈
- * {publish,unpublish} BEFORE dispatch — an unknown token is a 404 (no such action), never reaching the
- * core. The 3-segment path is structurally distinct from the 2-segment data routes, so route ordering is
- * irrelevant. Always treated as POST.
- */
-function handleWriteActionRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, ctx: WriteContext): void {
-  const type = req.getParameter(0) ?? '';
-  const idRaw = req.getParameter(1) ?? '';
-  const actionRaw = req.getParameter(2) ?? '';
-  const { aborted } = readBody(res, () => {
-    void (async () => {
-      if (actionRaw !== 'publish' && actionRaw !== 'unpublish') {
-        return corkSend(res, aborted, errorResponse(404, 'not found'));
-      }
-      let result: CoreResponse;
-      try {
-        // The action sub-route carries no body (the lifecycle change is positional). body=undefined.
-        result = await handleWrite(ctx, { method: 'POST', type, idRaw, body: undefined, action: actionRaw });
-      } catch {
-        result = errorResponse(500, 'internal error');
-      }
-      corkSend(res, aborted, result);
-    })();
-  });
-}
-
-/**
- * The i18n VARIANT-CREATE route (`POST /:type/:id/locales/:locale`). Structurally identical to
- * {@link handleWriteRoute} but reads a THIRD path param (the target locale slug) AND a body (the request
- * supplies the localized fields). The 4-segment path is structurally distinct from the 2-segment data
- * routes and the 4-segment `/actions/:action` (the literal `locales` vs `actions` disambiguates), so
- * route ordering is irrelevant (uWS matches by segment count + literals). Always treated as POST.
- */
-function handleVariantCreateRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, ctx: WriteContext): void {
-  // Params are positional over the `:`-prefixed segments ONLY (the literal `locales` is not a param):
-  // (0)=:type, (1)=:id, (2)=:locale.
-  const type = req.getParameter(0) ?? '';
-  const idRaw = req.getParameter(1) ?? '';
-  const variantLocale = req.getParameter(2) ?? '';
-  const { aborted } = readBody(res, (raw) => {
-    void (async () => {
-      if (raw === null) return corkSend(res, aborted, errorResponse(413, 'request body too large'));
-      let body: unknown = undefined;
-      if (raw.length > 0) {
-        try {
-          body = JSON.parse(raw.toString('utf8'));
-        } catch {
-          return corkSend(res, aborted, errorResponse(400, 'invalid JSON body'));
-        }
-      }
-      let result: CoreResponse;
-      try {
-        result = await handleWrite(ctx, { method: 'POST', type, idRaw, body, variantLocale });
-      } catch {
-        result = errorResponse(500, 'internal error');
-      }
-      corkSend(res, aborted, result);
-    })();
-  });
-}
 
 /** Which template a builder route is on — drives which getParameter slots to read synchronously. */
 interface CtRouteOpts {
@@ -319,47 +238,38 @@ type UploadParseResult = { ok: true; upload: ParsedUpload } | { ok: false; statu
  * => we reject 413 WITHOUT buffering the whole oversized body. `files:1` rejects a second file part. The
  * `content-type` header MUST be read synchronously off the stack-allocated `req` before the first onData.
  */
-function readMultipart(res: uWS.HttpResponse, contentType: string, onDone: (r: UploadParseResult) => void): { aborted: () => boolean } {
-  let aborted = false;
-  res.onAborted(() => {
-    aborted = true;
-  });
-
+/**
+ * be-09b — parse an ALREADY-BUFFERED multipart body through busboy (single-file, bounded). Used by the
+ * GATED upload path: the gate resolves auth (async) WHILE the body buffers synchronously, so by dispatch
+ * time the bytes are in hand and we feed busboy in one `write`+`end`. Mirrors {@link readMultipart}'s
+ * settle/limit/extra-file rules; the size cap is enforced by the caller's buffering (uploadMaxBytes).
+ */
+function parseMultipartBuffer(contentType: string, raw: Buffer, onDone: (r: UploadParseResult) => void): void {
   if (!/^multipart\/form-data/i.test(contentType)) {
-    // Drain so uWS doesn't complain, then reject. Read one onData to satisfy the stream contract.
-    res.onData((_ab, isLast) => {
-      if (isLast) onDone({ ok: false, status: 415, message: 'expected multipart/form-data' });
-    });
-    return { aborted: () => aborted };
+    onDone({ ok: false, status: 415, message: 'expected multipart/form-data' });
+    return;
   }
-
   let bb: ReturnType<typeof busboy>;
   try {
     bb = busboy({ headers: { 'content-type': contentType }, limits: { files: 1, fields: 0, fileSize: config.uploadMaxBytes } });
   } catch {
-    res.onData((_ab, isLast) => {
-      if (isLast) onDone({ ok: false, status: 400, message: 'invalid multipart body' });
-    });
-    return { aborted: () => aborted };
+    onDone({ ok: false, status: 400, message: 'invalid multipart body' });
+    return;
   }
-
   let settled = false;
   const settle = (r: UploadParseResult): void => {
     if (settled) return;
     settled = true;
     onDone(r);
   };
-
   const chunks: Buffer[] = [];
   let sawFile = false;
   let tooLarge = false;
   let extraFile = false;
   let filename = 'upload';
   let declaredMime = 'application/octet-stream';
-
   bb.on('file', (_name, stream, info) => {
     if (sawFile) {
-      // A second file part: ignore its bytes and flag a 400.
       extraFile = true;
       stream.resume();
       return;
@@ -385,32 +295,7 @@ function readMultipart(res: uWS.HttpResponse, contentType: string, onDone: (r: U
     if (!sawFile) return settle({ ok: false, status: 400, message: 'no file part' });
     settle({ ok: true, upload: { bytes: Buffer.concat(chunks), filename, declaredMime } });
   });
-
-  res.onData((ab, isLast) => {
-    // The chunk ArrayBuffer is only valid during this callback — copy before handing to busboy.
-    bb.write(Buffer.from(ab.slice(0)));
-    if (isLast) bb.end();
-  });
-
-  return { aborted: () => aborted };
-}
-
-/** be-04 MEDIA — the POST /_files/upload route: stream multipart -> core -> cork the response. */
-function handleUploadRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, ctx: FileContext): void {
-  // Read the content-type header SYNCHRONOUSLY (the req is stack-allocated, invalid after the first await).
-  const contentType = req.getHeader('content-type') ?? '';
-  const { aborted } = readMultipart(res, contentType, (parsed) => {
-    void (async () => {
-      if (!parsed.ok) return corkSend(res, aborted, errorResponse(parsed.status, parsed.message));
-      let result: CoreResponse;
-      try {
-        result = await handleUpload(ctx, parsed.upload);
-      } catch {
-        result = errorResponse(500, 'internal error');
-      }
-      corkSend(res, aborted, result);
-    })();
-  });
+  bb.end(raw);
 }
 
 /**
@@ -462,9 +347,180 @@ export function createServer(
   registry?: Registry,
   publishClock: () => Date = () => new Date(),
   auth?: Auth,
+  sessionCache?: SessionCache,
+  rbac?: RbacRegistry,
 ): UwsServer {
   const app = uWS.App();
   const current = engine;
+
+  /**
+   * be-09b — the per-request AUTH context. `principal` comes ONLY from {@link SessionCache.validate}
+   * (never a body field — neutralizes the mass-assignment class); `can(perm)` is a pure
+   * {@link RbacRegistry.checkPermission} set test. The warm path is ZERO-PG (validate is an off-heap probe,
+   * checkPermission is a RAM Map lookup).
+   */
+  interface AuthContext {
+    principal: Principal | null;
+    can(perm: string): boolean;
+  }
+
+  /**
+   * be-09b — gating is ACTIVE only when the security primitives are wired (production: server.ts passes both
+   * sessionCache + rbac). A server built WITHOUT them (read-only servers AND the test/bench write servers
+   * that predate auth) leaves the write/builder/media routes OPEN — exactly as before this slice — so no
+   * existing behavior regresses. Production ALWAYS wires both, so production is ALWAYS gated.
+   */
+  const authEnabled = sessionCache !== undefined && rbac !== undefined;
+
+  /** Resolve the {@link AuthContext} for a request. Closes over `sessionCache`/`rbac` (mirrors mediaRead). */
+  async function resolveAuth(headers: Headers): Promise<AuthContext> {
+    const principal = sessionCache !== undefined ? await sessionCache.validate(headers) : null;
+    return {
+      principal,
+      can: (perm) => principal !== null && rbac !== undefined && rbac.checkPermission(principal, perm),
+    };
+  }
+
+  /**
+   * be-09b — the GATE primitive. uWS forces `res.onData`/`res.onAborted` to be registered SYNCHRONOUSLY in
+   * the handler callback, so we cannot await auth BEFORE buffering the body. The discipline:
+   *   1. capture the sync request bits the caller needs (params) BEFORE calling gate (caller closes over them),
+   *   2. read the `Headers` SYNC off `req`, and (for body routes) start the SYNC body buffer via `readBody`,
+   *   3. in the body callback (or immediately for bodyless), resolve auth + apply the 401/403 split,
+   *   4. on success, run `proceed(body)` — the existing parse + core dispatch, but corked HERE.
+   *
+   * 401 (no/invalid/expired session) is precisely distinct from 403 (session present, perm missing); body
+   * fields are NEVER consulted for authz (the Principal comes ONLY from {@link SessionCache.validate}).
+   *
+   * `proceed` receives the buffered body Buffer (null when oversized) and the abort probe, and is fully
+   * responsible for the response from there (it corks). `readsBody:false` (DELETE /_files/:id) skips the
+   * body buffer (those verbs carry none) and dispatches with a null body.
+   */
+  function gate(
+    res: uWS.HttpResponse,
+    req: uWS.HttpRequest,
+    perm: string,
+    readsBody: boolean,
+    proceed: (body: Buffer | null, aborted: () => boolean) => void,
+  ): void {
+    // SYNCHRONOUS header read — `req` is invalid after the first await.
+    const headers = new Headers();
+    req.forEach((k, v) => headers.set(k, v));
+
+    const run = (body: Buffer | null, aborted: () => boolean): void => {
+      // Auth not wired (read-only / legacy write server) → the route is OPEN (no regression). Dispatch
+      // synchronously without ever touching resolveAuth.
+      if (!authEnabled) return proceed(body, aborted);
+      void (async () => {
+        let ctx: AuthContext;
+        try {
+          ctx = await resolveAuth(headers);
+        } catch {
+          return corkSend(res, aborted, errorResponse(500, 'internal error'));
+        }
+        if (ctx.principal === null) return corkSend(res, aborted, errorResponse(401, 'unauthenticated'));
+        if (!ctx.can(perm)) return corkSend(res, aborted, errorResponse(403, 'forbidden'));
+        proceed(body, aborted);
+      })();
+    };
+
+    if (readsBody) {
+      const { aborted } = readBody(res, (body) => run(body, aborted));
+    } else {
+      let aborted = false;
+      res.onAborted(() => {
+        aborted = true;
+      });
+      run(null, () => aborted);
+    }
+  }
+
+  /**
+   * be-09b — GATE the multipart upload. The upload body can be up to `uploadMaxBytes` (25 MiB) — much
+   * larger than the 1 MiB JSON `MAX_BODY_BYTES` — so it does NOT use `gate`'s `readBody`. Instead it
+   * buffers the raw multipart bytes SYNCHRONOUSLY (its own cap) WHILE resolving auth in parallel; once both
+   * the body is fully read AND auth resolved, it applies the 401/403 split and (on allow) feeds the buffer
+   * to busboy. onData/onAborted are registered synchronously (uWS requirement); the auth decision is
+   * deferred but the bytes are never lost.
+   */
+  function gateUpload(
+    res: uWS.HttpResponse,
+    req: uWS.HttpRequest,
+    contentType: string,
+    proceed: (raw: Buffer, aborted: () => boolean) => void,
+  ): void {
+    const headers = new Headers();
+    req.forEach((k, v) => headers.set(k, v));
+
+    let aborted = false;
+    res.onAborted(() => {
+      aborted = true;
+    });
+
+    const cap = config.uploadMaxBytes;
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let tooLarge = false;
+    let body: Buffer | null = null;
+    let bodyDone = false;
+    let authDone = false;
+    let ctx: AuthContext | null = null;
+    let authFailed = false;
+
+    const tryFinish = (): void => {
+      if (!bodyDone || !authDone) return;
+      if (authFailed) return corkSend(res, () => aborted, errorResponse(500, 'internal error'));
+      // Auth not wired → open (no regression): skip the authz split entirely.
+      if (authEnabled) {
+        // Authz split FIRST — never even look at the (possibly oversized) body for an unauthorized caller.
+        if (ctx!.principal === null) return corkSend(res, () => aborted, errorResponse(401, 'unauthenticated'));
+        if (!ctx!.can('media.upload')) return corkSend(res, () => aborted, errorResponse(403, 'forbidden'));
+      }
+      if (body === null) return corkSend(res, () => aborted, errorResponse(413, 'upload too large'));
+      proceed(body, () => aborted);
+    };
+
+    res.onData((ab, isLast) => {
+      if (!tooLarge) {
+        const chunk = Buffer.from(ab.slice(0));
+        size += chunk.length;
+        if (size > cap) tooLarge = true;
+        else chunks.push(chunk);
+      }
+      if (isLast) {
+        body = tooLarge ? null : Buffer.concat(chunks);
+        bodyDone = true;
+        tryFinish();
+      }
+    });
+
+    if (!authEnabled) {
+      authDone = true;
+      tryFinish();
+    } else {
+      void (async () => {
+        try {
+          ctx = await resolveAuth(headers);
+        } catch {
+          authFailed = true;
+        }
+        authDone = true;
+        tryFinish();
+      })();
+    }
+  }
+
+  /** be-09b — parse a pre-buffered JSON body (null => 413, empty => undefined, bad => 400-as-error). */
+  type ParsedBody = { ok: true; body: unknown } | { ok: false; error: CoreResponse };
+  function parseBody(raw: Buffer | null): ParsedBody {
+    if (raw === null) return { ok: false, error: errorResponse(413, 'request body too large') };
+    if (raw.length === 0) return { ok: true, body: undefined };
+    try {
+      return { ok: true, body: JSON.parse(raw.toString('utf8')) };
+    } catch {
+      return { ok: false, error: errorResponse(400, 'invalid JSON body') };
+    }
+  }
 
   /**
    * be-04 MEDIA + be-05 COMPONENT — the OPTIONAL populate-post-step wrapper around a GET read. When the
@@ -609,45 +665,173 @@ export function createServer(
     // falls to any('/*') -> 404. An unsupported verb on a builder path is not a registered (path,verb),
     // so it also falls to any('/*') -> the read core -> 404 (the spec-permitted method-mismatch handling).
     const ctCtx: ContentTypeContext = { sql: store.sql, engine: () => current, registry: () => registry };
-    app.post('/content-types', (res, req) => handleContentTypeRoute(res, req, 'POST', ctCtx, { hasApiId: false }));
+
+    // be-09b — GATED content-type BUILDER mutation. Captures the sync params off `req` FIRST (req is
+    // stack-allocated), then gate('builder.manage') buffers the body + applies the 401/403 split, and on
+    // success parses + dispatches the existing core. GET stays public (no gate).
+    const ctMutate = (method: string, opts: CtRouteOpts) => (res: uWS.HttpResponse, req: uWS.HttpRequest): void => {
+      const apiId = opts.hasApiId ? (req.getParameter(0) ?? '') : undefined;
+      const fieldName = opts.hasName ? (req.getParameter(1) ?? '') : undefined;
+      gate(res, req, 'builder.manage', true, (raw, aborted) => {
+        const parsed = parseBody(raw);
+        if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+        void (async () => {
+          let result: CoreResponse;
+          try {
+            result = await handleContentTypeRequest(ctCtx, { method, apiId, fieldName, sub: opts.sub, body: parsed.body });
+          } catch {
+            result = errorResponse(500, 'internal error');
+          }
+          corkSend(res, aborted, result);
+        })();
+      });
+    };
+    app.post('/content-types', ctMutate('POST', { hasApiId: false }));
     app.get('/content-types', (res, req) => handleContentTypeRoute(res, req, 'GET', ctCtx, { hasApiId: false }));
     app.get('/content-types/:apiId', (res, req) => handleContentTypeRoute(res, req, 'GET', ctCtx, { hasApiId: true }));
-    app.del('/content-types/:apiId', (res, req) => handleContentTypeRoute(res, req, 'DELETE', ctCtx, { hasApiId: true }));
-    app.post('/content-types/:apiId/relations', (res, req) => handleContentTypeRoute(res, req, 'POST', ctCtx, { hasApiId: true, sub: 'relations' }));
-    app.post('/content-types/:apiId/fields', (res, req) => handleContentTypeRoute(res, req, 'POST', ctCtx, { hasApiId: true, sub: 'fields' }));
-    app.put('/content-types/:apiId/fields/:name', (res, req) => handleContentTypeRoute(res, req, 'PUT', ctCtx, { hasApiId: true, sub: 'fields', hasName: true }));
-    app.del('/content-types/:apiId/fields/:name', (res, req) => handleContentTypeRoute(res, req, 'DELETE', ctCtx, { hasApiId: true, sub: 'fields', hasName: true }));
+    app.del('/content-types/:apiId', ctMutate('DELETE', { hasApiId: true }));
+    app.post('/content-types/:apiId/relations', ctMutate('POST', { hasApiId: true, sub: 'relations' }));
+    app.post('/content-types/:apiId/fields', ctMutate('POST', { hasApiId: true, sub: 'fields' }));
+    app.put('/content-types/:apiId/fields/:name', ctMutate('PUT', { hasApiId: true, sub: 'fields', hasName: true }));
+    app.del('/content-types/:apiId/fields/:name', ctMutate('DELETE', { hasApiId: true, sub: 'fields', hasName: true }));
 
     // be-05 COMPONENT-TYPE BUILDER (meta-only runtime schema over HTTP). Same `/component-types` literal-
     // prefix safety as `/content-types` ('-' is illegal in an api_id). No engine sync (components have no
-    // engine presence) — the controller syncs only the registry's component store.
+    // engine presence) — the controller syncs only the registry's component store. GATED on builder.manage.
     const cmpCtx: ComponentTypeContext = { sql: store.sql, registry: () => registry };
-    app.post('/component-types', (res, req) => handleComponentTypeRoute(res, req, 'POST', cmpCtx, { hasApiId: false }));
+    const cmpMutate = (method: string, opts: CtRouteOpts) => (res: uWS.HttpResponse, req: uWS.HttpRequest): void => {
+      const apiId = opts.hasApiId ? (req.getParameter(0) ?? '') : undefined;
+      const fieldName = opts.hasName ? (req.getParameter(1) ?? '') : undefined;
+      gate(res, req, 'builder.manage', true, (raw, aborted) => {
+        const parsed = parseBody(raw);
+        if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+        void (async () => {
+          let result: CoreResponse;
+          try {
+            result = await handleComponentTypeRequest(cmpCtx, { method, apiId, fieldName, sub: opts.sub, body: parsed.body });
+          } catch {
+            result = errorResponse(500, 'internal error');
+          }
+          corkSend(res, aborted, result);
+        })();
+      });
+    };
+    app.post('/component-types', cmpMutate('POST', { hasApiId: false }));
     app.get('/component-types', (res, req) => handleComponentTypeRoute(res, req, 'GET', cmpCtx, { hasApiId: false }));
     app.get('/component-types/:apiId', (res, req) => handleComponentTypeRoute(res, req, 'GET', cmpCtx, { hasApiId: true }));
-    app.del('/component-types/:apiId', (res, req) => handleComponentTypeRoute(res, req, 'DELETE', cmpCtx, { hasApiId: true }));
-    app.post('/component-types/:apiId/fields', (res, req) => handleComponentTypeRoute(res, req, 'POST', cmpCtx, { hasApiId: true, sub: 'fields' }));
-    app.del('/component-types/:apiId/fields/:name', (res, req) => handleComponentTypeRoute(res, req, 'DELETE', cmpCtx, { hasApiId: true, sub: 'fields', hasName: true }));
+    app.del('/component-types/:apiId', cmpMutate('DELETE', { hasApiId: true }));
+    app.post('/component-types/:apiId/fields', cmpMutate('POST', { hasApiId: true, sub: 'fields' }));
+    app.del('/component-types/:apiId/fields/:name', cmpMutate('DELETE', { hasApiId: true, sub: 'fields', hasName: true }));
 
-    // Draft & Publish action sub-route. 3 segments — structurally distinct from the 2-segment data
-    // routes, so ordering vs put('/:type/:id') is irrelevant (uWS matches by segment count + literals).
-    app.post('/:type/:id/actions/:action', (res, req) => handleWriteActionRoute(res, req, ctx));
-    // i18n variant create: POST /:type/:id/locales/:locale — 4 segments, literal `locales` distinguishes
-    // it from `/actions/:action`; ordering vs the data routes is irrelevant (segment count + literals).
-    app.post('/:type/:id/locales/:locale', (res, req) => handleVariantCreateRoute(res, req, ctx));
-    app.post('/:type', (res, req) => handleWriteRoute(res, req, 'POST', false, ctx));
-    app.put('/:type/:id', (res, req) => handleWriteRoute(res, req, 'PUT', true, ctx));
-    app.del('/:type/:id', (res, req) => handleWriteRoute(res, req, 'DELETE', true, ctx));
+    // be-09b — GATED data writes. The verb→perm map is fixed at the registration site (POST=create,
+    // PUT=update, DELETE=delete); the same can(perm) fronts every verb so no method gets a weaker check.
+    // Params captured sync BEFORE gate; body buffered by gate; parse + core dispatch on success.
+
+    // Draft & Publish action sub-route (`content.publish`). 3 segments — structurally distinct from the
+    // 2-segment data routes (ordering irrelevant: uWS matches by segment count + literals).
+    app.post('/:type/:id/actions/:action', (res, req) => {
+      const type = req.getParameter(0) ?? '';
+      const idRaw = req.getParameter(1) ?? '';
+      const actionRaw = req.getParameter(2) ?? '';
+      gate(res, req, 'content.publish', true, (_raw, aborted) => {
+        void (async () => {
+          if (actionRaw !== 'publish' && actionRaw !== 'unpublish') {
+            return corkSend(res, aborted, errorResponse(404, 'not found'));
+          }
+          let result: CoreResponse;
+          try {
+            result = await handleWrite(ctx, { method: 'POST', type, idRaw, body: undefined, action: actionRaw });
+          } catch {
+            result = errorResponse(500, 'internal error');
+          }
+          corkSend(res, aborted, result);
+        })();
+      });
+    });
+    // i18n variant create: POST /:type/:id/locales/:locale (`content.create`). 4 segments; literal
+    // `locales` distinguishes it from `/actions/:action`.
+    app.post('/:type/:id/locales/:locale', (res, req) => {
+      const type = req.getParameter(0) ?? '';
+      const idRaw = req.getParameter(1) ?? '';
+      const variantLocale = req.getParameter(2) ?? '';
+      gate(res, req, 'content.create', true, (raw, aborted) => {
+        const parsed = parseBody(raw);
+        if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+        void (async () => {
+          let result: CoreResponse;
+          try {
+            result = await handleWrite(ctx, { method: 'POST', type, idRaw, body: parsed.body, variantLocale });
+          } catch {
+            result = errorResponse(500, 'internal error');
+          }
+          corkSend(res, aborted, result);
+        })();
+      });
+    });
+    const dataWrite = (method: string, perm: string, hasId: boolean) => (res: uWS.HttpResponse, req: uWS.HttpRequest): void => {
+      const type = req.getParameter(0) ?? '';
+      const idRaw = hasId ? (req.getParameter(1) ?? '') : '';
+      gate(res, req, perm, true, (raw, aborted) => {
+        const parsed = parseBody(raw);
+        if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+        void (async () => {
+          let result: CoreResponse;
+          try {
+            result = await handleWrite(ctx, { method, type, idRaw, body: parsed.body });
+          } catch {
+            result = errorResponse(500, 'internal error');
+          }
+          corkSend(res, aborted, result);
+        })();
+      });
+    };
+    app.post('/:type', dataWrite('POST', 'content.create', false));
+    app.put('/:type/:id', dataWrite('PUT', 'content.update', true));
+    app.del('/:type/:id', dataWrite('DELETE', 'content.delete', true));
 
     // be-04 MEDIA — asset endpoints under the `/_files` literal prefix. A leading underscore is illegal
     // in an api_id (validateFieldName / deriveTableName), so `_files` can NEVER collide with a real
-    // `/:type`; uWS also matches a static segment over a `:param`. Registered only when writes are enabled
-    // (a read-only server has no asset endpoints; they fall to any('/*') -> 404).
+    // `/:type`; uWS also matches a static segment over a `:param`. The UPLOAD (POST) + DELETE are GATED on
+    // `media.upload`; the GET reads stay PUBLIC.
     const fileCtx: FileContext = { sql: store.sql, provider: getStorageProvider() };
-    app.post('/_files/upload', (res, req) => handleUploadRoute(res, req, fileCtx));
+    // GATED upload (`media.upload`): read the content-type header SYNC (multipart boundary), buffer the
+    // body (up to uploadMaxBytes) while resolving auth in parallel via gateUpload, then on allow parse the
+    // buffered multipart through busboy and dispatch the core.
+    app.post('/_files/upload', (res, req) => {
+      const contentType = req.getHeader('content-type') ?? '';
+      gateUpload(res, req, contentType, (raw, aborted) => {
+        parseMultipartBuffer(contentType, raw, (parsed) => {
+          void (async () => {
+            if (!parsed.ok) return corkSend(res, aborted, errorResponse(parsed.status, parsed.message));
+            let result: CoreResponse;
+            try {
+              result = await handleUpload(fileCtx, parsed.upload);
+            } catch {
+              result = errorResponse(500, 'internal error');
+            }
+            corkSend(res, aborted, result);
+          })();
+        });
+      });
+    });
     app.get('/_files', (res, req) => handleFilesRoute(res, req, 'GET', false, fileCtx));
     app.get('/_files/:id', (res, req) => handleFilesRoute(res, req, 'GET', true, fileCtx));
-    app.del('/_files/:id', (res, req) => handleFilesRoute(res, req, 'DELETE', true, fileCtx));
+    // GATED delete (`media.upload`): a delete is a mutation. Capture the id sync, gate (bodyless), dispatch.
+    app.del('/_files/:id', (res, req) => {
+      const idRaw = req.getParameter(0) ?? '';
+      gate(res, req, 'media.upload', false, (_raw, aborted) => {
+        void (async () => {
+          let result: CoreResponse;
+          try {
+            if (!/^(0|[1-9]\d*)$/.test(idRaw)) result = errorResponse(404, 'not found');
+            else result = await handleDeleteFile(fileCtx, Number(idRaw));
+          } catch {
+            result = errorResponse(500, 'internal error');
+          }
+          corkSend(res, aborted, result);
+        })();
+      });
+    });
   }
 
   // Everything else (root, non-GET on a known route, deeper paths): let the core decide the status

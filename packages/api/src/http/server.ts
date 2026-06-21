@@ -144,13 +144,16 @@ export async function start(port: number): Promise<void> {
   // off-heap (ArrayBuffer-backed); single instance, so eviction is a local delete.
   let auth: ReturnType<typeof buildAuth>;
   const sessionCache = new SessionCache(() => auth);
-  auth = buildAuth({ sessionEvictor: sessionCache });
   const rbac = new RbacRegistry(store.sql);
+  // be-09b — the auth instance closes over BOTH the session evictor AND the first-admin bootstrap deps:
+  // `sql` (the boot store handle) + `rbacInvalidate` (a thunk to rbac.rebuild(), built before auth like the
+  // sessionEvictor cycle-breaker). The `user.create.after` hook promotes the first-ever sign-up to
+  // super-admin under an advisory lock, then rebuilds RBAC iff a grant landed.
+  auth = buildAuth({ sessionEvictor: sessionCache, sql: store.sql, rbacInvalidate: () => rbac.rebuild() });
   await rbac.rebuild();
-  void sessionCache;
-  void rbac;
 
-  const server = createServer(engine, store, registry, undefined, auth); // store+registry enable writes; auth mounts /auth/*
+  // store+registry enable writes; auth mounts /auth/*; sessionCache+rbac gate the mutating routes (be-09b).
+  const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac);
   await server.listen(port);
   const rows = engine.has('article') ? engine.rowCount('article') : 0;
   console.log(`ready on ${port} (${rows} article rows from postgres)`);

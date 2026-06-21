@@ -111,10 +111,11 @@ export async function globalSetup(): Promise<void> {
         const goldenProbe = postgres(goldenUrlFrom(adminUri), { max: 1, onnotice: () => {} });
         let drift = false;
         try {
-          // Sentinel = the LATEST table the consolidated init added (be-09a better-auth `user`). Bump this
-          // to the newest init-added table on every edit so a reused/stale golden is dropped + rebuilt.
-          const t = await goldenProbe`SELECT to_regclass('public."user"') AS reg`;
-          drift = t[0]?.reg === null;
+          // Sentinel = the LATEST schema/seed the consolidated init added. Bump this on every init edit so
+          // a reused/stale golden is dropped + rebuilt. be-09b seeds the default RBAC roles, so probe for
+          // the `super-admin` role row — present iff the golden was migrated from the current (seeded) init.
+          const t = await goldenProbe`SELECT to_regclass('public."user"') AS reg, EXISTS (SELECT 1 FROM "roles" WHERE name = 'super-admin') AS seeded`;
+          drift = t[0]?.reg === null || t[0]?.seeded !== true;
         } catch {
           drift = true;
         } finally {
