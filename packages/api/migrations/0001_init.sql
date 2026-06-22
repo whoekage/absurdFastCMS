@@ -217,7 +217,8 @@ INSERT INTO "permissions" ("action") VALUES
   ('content.publish'),
   ('builder.manage'),   -- content-type + component-type mutations
   ('media.upload'),
-  ('team.manage')       -- be-09f: manage the team (list/add/suspend/role/remove); super-admin only this slice
+  ('team.manage'),      -- be-09f: manage the team (list/add/suspend/role/remove); super-admin only this slice
+  ('token.manage')      -- be-09c: create/revoke API keys for ANOTHER user (cross-user admin path); super-admin only
 ON CONFLICT ("action") DO NOTHING;
 
 INSERT INTO "roles" ("name") VALUES

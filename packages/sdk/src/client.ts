@@ -122,6 +122,15 @@ export interface ClientOptions {
    */
   token?: string | undefined;
   /**
+   * be-09c — a STATIC API KEY. When set, the client sends it in the `x-api-key` header on every request
+   * (the EXACT header the @absurd/api server's api-key auth reads — `Authorization: Bearer` is NOT read by
+   * the api-key plugin). Mutable at runtime via {@link AbsurdClient.setApiKey}. An API key authenticates
+   * as the KEY OWNER with the key's scope (owner RBAC ∩ token scope). Orthogonal to {@link token}: the
+   * server resolves a session cookie OR an api key, never both — set whichever credential you hold.
+   * {@link getHeaders} is merged last, so a dynamic provider can still override `x-api-key`.
+   */
+  apiKey?: string | undefined;
+  /**
    * Slice 9.1 — optional per-request header provider (the formal auth/token seam — see
    * {@link HeaderProvider}). Its headers are merged AFTER the built-in ones AND after the {@link token}
    * header (so it can override `content-type` / `authorization` if it really wants to). May be async.
@@ -529,6 +538,8 @@ export class AbsurdClient {
   protected readonly fetchImpl: typeof fetch;
   /** Slice 9.1 — the static bearer token (mutable via {@link setToken}); `undefined` = send no `Authorization`. */
   protected token: string | undefined;
+  /** be-09c — the static API key (mutable via {@link setApiKey}); `undefined` = send no `x-api-key`. */
+  protected apiKey: string | undefined;
   /** Optional per-request header provider (auth seam). */
   protected readonly getHeaders: HeaderProvider | undefined;
   /** Slice 9.2 — optional 401 hook (token-refresh / redirect seam). */
@@ -575,6 +586,7 @@ export class AbsurdClient {
     this.fetchImpl = resolved === globalThis.fetch ? resolved.bind(globalThis) : resolved;
 
     this.token = options.token;
+    this.apiKey = options.apiKey;
     this.getHeaders = options.getHeaders;
     this.onUnauthorized = options.onUnauthorized;
     this.onRequest = options.onRequest;
@@ -596,6 +608,15 @@ export class AbsurdClient {
    */
   setToken(token: string | undefined): void {
     this.token = token;
+  }
+
+  /**
+   * be-09c — set (or clear) the static API key AFTER construction. Subsequent requests carry it in the
+   * `x-api-key` header (the exact header @absurd/api reads), authenticating as the key OWNER with the key's
+   * scope. Pass `undefined` to drop the credential. Orthogonal to {@link setToken} (session bearer).
+   */
+  setApiKey(apiKey: string | undefined): void {
+    this.apiKey = apiKey;
   }
 
   /**
@@ -629,6 +650,9 @@ export class AbsurdClient {
       // Slice 9.1 — the static-token slot: `Authorization: Bearer <token>`. getHeaders (below) merges
       // last so a dynamic provider can still override `authorization` for the rotating-token case.
       if (this.token !== undefined) headers['authorization'] = `Bearer ${this.token}`;
+      // be-09c — the static API-key slot: `x-api-key` (the exact header @absurd/api reads). getHeaders
+      // (below) merges last so a dynamic provider can still override it.
+      if (this.apiKey !== undefined) headers['x-api-key'] = this.apiKey;
       if (this.getHeaders) {
         const extra = await this.getHeaders();
         for (const key in extra) headers[key] = extra[key]!;
@@ -1011,6 +1035,7 @@ export class AbsurdClient {
     const headers: Record<string, string> = {};
     // NO content-type here — fetch derives `multipart/form-data; boundary=...` from the FormData body.
     if (this.token !== undefined) headers['authorization'] = `Bearer ${this.token}`;
+    if (this.apiKey !== undefined) headers['x-api-key'] = this.apiKey; // be-09c — the api-key slot
     if (this.getHeaders) {
       const extra = await this.getHeaders();
       for (const key in extra) headers[key] = extra[key]!;

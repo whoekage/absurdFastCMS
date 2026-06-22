@@ -149,7 +149,18 @@ export function buildAuth(opts: BuildAuthOptions = {}) {
     // adminRoles, so a body-supplied role confers ZERO lifecycle authority AND zero CMS authority). NO
     // impersonation surface is exposed (scope fence). The plugin's columns (role/banned/banReason/banExpires
     // on `user`, impersonatedBy on `session`) are folded into migrations/0001_init.sql.
-    plugins: [apiKey(), admin({ adminRoles: ['super-admin'], defaultRole: 'user', roles: ADMIN_ROLES })],
+    // be-09c — API TOKENS. Keep hashing ON (SHA-256 at rest — default; we do NOT set disableKeyHashing) and
+    // the default `x-api-key` header. `enableMetadata:true` lets us round-trip scope/metadata. The scope is a
+    // `Record<resource, action[]>` — we keep ALL CMS perms in ONE `cms` resource bucket. `defaultPermissions`
+    // is the EMPTY object: a key minted with NO explicit scope grants NOTHING beyond the runtime ∩ owner rule
+    // (NEVER a silent full-access `*`). RATE LIMIT is DISABLED: the default (10 req / 24h) would throttle a
+    // server-to-server token after 10 calls; quota/throttling is a separate concern, out of this slice. The
+    // create/scope path is server-only (we pass `userId` + `permissions` via a pure server `auth.api` call —
+    // never proxying a client body), and `userId` is schema-server-only upstream (neutralizes CVE-2025-61928).
+    plugins: [
+      apiKey({ enableMetadata: true, rateLimit: { enabled: false }, permissions: { defaultPermissions: {} } }),
+      admin({ adminRoles: ['super-admin'], defaultRole: 'user', roles: ADMIN_ROLES }),
+    ],
     // better-auth GENERATES the text primary keys (`user.id`, `session.id`, ...): the folded schema's PKs
     // are `text ... primary key` with NO database default, so the app MUST supply the id. (An earlier
     // `generateId:false` here made better-auth defer to a non-existent DB default and every insert 422'd

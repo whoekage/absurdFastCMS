@@ -113,16 +113,18 @@ export async function globalSetup(): Promise<void> {
         try {
           // Sentinel = the LATEST schema/seed the consolidated init added. Bump this on every init edit so
           // a reused/stale golden is dropped + rebuilt. be-09b seeds the default RBAC roles; be-09f adds the
-          // `team` table + the `team.manage` permission — probe for ALL of: the user table, the super-admin
-          // role, the `team` relation, and the `team.manage` permission. Missing any → drift → drop & rebuild
-          // from the current init.
+          // `team` table + the `team.manage` permission; be-09c adds the `token.manage` permission — probe for
+          // ALL of: the user table, the super-admin role, the `team` relation, the `team.manage` permission,
+          // AND the `token.manage` permission. Missing any → drift → drop & rebuild from the current init.
           const t = await goldenProbe`
             SELECT to_regclass('public."user"') AS reg,
                    to_regclass('public."team"') AS team_reg,
                    EXISTS (SELECT 1 FROM "roles" WHERE name = 'super-admin') AS seeded,
-                   EXISTS (SELECT 1 FROM "permissions" WHERE action = 'team.manage') AS team_perm
+                   EXISTS (SELECT 1 FROM "permissions" WHERE action = 'team.manage') AS team_perm,
+                   EXISTS (SELECT 1 FROM "permissions" WHERE action = 'token.manage') AS token_perm
           `;
-          drift = t[0]?.reg === null || t[0]?.team_reg === null || t[0]?.seeded !== true || t[0]?.team_perm !== true;
+          drift = t[0]?.reg === null || t[0]?.team_reg === null || t[0]?.seeded !== true
+            || t[0]?.team_perm !== true || t[0]?.token_perm !== true;
         } catch {
           drift = true;
         } finally {
