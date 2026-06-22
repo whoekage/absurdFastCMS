@@ -1116,6 +1116,28 @@ export class StringColumn implements Column {
     return this.interner.decode(this.codes[row]!);
   }
 
+  /**
+   * The raw per-row dictionary codes (a view over the live rows) — the STRING sorted index reads this
+   * to build its per-row integer sort key `rank[code[row]]`, never `at()`. Mirrors `I64Column.rawData`.
+   */
+  rawCodes(): Int32Array {
+    return this.codes.subarray(0, this.length);
+  }
+
+  /** Distinct interned strings (D, the dictionary size) — the string sorted index ranks these. */
+  distinctCount(): number {
+    return this.interner.size();
+  }
+
+  /**
+   * Decode dictionary `code` to its exact stored string. The string sorted index walks `0..D-1` once
+   * per build to rank the distinct values; this is a transient decode (no retained heap `string[]`),
+   * the same shape as `ensureRawTrigrams` / the brute scan use.
+   */
+  decodeCode(code: number): string {
+    return this.interner.decode(code);
+  }
+
   scan(op: ScanOp, value: unknown, out: Bitset): void {
     const codes = this.codes;
     const n = this.length;

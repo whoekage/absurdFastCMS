@@ -16,6 +16,7 @@ import {
 } from './column.ts';
 import { EqIndex } from './indexes/eq.index.ts';
 import { SortedIndex, type SortDir } from './indexes/sorted.index.ts';
+import { StringSortedIndex } from './indexes/string-sorted.index.ts';
 import {
   CompositeSortedIndex,
   type Boundary,
@@ -175,6 +176,14 @@ export class Table {
   private readonly eqIndexes = new Map<string, EqIndex>();
   private readonly sortedIndexes = new Map<string, SortedIndex>();
   /**
+   * Sorted indexes over `string` columns — the dict-rank structure that makes ORDER BY a string
+   * column fast (be-22c). Kept in a SEPARATE map from the numeric `sortedIndexes` because a string
+   * index only serves the OFFSET/LIMIT ORDER BY path (`ensureBuilt`/`forEachOrdered`), NEVER the
+   * numeric range/between/count slices — so the numeric range path stays byte-identical and a string
+   * index can never be pulled into a range scan. The `query()` sort fast-path consults BOTH maps.
+   */
+  private readonly stringSortedIndexes = new Map<string, StringSortedIndex>();
+  /**
    * Lazily-built MULTI-KEY seekable indexes, keyed by the canonical resolved-sort spec string.
    * Client-driven, so an LRU cap bounds the count (a DoS guard against unbounded distinct specs).
    * An insert marks every built composite index dirty (see {@link insert}).
@@ -273,6 +282,14 @@ export class Table {
    */
   createSortedIndex(field: string): void {
     const col = this.column(field);
+    // ADDITIVE: a `string` column gets the dict-rank StringSortedIndex (be-22c) — registered in the
+    // separate `stringSortedIndexes` map so the numeric/date branch below stays byte-identical. It
+    // produces the IDENTICAL row order the numeric sorted-index path produces (the engine's live
+    // ORDER BY oracle), just fast. (`text`/arena columns have no dictionary to rank — follow-up.)
+    if (col.type === 'string') {
+      this.stringSortedIndexes.set(field, new StringSortedIndex());
+      return;
+    }
     if (
       col.type !== 'i32' &&
       col.type !== 'f64' &&
@@ -280,7 +297,7 @@ export class Table {
       col.type !== 'i64' &&
       col.type !== 'decimal'
     ) {
-      throw new Error(`sorted index requires a numeric, date, i64, or decimal field, "${field}" is ${col.type}`);
+      throw new Error(`sorted index requires a numeric, date, i64, decimal, or string field, "${field}" is ${col.type}`);
     }
     this.sortedIndexes.set(field, new SortedIndex());
   }
@@ -312,6 +329,10 @@ export class Table {
       if (eq !== undefined) eq.add(col.at(at), rowId);
       const sorted = this.sortedIndexes.get(f.name);
       if (sorted !== undefined) sorted.markDirty();
+      // A new distinct string shifts the dict ranks, so the string sorted index must rebuild on the
+      // next query — same lazy dirty policy as the numeric index above.
+      const strSorted = this.stringSortedIndexes.get(f.name);
+      if (strSorted !== undefined) strSorted.markDirty();
     }
     // A new row invalidates every built composite (multi-key) index; they rebuild lazily on the
     // next keyset query. (isDirty also catches len !== rowCount, so this is belt-and-suspenders.)
@@ -399,12 +420,18 @@ export class Table {
     for (const [field, idx] of this.sortedIndexes) {
       idx.ensureBuilt(this.column(field), this.rowCount);
     }
+    for (const [field, idx] of this.stringSortedIndexes) {
+      idx.ensureBuilt(this.column(field), this.rowCount);
+    }
     for (const idx of this.eqIndexes.values()) idx.warm();
   }
 
   /** Test/introspection: true if any index on the table would rebuild on the next read. */
   hasDirtyIndex(): boolean {
     for (const idx of this.sortedIndexes.values()) {
+      if (idx.isDirty(this.rowCount)) return true;
+    }
+    for (const idx of this.stringSortedIndexes.values()) {
       if (idx.isDirty(this.rowCount)) return true;
     }
     for (const idx of this.eqIndexes.values()) {
@@ -796,22 +823,28 @@ export class Table {
     const limit = opts.limit ?? Infinity;
     const sort = opts.sort ?? [];
 
-    if (sort.length === 1 && this.sortedIndexes.has(sort[0]!.field)) {
+    if (sort.length === 1) {
       const key = sort[0]!;
-      const idx = this.sortedIndexes.get(key.field)!;
-      idx.ensureBuilt(this.column(key.field), this.rowCount);
-      const out: number[] = [];
-      let skipped = 0;
-      idx.forEachOrdered(key.dir, (row) => {
-        if (!matches.get(row)) return true;
-        if (skipped < offset) {
-          skipped++;
-          return true;
-        }
-        out.push(row);
-        return out.length < limit;
-      });
-      return out;
+      // A single-key ORDER BY uses a sorted index if one exists — numeric/date via `sortedIndexes`,
+      // or `string` via `stringSortedIndexes` (be-22c). Both expose the identical ensureBuilt +
+      // forEachOrdered surface and the early-termination walk, so the string case is byte-identical
+      // in behavior to the numeric case here; only the structure that produces the permutation differs.
+      const idx = this.sortedIndexes.get(key.field) ?? this.stringSortedIndexes.get(key.field);
+      if (idx !== undefined) {
+        idx.ensureBuilt(this.column(key.field), this.rowCount);
+        const out: number[] = [];
+        let skipped = 0;
+        idx.forEachOrdered(key.dir, (row) => {
+          if (!matches.get(row)) return true;
+          if (skipped < offset) {
+            skipped++;
+            return true;
+          }
+          out.push(row);
+          return out.length < limit;
+        });
+        return out;
+      }
     }
 
     if (sort.length > 0) {

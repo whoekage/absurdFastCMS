@@ -99,8 +99,10 @@ async function main(): Promise<void> {
   t.createEqIndex('category'); // mid-card (500) — fine
   t.createSortedIndex('views');
   t.createSortedIndex('created_at');
-  // title is NOT eq-indexed on purpose (same ceiling); it serves contains/affix/sort via the off-heap
-  // dictionary + the opt-in trigram accelerator.
+  // title is NOT eq-indexed on purpose (same ceiling); it serves contains/affix via the off-heap
+  // dictionary + the opt-in trigram accelerator. It DOES get a sorted index (be-22c): the dict-rank
+  // StringSortedIndex makes ORDER BY title fast (Finding #5 was 2169 ms via the brute comparator).
+  t.createSortedIndex('title');
 
   const rng = lcg(1);
   const base = Date.UTC(2020, 0, 1);
