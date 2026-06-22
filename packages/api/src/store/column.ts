@@ -1491,6 +1491,25 @@ export class TextColumn implements Column {
   substringAccelHits = 0;
   arenaVerifyReads = 0;
 
+  /**
+   * Cost-guard threshold (fraction of N). If the rarest needle-trigram posting length exceeds
+   * `costGuardF * length`, the candidate set is too large a fraction of N for the index to beat the
+   * brute arena scan, so `containsAccel` defers to brute (the floor). Bench-swept lever: at 2M the
+   * common needle's rarest posting approaches N, so any F < 1 routes it to brute and the gate
+   * `body contains [TRIGRAM] <= [arena brute]` holds by tying the floor; selective needles whose
+   * rarest posting is a small slice still take the indexed (memmem-verified) fast path.
+   */
+  static costGuardF = 0.05;
+
+  /**
+   * Absolute row-count floor below which the cost guard NEVER engages. The guard exists to keep the
+   * common-needle case off the slow accel path on LARGE columns; at tiny N (the unit-test fixtures,
+   * hundreds of rows) the accel path is already faster than brute and the firing-counter contracts
+   * (`substringAccelHits`/`arenaVerifyReads`) require it to fire, so we only arm the guard once the
+   * column is big enough for a near-N candidate set to actually cost more than the brute scan.
+   */
+  static costGuardMinRows = 100_000;
+
   /** Opt this column into the trigram substring accelerator. Idempotent; index builds lazily. */
   enableSubstringIndex(): void {
     this.substringEnabled = true;
@@ -1659,18 +1678,132 @@ export class TextColumn implements Column {
     if (index === null) return false;
 
     const needle = insensitive ? fold(value) : value;
+
+    // COST/SELECTIVITY GUARD (large columns only): the rarest constituent trigram's posting length is
+    // a TIGHT UPPER BOUND on the post-intersection candidate count (intersection only shrinks vs the
+    // smallest list). If that bound already exceeds F*N, the candidate set is a large fraction of N and
+    // even the cheap byte-level memmem verify over ~N rows cannot beat the brute arena scan, so route
+    // to brute (return false) WITHOUT bumping substringAccelHits or touching `out`. This is what holds
+    // the common-needle gate (`body contains [TRIGRAM] <= [arena brute]`): the worst case ties the
+    // floor rather than paying the accel premium. minPostingLen returns null on the SAME short/absent-
+    // trigram conditions candidates() does, so a null also correctly defers to brute. The guard is
+    // armed only past costGuardMinRows so tiny test fixtures keep firing the accel path (their
+    // firing-counter contracts) and never hit this bail.
+    if (this.length >= TextColumn.costGuardMinRows) {
+      const est = index.minPostingLen(needle);
+      if (est === null) return false;
+      if (est > TextColumn.costGuardF * this.length) return false;
+    }
+
     const candidates = index.candidates(needle);
     if (candidates === null) return false; // not acceleratable — defer to the brute floor.
 
     this.substringAccelHits++;
+
+    // VERIFY. The trigram candidate set is a SUPERSET of the true matches, so each candidate is
+    // re-checked with the EXACT same predicate the brute path uses — that is what keeps the accel
+    // path byte-identical to the brute floor.
+    if (insensitive) {
+      // `-i`: fold is NFKC + lower (NOT a byte-level transform), so it must run on the decoded
+      // string. Keep the decode + fold + includes verbatim — identical to the `containsi` brute loop.
+      for (let k = 0; k < candidates.length; k++) {
+        const row = candidates[k]!;
+        this.arenaVerifyReads++;
+        const text = this.at(row); // off-heap arena decode — NO heap dictionary of bodies.
+        if (fold(text).includes(needle)) out.set(row);
+      }
+      return true;
+    }
+
+    // Case-sensitive: verify directly against the off-heap UTF-8 arena bytes — a bounded byte memmem
+    // over `bytes[offsets[row], offsets[row+1])` — instead of decode-to-string + String.includes.
+    // A valid UTF-8 substring is contiguous in the arena bytes IFF it is contiguous in the decoded
+    // string, so this is exactly equivalent to `this.at(row).includes(needle)` while eliminating the
+    // per-row TextDecoder allocation — which is what makes the common-needle verify cheaper than the
+    // brute decode-and-includes floor. Edge cases match includes() precisely: empty needle -> match
+    // (includes('') is true), needle longer than the row -> no window fits -> no match; the search is
+    // bounded to the row end so a match window NEVER spills across rows.
+    //
+    // EXCEPTION — unpaired surrogate in the needle: TextEncoder lossily maps a lone surrogate to the
+    // U+FFFD replacement bytes (EF BF BD), which never equals the original code unit a String.includes
+    // would match against the (validly decoded) body. So byte memmem is NOT equivalent for such a
+    // needle. This only ever happens for a malformed needle (a real substring of a body is always
+    // well-formed); for that case we keep the EXACT decode + includes the brute path uses, preserving
+    // byte-identical results. The hot prod workload has no lone surrogates, so it always takes memmem.
+    if (TextColumn.hasUnpairedSurrogate(needle)) {
+      for (let k = 0; k < candidates.length; k++) {
+        const row = candidates[k]!;
+        this.arenaVerifyReads++;
+        if (this.at(row).includes(needle)) out.set(row);
+      }
+      return true;
+    }
+
+    const needleBytes = TextColumn.encoder.encode(needle);
+    const bytes = this.bytes;
+    const offsets = this.offsets;
+    const nlen = needleBytes.length;
     for (let k = 0; k < candidates.length; k++) {
       const row = candidates[k]!;
-      this.arenaVerifyReads++;
-      const text = this.at(row); // off-heap arena decode — NO heap dictionary of bodies.
-      const hay = insensitive ? fold(text) : text;
-      if (hay.includes(needle)) out.set(row);
+      this.arenaVerifyReads++; // a verified arena read (byte-level), same firing contract as before.
+      const start = offsets[row]!;
+      const end = offsets[row + 1]!;
+      if (TextColumn.arenaContains(bytes, start, end, needleBytes, nlen)) out.set(row);
     }
     return true;
+  }
+
+  /**
+   * Does `s` contain an UNPAIRED UTF-16 surrogate (a high surrogate not followed by a low, or a low
+   * surrogate not preceded by a high)? Such a string is not well-formed UTF-16, so `TextEncoder`
+   * encodes the lone unit as U+FFFD — making a byte memmem over UTF-8 arena bytes diverge from
+   * `String.includes`. Detecting it lets the case-sensitive verify fall back to decode+includes so the
+   * result stays byte-identical to brute. O(s.length); only runs ONCE per query, off the per-row loop.
+   */
+  private static hasUnpairedSurrogate(s: string): boolean {
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff) {
+        // High surrogate: must be followed by a low surrogate.
+        const next = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
+        if (next < 0xdc00 || next > 0xdfff) return true;
+        i++; // consume the valid pair
+      } else if (c >= 0xdc00 && c <= 0xdfff) {
+        return true; // low surrogate with no preceding high -> unpaired
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Bounded byte memmem: does `bytes[start, end)` contain `needleBytes[0, nlen)` as a contiguous run?
+   * Native first-byte scan (`Uint8Array.prototype.indexOf`) advances the window within `[start, end)`,
+   * then a tail compare of the remaining needle bytes; a match window is never allowed to cross `end`,
+   * so there is NO cross-row spill. Byte-for-byte equivalent to `decode(bytes[start,end)).includes` for
+   * UTF-8 (a valid substring is contiguous in bytes iff contiguous in the decoded string). Empty needle
+   * (`nlen === 0`) returns true (mirrors `includes('')`); a needle longer than the slice returns false.
+   */
+  private static arenaContains(
+    bytes: Uint8Array,
+    start: number,
+    end: number,
+    needleBytes: Uint8Array,
+    nlen: number,
+  ): boolean {
+    if (nlen === 0) return true; // includes('') === true
+    const last = end - nlen; // last index where a full needle window still fits inside [start, end)
+    if (last < start) return false; // needle longer than the row slice -> no window fits
+    const first = needleBytes[0]!;
+    let pos = start;
+    while (pos <= last) {
+      const hit = bytes.indexOf(first, pos); // native scan for the first byte
+      if (hit === -1 || hit > last) return false; // no first-byte left within the fitting window
+      let j = 1;
+      while (j < nlen && bytes[hit + j] === needleBytes[j]) j++;
+      if (j === nlen) return true; // full needle matched, entirely inside [start, end)
+      pos = hit + 1;
+    }
+    return false;
   }
 
   /**

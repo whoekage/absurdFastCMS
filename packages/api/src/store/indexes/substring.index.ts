@@ -210,6 +210,38 @@ export class SubstringIndex {
     return candidates;
   }
 
+  /**
+   * COST GUARD (additive; no allocation). Returns a TIGHT UPPER BOUND on the post-intersection
+   * candidate count for `needle` — the length of its RAREST constituent trigram posting — WITHOUT
+   * materializing or intersecting any posting. The intersection of the needle's trigram postings is
+   * a subset of its smallest member, so `min(posting length)` >= the true candidate count; if that
+   * minimum already exceeds an affordable fraction of N, the index cannot beat the brute floor and
+   * the caller should defer to brute.
+   *
+   * Mirrors the {@link candidates} resolve loop EXACTLY (same `needle.length < 3` and absent-trigram
+   * `null` defer contract), so it preserves the identical "cannot accelerate" routing — it only adds
+   * a cheap pre-check. O(needle.length) Map lookups + int subtracts; no `sliceToArray`/`intersectSorted`.
+   *
+   * Returns `null` (defer to brute, same as {@link candidates}) when `needle.length < 3` or any
+   * trigram is absent; otherwise the minimum posting length over the needle's distinct trigrams.
+   */
+  minPostingLen(needle: string): number | null {
+    if (needle.length < MIN_TRIGRAM_LEN) return null;
+    const seen = new Set<string>();
+    const limit = needle.length - MIN_TRIGRAM_LEN;
+    let min = Infinity;
+    for (let i = 0; i <= limit; i++) {
+      const g = needle.slice(i, i + MIN_TRIGRAM_LEN);
+      if (seen.has(g)) continue;
+      seen.add(g);
+      const gid = this.trigramOf.get(g);
+      if (gid === undefined) return null; // absent trigram -> defer to brute (same as candidates()).
+      const len = this.offsets[gid + 1]! - this.offsets[gid]!;
+      if (len < min) min = len;
+    }
+    return min === Infinity ? null : min;
+  }
+
   /** Copy a posting slice (ascending sorted codes) into a plain array seed for intersection. */
   private sliceToArray(slice: { start: number; end: number }): number[] {
     const out: number[] = [];

@@ -46,8 +46,11 @@ page: ORDER BY created_at DESC LIMIT 25          0.1505    0.2177    0.3526    7
 deep offset: views DESC OFFSET 100k LIMIT 25     0.5069    0.6000    1.1540   52.9517   63.3555     2462
 full serialize: views DESC LIMIT 100             0.1673    0.2655    0.5592    5.6990    6.2345     3000
 page: ORDER BY title ASC LIMIT 25 [string sort]   2169.3457  (single call)
-title contains  [TRIGRAM]                       25.5845   27.0384   27.7478   27.7478   27.7478       59
-body contains   [TRIGRAM arena]                566.3488  687.2771  687.2771  687.2771  687.2771        3
+title contains  [TRIGRAM]                       26.1040   27.6031   29.6346   29.6346   29.6346       57   (~18× vs 474 dict brute; NOT regressed)
+body contains COMMON   [TRIGRAM arena, guard ON]    434.6013  434.7362  434.7362  434.7362  434.7362    4   (ties the 436 brute floor — no regression)
+body contains SELECTIVE [TRIGRAM arena, guard ON]     0.5400    0.6394    0.9268    1.1224    1.2497 2651   (~800× vs 436 brute — the indexed win)
+body contains COMMON   [TRIGRAM arena, guard OFF]   310.0779  645.7061  645.7061  645.7061  645.7061    4   (BEFORE: regresses — p90 646 > 436 brute)
+body contains SELECTIVE [TRIGRAM arena, guard OFF]    0.5385    0.5933    0.9466    1.2322    2.9005 2673
 ```
 (ms; cache disabled. Brute scans scale ~linearly with N — ~5× these at 10M.)
 
@@ -69,8 +72,21 @@ deep-offset 100k 0.5 ms. The serialize-on-write read thesis holds on raw compute
   SAME UTF-16 comparator, rank each code, key rows by `rank[code[row]]`, reuse the numeric stable i32 radix
   → ORDER BY title LIMIT 25 is ~1.5 µs p50. IDENTICAL order by construction (same comparator + '' null
   sentinel + stable tie-break); full suite 928/928 is the order oracle. Deep offset stays O(offset).
-- **4 (med) — the trigram accelerator HURTS on the `body` arena: 435 → 566 ms** (common needle → huge
-  candidate set → per-row arena verify costs more than brute). It helps `title` hugely (467 → 25.6 ms, 18×).
+- **4 — RESOLVED (be-22e).** The arena (`text`) trigram accelerator used to HURT on a COMMON needle:
+  `body contains [TRIGRAM arena]` 566 ms vs `body contains [arena brute]` 435 ms. ROOT CAUSE: TextColumn
+  trigram postings are over ROW IDS (no dict; bodies near-unique), so a common needle (here `ipsum dolor`,
+  present in EVERY body) → candidate set ≈ all N rows → decode+verify every candidate costs MORE than the
+  single brute pass. FIX: a COST GUARD in `TextColumn.containsAccel` — `SubstringIndex.minPostingLen(needle)`
+  returns the rarest needle-trigram posting length (a TIGHT upper bound on the post-intersection candidate
+  count, no allocation); if that bound exceeds `costGuardF * N` (5%), route the needle to the brute floor
+  (tying it) instead of paying the accel premium; armed only past `costGuardMinRows` (100k) so tiny test
+  fixtures keep firing the accel path. Verified candidates are checked via a bounded byte-level memmem
+  (`arenaContains`) directly over the off-heap UTF-8 arena (no per-row TextDecoder alloc), with a
+  decode+includes fallback only for a malformed (lone-surrogate) needle — byte-identical to brute either way.
+  MEASURED before/after at 2M (guard OFF reproduces the old behavior): COMMON `body contains` 646 ms (p90,
+  guard OFF, regresses) → 434.6 ms (guard ON, ties the 436 ms brute floor); SELECTIVE `body contains`
+  (`Body <i>:`, one row) 0.54 ms (~800× vs brute). The `title` (dict) trigram is UNCHANGED — still
+  474 → 26 ms (~18×). Rows are byte-identical to brute (text/string trigram + fuzz suites are the oracle).
 - **3 — RESOLVED.** `between` on a sorted-indexed column was ~9× slower than `gt` (17.7 vs 2.0 ms). ROOT
   CAUSE: a `>50%`-selectivity guard in `table.ts` routed the chosen `between`/`created_at` ranges (each
   matched >50% of rows) to the brute O(n) `Column.scan` instead of the sorted-index two-bound slice; `gt`

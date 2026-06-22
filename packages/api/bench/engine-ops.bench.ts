@@ -18,6 +18,7 @@
  */
 import { Engine } from '../src/store/engine.ts';
 import type { FieldDef } from '../src/store/table.ts';
+import { TextColumn } from '../src/store/column.ts';
 
 const N = Number(process.env.BENCH_N ?? 10_000_000);
 const STATUSES = ['draft', 'published', 'archived'];
@@ -188,13 +189,42 @@ async function main(): Promise<void> {
   }
 
   // ── SUBSTRING — TRIGRAM ACCELERATED (opt-in index) ──────────────────────────────────────────
+  // be-22e: the arena (text) trigram accelerator must NEVER be slower than its brute floor. The root
+  // cause it fixes: a COMMON needle (here `ipsum dolor`, present in EVERY body) yields a candidate set
+  // ~= all N rows, so decode+verify every candidate costs MORE than the single brute pass — the
+  // baseline measured `body contains [TRIGRAM arena]` 566 ms vs `body contains [arena brute]` 435 ms
+  // (Finding #4). The cost guard (`TextColumn.costGuardF`) compares the rarest needle-trigram posting
+  // length to F*N and routes a too-common needle to brute (tying the floor) WHILE a SELECTIVE needle
+  // (tiny rarest posting) still takes the fast indexed memmem-verify path. We measure BOTH selectivities,
+  // and capture the BEFORE (guard disabled = the old always-accelerate behavior) so the regression and
+  // its fix are visible in one table.
+  //
+  // `bodySelective` keys on the per-row unique `Body <i>:` prefix -> exactly ONE matching body, so its
+  // rarest trigram posting is ~1 row: maximally selective. `ipsum dolor` is in every body: maximally common.
+  const bodyCommon = 'ipsum dolor';
+  const bodySelective = `Body ${(N / 2) | 0}:`; // a single, real row's unique prefix
   t.enableSubstringIndex('title');
   t.enableSubstringIndex('body');
   // trigger lazy build + warm
   page([{ field: 'title', op: 'contains', value: 'topic 42' }]);
-  page([{ field: 'body', op: 'contains', value: 'ipsum dolor' }]);
+  page([{ field: 'body', op: 'contains', value: bodyCommon }]);
   measure('title contains  [TRIGRAM]', () => page([{ field: 'title', op: 'contains', value: 'topic 42' }]));
-  measure('body contains   [TRIGRAM arena]', () => page([{ field: 'body', op: 'contains', value: 'ipsum dolor' }]));
+
+  // AFTER (cost guard ON — the be-22e default). Common ties the brute floor; selective is much faster.
+  measure('body contains COMMON   [TRIGRAM arena, guard ON]', () => page([{ field: 'body', op: 'contains', value: bodyCommon }]));
+  measure('body contains SELECTIVE [TRIGRAM arena, guard ON]', () => page([{ field: 'body', op: 'contains', value: bodySelective }]));
+
+  // BEFORE (cost guard DISABLED — reproduces the pre-be-22e always-accelerate regression). Disabling
+  // the guard makes a common needle decode+verify ~N candidates again. Restored to ON afterwards.
+  const savedF = TextColumn.costGuardF;
+  const savedMin = TextColumn.costGuardMinRows;
+  TextColumn.costGuardF = Infinity; // never trips -> always take the accel path (old behavior)
+  TextColumn.costGuardMinRows = 0;
+  page([{ field: 'body', op: 'contains', value: bodyCommon }]); // re-warm under the disabled guard
+  measure('body contains COMMON   [TRIGRAM arena, guard OFF]', () => page([{ field: 'body', op: 'contains', value: bodyCommon }]));
+  measure('body contains SELECTIVE [TRIGRAM arena, guard OFF]', () => page([{ field: 'body', op: 'contains', value: bodySelective }]));
+  TextColumn.costGuardF = savedF;
+  TextColumn.costGuardMinRows = savedMin;
 
   // ── REPORT ──────────────────────────────────────────────────────────────────────────────────
   const fmt = (x: number) => x.toFixed(4).padStart(9);
