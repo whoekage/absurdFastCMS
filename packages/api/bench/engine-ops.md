@@ -26,9 +26,9 @@ ne status!=draft     [low-card]                 14.7295   15.0027   19.7553   25
 in status IN(2)      [eq-index]                  0.3245    0.3804    0.6737    1.3805    1.5658     3000
 notIn category(3)                               57.8879   58.6828   68.3253   68.3253   68.3253       26
 eqi status (folded)                             13.3730   13.6080   13.8240   59.9385   59.9385      109
-views > 500k        [sorted-index]               1.9906    2.1041    2.9088   15.1668   15.1668      714
-views BETWEEN       [sorted-index]              17.7237   17.9773   18.8461   18.8461   18.8461       85
-created_at BETWEEN  [sorted-index, date]        22.8693   23.1691   23.3235   23.3235   23.3235       66
+views > 500k        [sorted-index]               2.0148    2.1355    3.1454   64.6429   64.6429      682
+views BETWEEN       [sorted-index]               2.3780    2.5307    3.6160   76.8388   76.8388      582   (was 17.72; Finding #3 resolved)
+created_at BETWEEN  [sorted-index, date]         2.0099    2.1415   13.3846   39.1896   39.1896      688   (was 22.87)
 rating > 2.5        [f64 brute]                 21.2317   21.5371   27.4922   27.4922   27.4922       71
 price BETWEEN       [decimal brute]             22.5626   22.8252   23.3645   23.3645   23.3645       67
 bigid > mid         [i64 brute]                 17.6435   17.8960   18.3531   18.3531   18.3531       85
@@ -71,8 +71,16 @@ deep-offset 100k 0.5 ms. The serialize-on-write read thesis holds on raw compute
   sentinel + stable tie-break); full suite 928/928 is the order oracle. Deep offset stays O(offset).
 - **4 (med) — the trigram accelerator HURTS on the `body` arena: 435 → 566 ms** (common needle → huge
   candidate set → per-row arena verify costs more than brute). It helps `title` hugely (467 → 25.6 ms, 18×).
-- **3 (med) — `between` on a sorted-indexed column is ~9× slower than `gt`** (17.7 vs 2.0 ms): it collects
-  all matches before the LIMIT, while `gt` walks the sorted tail.
+- **3 — RESOLVED.** `between` on a sorted-indexed column was ~9× slower than `gt` (17.7 vs 2.0 ms). ROOT
+  CAUSE: a `>50%`-selectivity guard in `table.ts` routed the chosen `between`/`created_at` ranges (each
+  matched >50% of rows) to the brute O(n) `Column.scan` instead of the sorted-index two-bound slice; `gt`
+  at 50% hit the same guard but the bench's `views>500k` is <50% so it stayed on the slice. FIX: dropped the
+  four selectivity guards — a sorted-indexed column ALWAYS takes the two-bound slice
+  (`lowerBound(lo)..upperBound(hi)` for between; the single-bound `rangeSlice` for gt/gte/lt/lte), measured
+  faster than the scan at EVERY selectivity. `between` 17.72→2.38 ms (within ~0.36 ms of `gt` 2.01 ms);
+  `created_at between` 22.87→2.01 ms. The fill only builds the positional bitset SET — result ORDER is
+  decided downstream in `query()` regardless of which fill ran, so rows+order are byte-identical (sorted-
+  index test suite is the oracle). The `countRange*` methods stay (still used by the AND-probe `leadCount`).
 - **B (med) — write throughput collapses with exotic types**: `json`/`decimal`/`i64` force the type-aware
   row serializer (vs the fast `JSON.stringify` path), ~80k→8k rows/s, degrading with N (GC). Bulk-loading
   tens of millions of full-schema rows is impractical (10M ≈ 20 min).

@@ -221,9 +221,11 @@ test('radix-sorted index ORDER BY + range results match a plain (unindexed) tabl
 
 // --- Selectivity-guard fallback ---------------------------------------------------------------
 
-test('selectivity guard: a >50% range returns identical rows to the indexed slice path', () => {
-  // stock is i % 500, so a wide $between matches almost every row (>50%): force the guard's
-  // sequential-scan fallback and assert it equals both the unindexed scan and the brute oracle.
+test('wide range: a >50% range returns identical rows via the indexed slice path', () => {
+  // stock is i % 500, so a wide $between matches almost every row (>50%). The sorted-indexed
+  // column ALWAYS takes the two-bound slice now (the old >50% scan guard was removed once the
+  // slice was measured faster at every selectivity); assert it still equals both the unindexed
+  // scan and the brute oracle, row id for row id.
   const N = 4000;
   const plain = build(N, false);
   const indexed = build(N, true);
@@ -248,6 +250,96 @@ test('selectivity guard: a >50% range returns identical rows to the indexed slic
     assert.deepEqual(a, oracle, `unindexed ${op} ${JSON.stringify(value)}`);
     assert.deepEqual(b, oracle, `indexed-guard ${op} ${JSON.stringify(value)}`);
     assert.deepEqual(b, a, `guard path == scan path for ${op}`);
+  }
+});
+
+// --- IDENTICAL rows + ORDER through query() across every shape (the cardinal invariant) -------
+
+// After dropping the >50% scan guard a sorted-indexed column ALWAYS slices; the produced row SET
+// goes through the SAME query() order logic as the unindexed scan, so the visible rows+order must
+// be byte-identical in every shape. The unindexed table is the oracle. We assert on row ids where
+// the order is fully determined (no sort = ascending row-id; sort by the SAME col uses the index
+// walk which is total here because values are distinct), and on VALUES where a sort by ANOTHER
+// column has value ties whose stable tiebreak may differ between the two engines.
+test('range/between return identical rows+order via query() WITH/WITHOUT sort, same/other col, NULLs', () => {
+  const N = 6000;
+  // Distinct, non-monotonic key so the slice is scattered in row-id space (the real defect shape),
+  // a second sort column with ties, and a NULL every 997th row to exercise excludeNulls after fill.
+  const rng = lcg(7);
+  const perm: number[] = [];
+  for (let i = 0; i < N; i++) perm.push(i);
+  for (let i = N - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [perm[i], perm[j]] = [perm[j]!, perm[i]!]; }
+  const FIELDS2: FieldDef[] = [{ name: 'k', type: 'i32' }, { name: 'g', type: 'i32' }];
+  const indexed = new Table(FIELDS2);
+  const plain = new Table(FIELDS2);
+  indexed.createSortedIndex('k');
+  const nullRows = new Set<number>(); // track null rows explicitly: an i32 null reads back as sentinel 0
+  for (let i = 0; i < N; i++) {
+    const isNull = i % 997 === 0;
+    if (isNull) nullRows.add(i);
+    const row = { k: isNull ? null : perm[i]!, g: i % 50 };
+    indexed.insert(row);
+    plain.insert(row);
+  }
+  indexed.warmIndexes();
+
+  type Spec = { op: 'between' | 'gt' | 'gte' | 'lt' | 'lte'; value: number | [number, number] };
+  const specs: Spec[] = [
+    { op: 'between', value: [1000, 1010] },  // narrow
+    { op: 'between', value: [10, 5800] },     // wide
+    { op: 'between', value: [-100, 9999] },   // full
+    { op: 'between', value: [42, 42] },       // single point (inclusive both ends)
+    { op: 'between', value: [3000, 100] },    // reversed -> empty
+    { op: 'gt', value: 5000 },
+    { op: 'gte', value: 5000 },
+    { op: 'lt', value: 800 },
+    { op: 'lte', value: 800 },
+  ];
+  // Every order shape the mandate names: no sort (default row-id), sort SAME col asc/desc(+offset),
+  // sort OTHER col asc/desc, with and without a limit/offset.
+  const queryShapes = [
+    { name: 'no-sort default' },
+    { name: 'no-sort offset+limit', offset: 13, limit: 40 },
+    { name: 'no-sort no-limit', limit: undefined },
+    { name: 'sort k asc', sort: [{ field: 'k', dir: 'asc' as const }] },
+    { name: 'sort k desc', sort: [{ field: 'k', dir: 'desc' as const }] },
+    { name: 'sort k desc offset', sort: [{ field: 'k', dir: 'desc' as const }], offset: 7, limit: 25 },
+    { name: 'sort g asc', sort: [{ field: 'g', dir: 'asc' as const }] },
+    { name: 'sort g desc', sort: [{ field: 'g', dir: 'desc' as const }] },
+  ];
+  const kVal = (t: Table, r: number): number | null => t.column('k').at(r) as number | null;
+  for (const spec of specs) {
+    for (const shape of queryShapes) {
+      const filters = [{ field: 'k', op: spec.op, value: spec.value }];
+      const opts = { filters, sort: shape.sort, offset: shape.offset, limit: shape.limit };
+      const a = indexed.query(opts);
+      const b = plain.query(opts);
+      const label = `${spec.op} ${JSON.stringify(spec.value)} | ${shape.name}`;
+      // A sort by the OTHER column has value ties; assert on the visible VALUES (k then g), which
+      // must be identical even if a tie's stable row pick differs. Everywhere else the order is
+      // fully determined, so assert on row ids exactly.
+      if (shape.sort?.[0]?.field === 'g') {
+        assert.deepEqual(a.map((r) => [kVal(indexed, r), indexed.column('g').at(r)]),
+          b.map((r) => [kVal(plain, r), plain.column('g').at(r)]), `values ${label}`);
+      } else {
+        assert.deepEqual(a, b, `rows ${label}`);
+      }
+      // Cross-check the row SET against an independent brute oracle (and confirm NULLs are excluded).
+      const oracle: number[] = [];
+      for (let r = 0; r < N; r++) {
+        if (nullRows.has(r)) continue; // three-valued logic: a NULL never matches a range
+        const x = kVal(plain, r) as number;
+        let hit = false;
+        if (spec.op === 'between') { const [lo, hi] = spec.value as [number, number]; hit = x >= lo && x <= hi; }
+        else if (spec.op === 'gt') hit = x > (spec.value as number);
+        else if (spec.op === 'gte') hit = x >= (spec.value as number);
+        else if (spec.op === 'lt') hit = x < (spec.value as number);
+        else hit = x <= (spec.value as number);
+        if (hit) oracle.push(r);
+      }
+      // Only the unbounded no-sort default returns the full set in row-id order == oracle.
+      if (shape.name === 'no-sort default') assert.deepEqual([...a].sort((x, y) => x - y), oracle, `set ${label}`);
+    }
   }
 });
 

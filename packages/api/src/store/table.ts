@@ -493,29 +493,22 @@ export class Table {
         const col = this.column(p.field);
         const rawPair = p.value as [unknown, unknown];
         sorted.ensureBuilt(col, this.rowCount);
-        // Selectivity guard: a wide range matching > ~50% of rows does O(k) SCATTERED `out.set`
-        // (random in row-id space), which loses to the column scan's branch-predictable sequential
-        // O(n) pass. countRange is O(log n) from the bounds, so estimating is free.
+        // A sorted-indexed column ALWAYS takes the two-bound slice: `lowerBound(lo)..upperBound(hi)`
+        // is O(log n) to locate + O(k) to fill, and measured faster than the O(n) column scan at
+        // EVERY selectivity (incl. 100%). The ORDER of the result is decided downstream in query()
+        // independently of which fill ran, so the slice is byte-identical to the scan.
         if (col instanceof I64Column) {
           // int64-exact: coerce both bounds to the column's bigint mantissa, compare on bigint.
           const lo = this.i64Bound(col, rawPair[0]);
           const hi = this.i64Bound(col, rawPair[1]);
-          if (sorted.countRangeBetweenI64(lo, hi) * 2 > this.rowCount) {
-            col.scan('between', p.value, out);
-          } else {
-            sorted.fillBitsetBetweenI64(lo, hi, out);
-          }
+          sorted.fillBitsetBetweenI64(lo, hi, out);
         } else {
           // For a date column the bounds may be Date / ISO / number — coerce them to the same
           // canonical epoch-ms the column stored, so the binary search compares like with like.
           const isDate = col.type === 'date';
           const lo = isDate ? coerceDate(rawPair[0]) : (rawPair[0] as number);
           const hi = isDate ? coerceDate(rawPair[1]) : (rawPair[1] as number);
-          if (sorted.countRangeBetween(lo, hi) * 2 > this.rowCount) {
-            col.scan('between', p.value, out);
-          } else {
-            sorted.fillBitsetBetween(lo, hi, out);
-          }
+          sorted.fillBitsetBetween(lo, hi, out);
         }
         this.excludeNulls(p.field, out);
         return;
@@ -530,24 +523,18 @@ export class Table {
       if (sorted !== undefined) {
         const col = this.column(p.field);
         sorted.ensureBuilt(col, this.rowCount);
-        // Same >50% selectivity guard as $between: a non-selective range scatters more than it saves.
+        // Same single-bound slice as $between: gt = upperBound(v)..len, gte = lowerBound(v)..len,
+        // lt = 0..lowerBound(v), lte = 0..upperBound(v) — always taken on a sorted-indexed column,
+        // measured faster than the O(n) scan at every selectivity. Order is restored downstream.
         if (col instanceof I64Column) {
           const bound = this.i64Bound(col, p.value);
-          if (sorted.countRangeI64(p.op, bound) * 2 > this.rowCount) {
-            col.scan(p.op, p.value, out);
-          } else {
-            sorted.fillBitsetI64(p.op, bound, out);
-          }
+          sorted.fillBitsetI64(p.op, bound, out);
         } else {
           // A date column stores epoch-ms; coerce a Date / ISO / number bound to the same ms so the
           // sorted-index probe and the scan-fallback compare against the identical canonical value.
           const isDate = col.type === 'date';
           const bound = isDate ? coerceDate(p.value) : (p.value as number);
-          if (sorted.countRange(p.op, bound) * 2 > this.rowCount) {
-            col.scan(p.op, p.value, out);
-          } else {
-            sorted.fillBitset(p.op, bound, out);
-          }
+          sorted.fillBitset(p.op, bound, out);
         }
         this.excludeNulls(p.field, out);
         return;
