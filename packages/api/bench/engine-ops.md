@@ -57,11 +57,13 @@ is **0.23 ms p50**; eq on an indexed low-card column 0.23 ms; sorted-index range
 deep-offset 100k 0.5 ms. The serialize-on-write read thesis holds on raw compute.
 
 ## Findings / optimization targets (ranked)
-- **A (high) — EqIndex on a high-cardinality column overflows the V8 Map (~8.4M / 2^23 effective).**
-  `createEqIndex('id')` THROWS at >~8.4M rows (`id` is unique = N distinct). `eq.index.ts` interns values
-  into `codeOf = new Map`. Every table has a PK → this bites every large table. → off-heap EqIndex (be-22b).
-- **6 (high) — eq on a sorted-indexed (non-eq-indexed) column does NOT use the index → brute.** Point
-  lookup `id=X` is **8.1 ms** (O(n) scan), not a binary search. With A, PK point lookups are O(n) at scale.
+- **A — RESOLVED (be-22b, commit a80c18b).** EqIndex on a high-cardinality column used to overflow the V8
+  Map (~8.4M / 2^23). `eq.index.ts` now interns values via off-heap typed-array interners
+  (`value-interner.ts`): a dense unique integer key (the PK) uses direct addressing (no Map), so
+  `createEqIndex('id')` BUILDS at 10M+ (proven, EQINDEX_SCALE_TEST=1). Was: THROWS at >~8.4M.
+- **6 — RESOLVED (be-22b).** With the off-heap EqIndex on `id`, a point lookup uses the dense direct-address
+  path (eq-lookup ~2.8 ns in the candidate micro-bench), not the O(n) brute scan the baseline measured
+  (8.1 ms at 2M). (The baseline table above predates be-22b — re-run to capture the improved id lookup.)
 - **5 (high) — `ORDER BY <string>` is catastrophic: 2,169 ms for ONE call at 2M** (no string sorted index;
   brute comparator, O(n log n) string compares). `?sort=title` is effectively unusable at scale.
 - **4 (med) — the trigram accelerator HURTS on the `body` arena: 435 → 566 ms** (common needle → huge
