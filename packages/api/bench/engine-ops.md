@@ -64,8 +64,11 @@ deep-offset 100k 0.5 ms. The serialize-on-write read thesis holds on raw compute
 - **6 — RESOLVED (be-22b).** With the off-heap EqIndex on `id`, a point lookup uses the dense direct-address
   path (eq-lookup ~2.8 ns in the candidate micro-bench), not the O(n) brute scan the baseline measured
   (8.1 ms at 2M). (The baseline table above predates be-22b — re-run to capture the improved id lookup.)
-- **5 (high) — `ORDER BY <string>` is catastrophic: 2,169 ms for ONE call at 2M** (no string sorted index;
-  brute comparator, O(n log n) string compares). `?sort=title` is effectively unusable at scale.
+- **5 — RESOLVED (be-22c, commit 4279d4f).** `ORDER BY <string>` was 2,169 ms for ONE call at 2M (brute
+  comparator). New `StringSortedIndex` (dict-rank): sort the D distinct dictionary strings once with the
+  SAME UTF-16 comparator, rank each code, key rows by `rank[code[row]]`, reuse the numeric stable i32 radix
+  → ORDER BY title LIMIT 25 is ~1.5 µs p50. IDENTICAL order by construction (same comparator + '' null
+  sentinel + stable tie-break); full suite 928/928 is the order oracle. Deep offset stays O(offset).
 - **4 (med) — the trigram accelerator HURTS on the `body` arena: 435 → 566 ms** (common needle → huge
   candidate set → per-row arena verify costs more than brute). It helps `title` hugely (467 → 25.6 ms, 18×).
 - **3 (med) — `between` on a sorted-indexed column is ~9× slower than `gt`** (17.7 vs 2.0 ms): it collects
