@@ -1,5 +1,6 @@
 import { Bitset } from '../bitset.ts';
 import { buildCsr } from '../csr.ts';
+import { internerForType, type ValueInterner } from '../value-interner.ts';
 
 /**
  * Flat equality index: value -> row ids, built as a CSR (compressed-sparse-row) posting
@@ -23,9 +24,12 @@ import { buildCsr } from '../csr.ts';
  *     cost. This is the ONLY tier where dense planes are admissible (a plane per value on a
  *     mid/high-card column is a memory blowup — 500 distinct * 125 KB @1M = 62 MB of zeros).
  *   - 'csr' (MEDIUM/HIGH): CSR only; `$eq` is a slice scatter, `$in` is k slice scatters.
- *   - 'dict' (NEAR-UNIQUE, c/n > 0.5): the intern Map *is* the index; values are ~1 row each
- *     so the CSR slice is ~1 wide. Still backed by the same CSR (no separate code path), the
- *     strategy label just records that no plane/bucket structure would pay for itself here.
+ *   - 'dict' (NEAR-UNIQUE, c/n > 0.5): the off-heap intern dictionary *is* the index; values are
+ *     ~1 row each so the CSR slice is ~1 wide. Still backed by the same CSR (no separate code path),
+ *     the strategy label just records that no plane/bucket structure would pay for itself here. The
+ *     dictionary is an off-heap {@link ValueInterner} (a numeric dense direct-address fast path / an
+ *     open-addressing string interner / a trivial bool map), NOT a JS `Map` — so a high-cardinality
+ *     column (the unique `id` PK) no longer overflows V8's ~8.4M Map ceiling at build.
  *
  * Booleans are the textbook low-card tier: cardinality <= 2, always 'plane' (two planes).
  *
@@ -52,6 +56,8 @@ const DICT_RATIO_NUM = 2;
 export class EqIndex {
   /** Hint from the Table: a 2-value boolean column is always the dense-plane tier. */
   private readonly isBool: boolean;
+  /** The column's value type — selects the monomorphic off-heap interner ONCE (never per-value). */
+  private readonly colType: string;
 
   // Pending appends (value, row) accumulated since the last build.
   private readonly pendingValues: unknown[] = [];
@@ -61,16 +67,23 @@ export class EqIndex {
   // Built CSR state.
   private offsets = new Int32Array(0);
   private postings = new Int32Array(0);
-  /** value -> dense code, the intern map (also the near-unique tier's "index"). */
-  private codeOf = new Map<unknown, number>();
+  /**
+   * value -> dense code, the OFF-HEAP intern dictionary (also the near-unique tier's "index"). Replaces
+   * the old `Map<unknown, number>` that overflowed V8's ~8.4M (2^23) Map ceiling on a high-cardinality
+   * column (`createEqIndex('id')` THREW). A monomorphic structure chosen once per column by value type
+   * (numeric dense fast path / string interner / bool), all behind the {@link ValueInterner} contract.
+   */
+  private interner: ValueInterner;
   private codeCount = 0;
   private rowCount = 0;
   private strat: EqStrategy = 'csr';
   /** Dense planes parallel to codes, only present when `strat === 'plane'`. */
   private planes: Uint32Array[] | null = null;
 
-  constructor(isBool: boolean) {
-    this.isBool = isBool;
+  constructor(colType: string) {
+    this.colType = colType;
+    this.isBool = colType === 'bool';
+    this.interner = internerForType(colType);
   }
 
   /** Append a (value, row) pair. Buffered; the CSR rebuilds lazily on the next query. */
@@ -117,19 +130,17 @@ export class EqIndex {
     const rowsBuf = this.pendingRows;
     const n = values.length;
 
-    // 1. Intern every value to a dense code in one pass (`codeOf.size` = the next code to assign).
-    const codeOf = new Map<unknown, number>();
+    // 1. Intern every value to a dense code via the OFF-HEAP interner. Two phases: COLLECT every value
+    //    (the numeric dense path needs min/max before it can number codes), then FINALIZE to seal the
+    //    dictionary, then re-derive each row's code via `codeOf`. (For the string/bool interners codes
+    //    are decided eagerly in `intern` and `finalize` is a no-op — the re-derive is still correct, an
+    //    O(n) dictionary lookup.) A FRESH interner per rebuild — append-only, the rebuild is the reset.
+    const interner = internerForType(this.colType);
+    for (let i = 0; i < n; i++) interner.intern(values[i]);
+    interner.finalize();
     const codeForRow = new Int32Array(n);
-    for (let i = 0; i < n; i++) {
-      const v = values[i];
-      let code = codeOf.get(v);
-      if (code === undefined) {
-        code = codeOf.size;
-        codeOf.set(v, code);
-      }
-      codeForRow[i] = code;
-    }
-    const c = codeOf.size;
+    for (let i = 0; i < n; i++) codeForRow[i] = interner.codeOf(values[i])!;
+    const c = interner.size();
 
     // 2. Group row ids by code into the CSR (the shared counting sort). Walking inserts in order keeps
     //    each code's group ascending in row id for free.
@@ -137,7 +148,7 @@ export class EqIndex {
 
     this.offsets = offsets;
     this.postings = postings;
-    this.codeOf = codeOf;
+    this.interner = interner;
     this.codeCount = c;
     this.rowCount = n;
 
@@ -177,7 +188,7 @@ export class EqIndex {
    */
   rows(value: unknown): Int32Array | undefined {
     this.ensureBuilt();
-    const code = this.codeOf.get(value);
+    const code = this.interner.codeOf(value);
     if (code === undefined) return undefined;
     return this.postings.subarray(this.offsets[code]!, this.offsets[code + 1]!);
   }
@@ -188,7 +199,7 @@ export class EqIndex {
    */
   fillEq(value: unknown, out: Bitset): void {
     this.ensureBuilt();
-    const code = this.codeOf.get(value);
+    const code = this.interner.codeOf(value);
     if (code === undefined) return;
     this.orCode(code, out);
   }
@@ -200,7 +211,7 @@ export class EqIndex {
   fillIn(values: unknown[], out: Bitset): void {
     this.ensureBuilt();
     for (let j = 0; j < values.length; j++) {
-      const code = this.codeOf.get(values[j]);
+      const code = this.interner.codeOf(values[j]);
       if (code !== undefined) this.orCode(code, out);
     }
   }

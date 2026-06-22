@@ -88,12 +88,12 @@ async function main(): Promise<void> {
   // ── BUILD ───────────────────────────────────────────────────────────────────────────────────
   const engine = new Engine({ cache: { enabled: false } });
   const t = engine.define('article', FIELDS);
-  // FINDING (be-22 residual, empirically hit): an EqIndex interns distinct values into a JS Map
-  // (eq.index.ts codeOf), so eq-indexing a HIGH-cardinality column overflows the V8 Map at ~8.4M (2^23,
-  // effective — load factor + power-of-2 capacity doubling, well under the nominal 2^24). The PRIMARY KEY
-  // `id` is unique (= N distinct), so `createEqIndex('id')` THROWS at >~8.4M rows. We use a SORTED index on
-  // id instead (Int32Array permutation, no Map — builds fine), which the planner can binary-search for eq.
-  // => follow-up: an off-heap EqIndex (reuse the OffHeapStringInterner pattern) for high-card eq-indexed cols.
+  // RESOLVED (be-22b): the EqIndex value->code intern is now OFF-HEAP (value-interner.ts) — the unique
+  // primary key `id` no longer overflows the V8 Map. `createEqIndex('id')` builds at 10M (it used to THROW
+  // a RangeError at >~8.4M / 2^23 effective, the old `new Map<unknown,number>()` ceiling — see the prior
+  // baseline's Finding A). i32 `id` 1..N hits the dense direct-address fast path: code = value - min, an
+  // O(1) point lookup. The sorted index stays for ordered range/between scans on id.
+  t.createEqIndex('id');
   t.createSortedIndex('id');
   t.createEqIndex('status'); // low-card (3) — fine
   t.createEqIndex('category'); // mid-card (500) — fine
@@ -134,9 +134,9 @@ async function main(): Promise<void> {
   const page = (filters: { field: string; op: any; value: unknown }[], sort?: { field: string; dir: any }[], offset = 0, limit = 25) =>
     engine.respond('article', { filters: filters as any, sort: sort as any, offset, limit });
 
-  // ── POINT LOOKUP by id (sorted-index binary search, or brute — no eq-index, see FINDING above) ──
+  // ── POINT LOOKUP by id (off-heap EqIndex dense direct-address — was sorted-index/brute, see RESOLVED) ──
   let idTick = 0;
-  measure('point lookup id=X    [sorted-index/brute]', () => page([{ field: 'id', op: 'eq', value: ((idTick++ * 7919) % N) + 1 }], undefined, 0, 1));
+  measure('point lookup id=X    [eq-index, dense-int]', () => page([{ field: 'id', op: 'eq', value: ((idTick++ * 7919) % N) + 1 }], undefined, 0, 1));
 
   // ── EQUALITY / SET ──────────────────────────────────────────────────────────────────────────
   measure('eq status=published  [eq-index, low-card]', () => page([{ field: 'status', op: 'eq', value: 'published' }]));
@@ -204,8 +204,9 @@ async function main(): Promise<void> {
   console.log('-'.repeat(132));
   console.log('(all times in ms; response cache DISABLED — raw compute. envelope = serialized {data,meta} bytes of the last call.)');
   console.log('\nFINDINGS:');
-  console.log(`  * EqIndex on a HIGH-cardinality column overflows the V8 Map (~8.4M / 2^23 effective) — createEqIndex('id')`);
-  console.log(`    THROWS at >~8.4M rows (id is unique = N distinct). Used a sorted index for id here. Follow-up: off-heap EqIndex.`);
+  console.log(`  * RESOLVED (be-22b): the EqIndex value->code intern is now OFF-HEAP — createEqIndex('id') BUILDS at ${N.toLocaleString()} rows`);
+  console.log(`    (it used to THROW a RangeError at >~8.4M / 2^23, the old new Map ceiling). The unique i32 id hits the dense`);
+  console.log(`    direct-address fast path (code = value - min) — point lookup is O(1), no Map, off the object heap.`);
   console.log(`  * The off-heap string dictionary (be-22) carries the high-card 'title' column at ${N.toLocaleString()} rows with no Map ceiling.\n`);
 }
 

@@ -223,7 +223,7 @@ export class Table {
   createEqIndex(field: string): void {
     const col = this.column(field);
     if (col.type === 'json') throw new Error(`json fields are not eq-indexable, "${field}" is json`);
-    const idx = new EqIndex(col.type === 'bool');
+    const idx = new EqIndex(col.type);
     for (let r = 0; r < this.rowCount; r++) idx.add(col.at(r), r);
     this.eqIndexes.set(field, idx);
   }
