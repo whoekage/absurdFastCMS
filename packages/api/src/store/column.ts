@@ -1,4 +1,5 @@
 import { Bitset } from './bitset.ts';
+import { buildCsr } from './csr.ts';
 import { SubstringIndex } from './indexes/substring.index.ts';
 import { OffHeapStringInterner, OffHeapStringArena } from './string-interner.ts';
 import { DECIMAL_MAX_SAFE_PRECISION } from '../db/type.catalog.ts';
@@ -957,18 +958,18 @@ function fold(s: string): string {
  * For case-insensitive equality (`$eqi`/`$nei`) a PARALLEL folded dictionary is kept:
  * `foldedRaw.decode(code) === fold(dict[code])` aligned by raw code (one folded entry appended per
  * distinct raw string, in code order), so the `foldedDict` string[] pin is gone too — it is also an
- * {@link OffHeapStringInterner}. Plus `foldedLookup: folded key -> raw codes` groups every raw code
- * that folds to the same key. Both build lazily on the first `-i` query and are reused thereafter;
- * `$eqi value` resolves to `foldedLookup.get(fold(value))` — a small set of raw codes — then runs the
- * existing `$in` row-expansion machinery. The fold is paid once per distinct string, never per row.
+ * {@link OffHeapStringInterner}. Plus an OFF-HEAP folded-key -> raw-codes grouping (be-22f): a
+ * second {@link OffHeapStringInterner} (folded bytes -> dense `foldedId`) + a {@link buildCsr} CSR
+ * (`foldedId -> the raw codes that fold to it`) — NO residual Map at any cardinality. Both build
+ * lazily on the first `-i` query and are reused (rebuilt-on-grow) thereafter; `$eqi value` resolves
+ * `fold(value)` through `foldedKeys.codeOf` (lookup-only) to a `foldedId`, slices the CSR postings to
+ * a small `Int32Array` of raw codes, then runs the existing `$in` row-expansion machinery. The fold
+ * is paid once per distinct string, never per row.
  *
- * RESIDUAL CEILING (be-22 scope fence — documented, NOT silently covered): `foldedLookup` is still a
- * `Map<string, number[]>` keyed by distinct FOLDED value. It is built ONLY on a `-i` query, and only
- * then can it grow toward the 2^24 Map ceiling — i.e. a column with >16.7M near-unique values that is
- * ALSO hit with `$eqi`/`$nei`/`-i contains` can still overflow on that folded Map. The raw dictionary
- * (the universal defect, paid by every string column) is fully off-heap; the folded-Map grouping is a
- * narrow, opt-in-by-query residual left for a follow-up (a CSR/off-heap grouping). The same applies to
- * an explicitly eq-indexed high-card column — see {@link EqIndex}, whose `codeOf` Map is its own slice.
+ * NO RESIDUAL MAP CEILING (be-22f): the folded-key grouping is an off-heap interner (~2^31 ceiling)
+ * + flat `Int32Array` CSR, so a column with >16.7M near-unique values hit with `$eqi`/`$nei` BUILDS +
+ * SERVES instead of overflowing the old `Map<string, number[]>` at V8's ~8.4M (2^23) ceiling. The
+ * same off-heap discipline applies to an explicitly eq-indexed high-card column — see {@link EqIndex}.
  */
 export class StringColumn implements Column {
   readonly type = 'string';
@@ -986,8 +987,26 @@ export class StringColumn implements Column {
    * column that never sees a `-i` query pays nothing.
    */
   private foldedRaw = new OffHeapStringArena();
-  /** folded key -> raw codes that fold to it (the residual Map — see the class doc's ceiling note). */
-  private foldedLookup = new Map<string, number[]>();
+  /**
+   * OFF-HEAP folded-key -> raw codes grouping (be-22f) — the off-heap replacement for the old
+   * `Map<string, number[]>` (folded key -> raw codes) that overflowed V8's ~8.4M Map ceiling on a
+   * high-card column. Two structures, reusing the be-22/be-22b primitives VERBATIM:
+   *
+   *   - `foldedKeys`: an {@link OffHeapStringInterner} keyed on the UTF-8 bytes of the ALREADY-folded
+   *     string (`foldedRaw.decode(code)`, NOT `interner.decode(code)`) -> a dense `foldedId`. `codeOf`
+   *     (lookup-only, no insert) on `fold(value)` reproduces the old `Map.get` miss-signal EXACTLY
+   *     (`undefined` iff the folded key was never seen).
+   *   - `foldedOffsets` / `foldedPostings`: the CSR (the {@link buildCsr} counting sort, the be-22b
+   *     `EqIndex` postings pattern) mapping `foldedId -> the raw codes that fold to it`. The slice
+   *     `foldedPostings[foldedOffsets[id] .. foldedOffsets[id+1])` is an `Int32Array` view of those
+   *     raw codes, ASCENDING in code (counting-sort over the ascending input `0..D-1`) — byte-identical
+   *     to the old `bucket.push(code)` ascending order. NO Map at any cardinality.
+   */
+  private foldedKeys = new OffHeapStringInterner();
+  private foldedOffsets = new Int32Array(0);
+  private foldedPostings = new Int32Array(0);
+  /** Dict size the folded-key CSR grouping was last built at (rebuild-on-grow watermark; -1 = never). */
+  private foldedGroupBuilt = -1;
   /** Number of dict entries already mirrored into the folded structures. */
   private foldedBuilt = 0;
 
@@ -1068,19 +1087,39 @@ export class StringColumn implements Column {
    * incremental: only codes added since the last call are folded, so the fold runs exactly
    * once per distinct string over the column's lifetime regardless of how many `-i` queries
    * (or interleaved inserts) follow. `foldedRaw` is appended in raw-code order (one slot per raw
-   * code, NO dedup) so `foldedRaw.decode(code) === fold(dict[code])`; `foldedLookup` groups the
-   * raw codes by folded key (the residual Map — see the class doc's ceiling note).
+   * code, NO dedup) so `foldedRaw.decode(code) === fold(dict[code])`.
+   *
+   * After the incremental fold, REBUILD-ON-GROW the off-heap folded-key -> raw-codes grouping
+   * (be-22f), mirroring {@link EqIndex.rebuild} 1:1: if the dict grew since the last build, intern
+   * each raw code's ALREADY-folded bytes (`foldedRaw.decode(code)`, never `interner.decode(code)`)
+   * into a FRESH {@link OffHeapStringInterner} (append-only — the rebuild is the reset, exactly as
+   * `EqIndex` allocates a fresh interner per rebuild), deriving a dense `foldedId` per raw code, then
+   * {@link buildCsr} over the raw codes `0..D-1` to group them by `foldedId`. `buildCsr`'s counting
+   * sort keeps each group ascending in raw code (input is the ascending `0..D-1`), byte-identical to
+   * the old `bucket.push(code)` ascending order.
    */
   private ensureFolded(): void {
     const d = this.interner.size();
     for (let code = this.foldedBuilt; code < d; code++) {
-      const f = fold(this.interner.decode(code));
-      this.foldedRaw.push(f);
-      const bucket = this.foldedLookup.get(f);
-      if (bucket === undefined) this.foldedLookup.set(f, [code]);
-      else bucket.push(code);
+      this.foldedRaw.push(fold(this.interner.decode(code)));
     }
     this.foldedBuilt = d;
+    if (this.foldedGroupBuilt === d) return;
+    // Rebuild the off-heap folded-key grouping over the full folded dictionary (fresh interner =
+    // the reset). `foldedIdForRawCode[code]` is the dense id of `fold(dict[code])`; the raw codes
+    // `0..D-1` are then grouped by that id into the CSR postings.
+    const keys = new OffHeapStringInterner();
+    const foldedIdForRawCode = new Int32Array(d);
+    for (let code = 0; code < d; code++) {
+      foldedIdForRawCode[code] = keys.intern(this.foldedRaw.decode(code));
+    }
+    const rawCodes = new Int32Array(d);
+    for (let code = 0; code < d; code++) rawCodes[code] = code;
+    const { offsets, postings } = buildCsr(d, keys.size(), foldedIdForRawCode, rawCodes);
+    this.foldedKeys = keys;
+    this.foldedOffsets = offsets;
+    this.foldedPostings = postings;
+    this.foldedGroupBuilt = d;
   }
 
   /** Test seam / invariant check: the folded dictionary is aligned 1:1 with the dict by code. */
@@ -1183,8 +1222,16 @@ export class StringColumn implements Column {
         // Case-insensitive equality via the parallel folded dictionary (Slice 2):
         // fold the query value ONCE, look up the set of raw codes that share that folded
         // key, then run the exact `$in`/`$notIn` row-expansion machinery. No per-row fold.
+        // `ensureFolded` builds (and rebuilds-on-grow) the off-heap folded-key -> codes grouping;
+        // `codeOf` is lookup-only (never interns), so `id === undefined` IS the exact old
+        // `Map.get === undefined` miss-signal. `wanted` is then an `Int32Array` VIEW of the raw
+        // codes that fold to the query, ascending in code — byte-identical to the old `number[]`.
         this.ensureFolded();
-        const wanted = this.foldedLookup.get(fold(value as string));
+        const id = this.foldedKeys.codeOf(fold(value as string));
+        const wanted =
+          id === undefined
+            ? undefined
+            : this.foldedPostings.subarray(this.foldedOffsets[id]!, this.foldedOffsets[id + 1]!);
         if (op === 'eqi') {
           // Unknown folded value => matches nothing.
           if (wanted === undefined) return;

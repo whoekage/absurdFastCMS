@@ -42,10 +42,10 @@
  * (it threw a `RangeError` at 16.7M) at a ~128x-higher boundary. Widening the offset lane to
  * `Float64Array` (safe integers to 2^53) is the path if a single column dictionary must exceed 2 GiB.
  *
- * OUT-OF-SCOPE RESIDUALS (separate structures, NOT this interner — documented in column.ts):
- * `EqIndex.codeOf` (a value->MANY-rows postings `Map`) and the `foldedLookup` `Map` (the `-i`/affix
- * folded-key groups) remain on-heap `Map`s and keep the 2^24 ceiling on a high-card column that is
- * ALSO explicitly eq-indexed or hit with case-insensitive/affix operators.
+ * REUSED ELSEWHERE (off-heap, NO residual Map): {@link EqIndex} (value->MANY-rows postings, be-22b)
+ * and the StringColumn folded-key -> raw-codes grouping (the `-i` `$eqi`/`$nei` path, be-22f) both
+ * use THIS interner + a flat CSR instead of a `Map`, so a high-card column that is ALSO eq-indexed or
+ * hit with case-insensitive operators no longer overflows the old 2^24 Map ceiling.
  */
 
 const enc = new TextEncoder();
