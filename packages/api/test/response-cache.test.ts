@@ -298,3 +298,19 @@ test('cache can be toggled off (no storage, always cold)', () => {
   assert.equal(cache.size, 0, 'disabled cache stores nothing');
   assert.equal(cache.get('k'), undefined, 'disabled cache never hits');
 });
+
+// --- 8. BigInt predicate value (i64) does not crash the key builder (Finding #C) ----------------
+
+test('queryKey encodes a BigInt (i64) predicate value without throwing (Finding #C)', () => {
+  // JSON.stringify throws on a BigInt; encodeValue must encode it as decimal digits instead. The cache
+  // key is built on every respond() (even when the cache is disabled), so an i64 predicate carrying a
+  // bigint must not blow up the read path.
+  let key = '';
+  assert.doesNotThrow(() => { key = queryKey('t', { filters: [{ field: 'bigid', op: 'gt', value: 4_500_000_000_000n }] }); });
+  assert.ok(key.includes('4500000000000'), 'the bigint is encoded as its decimal digits in the key');
+  // stable: the same bigint predicate twice produces the same key
+  assert.equal(key, queryKey('t', { filters: [{ field: 'bigid', op: 'gt', value: 4_500_000_000_000n }] }));
+  // set ops carrying bigints (in/notIn) and a bigint between also must not throw
+  assert.doesNotThrow(() => queryKey('t', { filters: [{ field: 'bigid', op: 'in', value: [1n, 2n] }] }));
+  assert.doesNotThrow(() => queryKey('t', { filters: [{ field: 'bigid', op: 'between', value: [1n, 9n] }] }));
+});

@@ -100,9 +100,10 @@ deep-offset 100k 0.5 ms. The serialize-on-write read thesis holds on raw compute
 - **B (med) — write throughput collapses with exotic types**: `json`/`decimal`/`i64` force the type-aware
   row serializer (vs the fast `JSON.stringify` path), ~80k→8k rows/s, degrading with N (GC). Bulk-loading
   tens of millions of full-schema rows is impractical (10M ≈ 20 min).
-- **C (low) — the response-cache key builder crashes on a `BigInt` predicate value**
-  (`response.cache.ts` `encodeValue` → `JSON.stringify`). The cache key is built even when the cache is
-  disabled. Wire-path i64 filters are strings (so likely not a prod crash), but a 1-line hardening is due.
+- **C — RESOLVED.** The response-cache key builder crashed on a `BigInt` predicate value
+  (`response.cache.ts` `encodeValue` → `JSON.stringify` throws on BigInt; the key is built even when the
+  cache is disabled). One-line fix: `encodeValue` encodes a `bigint` as its decimal digits before the
+  `JSON.stringify` fallback. Regression test in `response-cache.test.ts` (gt/in/between with bigint i64).
 - Brute scans (`ne`, `notIn`, range on non-indexed `f64`/`decimal`/`i64`/`bool`) ≈ 15–58 ms at 2M.
 
 ## Notes

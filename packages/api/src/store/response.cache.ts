@@ -37,6 +37,7 @@ function encodeValue(v: unknown): string {
     const keys = Object.keys(o).sort();
     return '{' + keys.map((k) => JSON.stringify(k) + ':' + encodeValue(o[k])).join(',') + '}';
   }
+  if (typeof v === 'bigint') return v.toString(); // JSON.stringify throws on BigInt; encode an i64 predicate value as its decimal digits
   return JSON.stringify(v);
 }
 
