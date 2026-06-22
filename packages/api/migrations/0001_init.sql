@@ -141,9 +141,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS "files_hash_uq" ON "files" ("hash");
 -- hashes live in `account.password` (better-auth hashes at rest); these are the ONLY tables that hold an
 -- auth secret. To regenerate after an auth-config change: re-run the CLI against an EMPTY database and
 -- re-fold the diff. Per migration-policy: ONE consolidated init file, drop & recreate, no backfill.
-CREATE TABLE IF NOT EXISTS "user" ("id" text not null primary key, "name" text not null, "email" text not null unique, "emailVerified" boolean not null, "image" text, "createdAt" timestamptz default CURRENT_TIMESTAMP not null, "updatedAt" timestamptz default CURRENT_TIMESTAMP not null);
+-- be-09f: the four admin-plugin columns (role/banned/banReason/banExpires) are folded onto "user" exactly
+-- as `@better-auth/cli generate` emits them with the admin() plugin enabled. NOTE: `role` here is a
+-- better-auth field with ZERO CMS authority (adminRoles:[]); our RBAC tables own authorization.
+CREATE TABLE IF NOT EXISTS "user" ("id" text not null primary key, "name" text not null, "email" text not null unique, "emailVerified" boolean not null, "image" text, "createdAt" timestamptz default CURRENT_TIMESTAMP not null, "updatedAt" timestamptz default CURRENT_TIMESTAMP not null, "role" text, "banned" boolean, "banReason" text, "banExpires" timestamptz);
 
-CREATE TABLE IF NOT EXISTS "session" ("id" text not null primary key, "expiresAt" timestamptz not null, "token" text not null unique, "createdAt" timestamptz default CURRENT_TIMESTAMP not null, "updatedAt" timestamptz not null, "ipAddress" text, "userAgent" text, "userId" text not null references "user" ("id") on delete cascade);
+-- be-09f: the admin-plugin `impersonatedBy` column folded onto "session" (impersonation is NOT exposed as
+-- a route this slice — scope fence — but the column is part of the plugin's emitted schema).
+CREATE TABLE IF NOT EXISTS "session" ("id" text not null primary key, "expiresAt" timestamptz not null, "token" text not null unique, "createdAt" timestamptz default CURRENT_TIMESTAMP not null, "updatedAt" timestamptz not null, "ipAddress" text, "userAgent" text, "userId" text not null references "user" ("id") on delete cascade, "impersonatedBy" text);
 
 CREATE TABLE IF NOT EXISTS "account" ("id" text not null primary key, "accountId" text not null, "providerId" text not null, "userId" text not null references "user" ("id") on delete cascade, "accessToken" text, "refreshToken" text, "idToken" text, "accessTokenExpiresAt" timestamptz, "refreshTokenExpiresAt" timestamptz, "scope" text, "password" text, "createdAt" timestamptz default CURRENT_TIMESTAMP not null, "updatedAt" timestamptz not null);
 
@@ -188,6 +193,19 @@ CREATE TABLE IF NOT EXISTS "user_roles" (
 	PRIMARY KEY ("user_id", "role_id")
 );
 
+-- be-09f: the TEAM table — management users (admins/editors/moderators) over the unified better-auth
+-- identity. NOT a content_type (no ct_ prefix, no engine presence) — a system table like `files`/`roles`.
+-- user_id is the unified identity FK; one row per user (UNIQUE). status gates membership (active/suspended).
+-- The RESOLVED ROLE is NOT stored here — it lives in user_roles (RBAC truth); team_view JOINs them at read.
+-- timestamptz only (never the `time` cmsType — it bricks a type on registry reload). Drop & recreate, no backfill.
+CREATE TABLE IF NOT EXISTS "team" (
+	"user_id"    text         NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,
+	"status"     varchar(16)  NOT NULL DEFAULT 'active',     -- 'active' | 'suspended'
+	"created_at" timestamptz  NOT NULL DEFAULT now(),
+	"updated_at" timestamptz,
+	PRIMARY KEY ("user_id")
+);
+
 -- be-09b: seed the COARSE permission actions + the four default roles + their grants.
 -- Idempotent (ON CONFLICT DO NOTHING) so a re-run / drop-recreate is safe. NO user_roles seeded here —
 -- role GRANTS to users come ONLY from the advisory-locked first-admin bootstrap (see auth.ts), never a body.
@@ -198,7 +216,8 @@ INSERT INTO "permissions" ("action") VALUES
   ('content.delete'),
   ('content.publish'),
   ('builder.manage'),   -- content-type + component-type mutations
-  ('media.upload')
+  ('media.upload'),
+  ('team.manage')       -- be-09f: manage the team (list/add/suspend/role/remove); super-admin only this slice
 ON CONFLICT ("action") DO NOTHING;
 
 INSERT INTO "roles" ("name") VALUES

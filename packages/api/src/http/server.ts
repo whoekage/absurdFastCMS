@@ -11,6 +11,7 @@ import { buildAuth } from '../auth/auth.ts';
 import { setAuthSql } from '../auth/auth.dialect.ts';
 import { SessionCache } from '../auth/session.cache.ts';
 import { RbacRegistry } from '../auth/rbac.registry.ts';
+import { TeamView } from '../auth/team.view.ts';
 import { config } from '../config.ts';
 
 /**
@@ -143,17 +144,28 @@ export async function start(port: number): Promise<void> {
   // delete-hook evicts it — see SessionCache's constructor doc for the cycle this breaks. The cache is
   // off-heap (ArrayBuffer-backed); single instance, so eviction is a local delete.
   let auth: ReturnType<typeof buildAuth>;
-  const sessionCache = new SessionCache(() => auth);
+  // be-09f — the off-heap team_view is built BEFORE auth (the cycle-breaker: auth's user hooks call
+  // teamView.rebuild()) and BEFORE the session cache (which caps a team member's cached TTL to ~8h).
+  const teamView = new TeamView(store.sql);
+  const sessionCache = new SessionCache(() => auth, undefined, undefined, teamView);
   const rbac = new RbacRegistry(store.sql);
   // be-09b — the auth instance closes over BOTH the session evictor AND the first-admin bootstrap deps:
   // `sql` (the boot store handle) + `rbacInvalidate` (a thunk to rbac.rebuild(), built before auth like the
   // sessionEvictor cycle-breaker). The `user.create.after` hook promotes the first-ever sign-up to
-  // super-admin under an advisory lock, then rebuilds RBAC iff a grant landed.
-  auth = buildAuth({ sessionEvictor: sessionCache, sql: store.sql, rbacInvalidate: () => rbac.rebuild() });
+  // super-admin under an advisory lock, then rebuilds RBAC iff a grant landed. be-09f adds `teamViewReload`
+  // (a thunk to teamView.rebuild()) so an identity mutation + the first-admin bootstrap refresh team_view.
+  auth = buildAuth({
+    sessionEvictor: sessionCache,
+    sql: store.sql,
+    rbacInvalidate: () => rbac.rebuild(),
+    teamViewReload: () => teamView.rebuild(),
+  });
   await rbac.rebuild();
+  await teamView.rebuild();
 
-  // store+registry enable writes; auth mounts /auth/*; sessionCache+rbac gate the mutating routes (be-09b).
-  const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac);
+  // store+registry enable writes; auth mounts /auth/*; sessionCache+rbac gate the mutating routes (be-09b);
+  // teamView powers the gated /_team management routes + created-by rendering (be-09f).
+  const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, teamView);
   await server.listen(port);
   const rows = engine.has('article') ? engine.rowCount('article') : 0;
   console.log(`ready on ${port} (${rows} article rows from postgres)`);

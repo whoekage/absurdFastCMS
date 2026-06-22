@@ -1,5 +1,18 @@
 import { betterAuth } from 'better-auth';
 import { apiKey } from '@better-auth/api-key';
+import { admin } from 'better-auth/plugins';
+import { createAccessControl } from 'better-auth/plugins/access';
+import { defaultStatements, adminAc } from 'better-auth/plugins/admin/access';
+
+/**
+ * be-09f — the admin plugin REQUIRES every `adminRoles` entry to exist in its `roles` access-control map. We
+ * mint a single `super-admin` role from the plugin's DEFAULT statement set granting EVERY user/session
+ * action (it mirrors better-auth's built-in `admin` role). This is ONLY for better-auth's own lifecycle
+ * endpoint authz (ban/remove/revoke). It is NOT a CMS authz source — the RbacRegistry never consults
+ * better-auth's `user.role` or this access-control map.
+ */
+const teamAccess = createAccessControl(defaultStatements);
+const ADMIN_ROLES = { 'super-admin': teamAccess.newRole(adminAc.statements) };
 import type { Sql } from 'postgres';
 import { authDialect } from './auth.dialect.ts';
 import { config } from '../config.ts';
@@ -66,6 +79,14 @@ export interface BuildAuthOptions {
    * Called ONLY when the bootstrap actually inserted the grant (so a normal sign-up never rebuilds).
    */
   rbacInvalidate?: () => Promise<void>;
+  /**
+   * be-09f — reload the off-heap team_view AFTER an identity mutation (name/avatar change via the
+   * better-auth API, first-admin bootstrap). A thunk calling `teamView.rebuild()` — same cycle-breaker
+   * pattern as {@link rbacInvalidate} (teamView is built before auth). Absent for the CLI generate /
+   * read-only servers (no-op). Fires ONLY on a better-auth adapter mutation — raw SQL on `user` is
+   * forbidden by policy (it would bypass this and diverge the projection from PG).
+   */
+  teamViewReload?: () => Promise<void>;
 }
 
 /**
@@ -91,6 +112,20 @@ async function promoteFirstAdmin(sql: Sql, newUserId: string): Promise<boolean> 
           )
       RETURNING user_id
     `;
+    if (rows.length > 0) {
+      // be-09f — the first super-admin ALSO becomes the first team row, atomically under the SAME advisory
+      // lock + the SAME "no super-admin yet" guard. ON CONFLICT DO NOTHING keeps it idempotent; only reached
+      // when the grant landed, so exactly one guarded admin always exists in team_view.
+      await tx`
+        INSERT INTO team (user_id, status) VALUES (${newUserId}, 'active')
+        ON CONFLICT (user_id) DO NOTHING
+      `;
+      // be-09f — mirror the CMS super-admin into better-auth's own `user.role` so the admin plugin's
+      // lifecycle endpoints (adminRoles:['super-admin']) recognize this actor. This `role` column is NOT a
+      // CMS authz source (RbacRegistry never reads it) and is a non-session field, so the write does not
+      // bypass session coherence.
+      await tx`UPDATE "user" SET "role" = 'super-admin', "updatedAt" = now() WHERE id = ${newUserId}`;
+    }
     return rows.length;
   });
   return inserted > 0;
@@ -105,7 +140,16 @@ export function buildAuth(opts: BuildAuthOptions = {}) {
     database: { dialect: authDialect(), type: 'postgres' },
     emailAndPassword: { enabled: true },
     session: { expiresIn: 604800, updateAge: 86400 }, // 7d expiry / 1d refresh; NO cookieCache (see above)
-    plugins: [apiKey()],
+    // be-09f — the ADMIN plugin is enabled for LIFECYCLE ONLY (ban/unban/remove/revoke-sessions via
+    // `auth.api.*`). It is used STRICTLY to satisfy better-auth's OWN lifecycle-endpoint authz; it is NEVER
+    // a CMS authz source — our RBAC tables (`user_roles`/`role_permissions`) are the SOLE truth and the
+    // RbacRegistry NEVER reads better-auth's `user.role` field. `adminRoles: ['super-admin']` lets a
+    // super-admin (whose better-auth `user.role` we keep in lock-step with the CMS role) drive lifecycle;
+    // `defaultRole: 'user'` keeps a created identity authority-free (its `user.role` is 'user', not in
+    // adminRoles, so a body-supplied role confers ZERO lifecycle authority AND zero CMS authority). NO
+    // impersonation surface is exposed (scope fence). The plugin's columns (role/banned/banReason/banExpires
+    // on `user`, impersonatedBy on `session`) are folded into migrations/0001_init.sql.
+    plugins: [apiKey(), admin({ adminRoles: ['super-admin'], defaultRole: 'user', roles: ADMIN_ROLES })],
     // better-auth GENERATES the text primary keys (`user.id`, `session.id`, ...): the folded schema's PKs
     // are `text ... primary key` with NO database default, so the app MUST supply the id. (An earlier
     // `generateId:false` here made better-auth defer to a non-existent DB default and every insert 422'd
@@ -127,7 +171,19 @@ export function buildAuth(opts: BuildAuthOptions = {}) {
           after: async (user: { id: string }) => {
             if (opts.sql === undefined || opts.rbacInvalidate === undefined) return;
             const promoted = await promoteFirstAdmin(opts.sql, user.id);
-            if (promoted) await opts.rbacInvalidate();
+            if (promoted) {
+              await opts.rbacInvalidate();
+              await opts.teamViewReload?.(); // the first admin appears in team_view immediately
+            }
+          },
+        },
+        update: {
+          // be-09f — an identity mutation (name/image via the better-auth API) reloads team_view so the
+          // projected name/avatar can never go stale (the stale-profile class). The hook fires ONLY on a
+          // better-auth adapter mutation; raw SQL on "user" is forbidden by policy (it would bypass this
+          // and diverge the projection from PG).
+          after: async () => {
+            await opts.teamViewReload?.();
           },
         },
       },

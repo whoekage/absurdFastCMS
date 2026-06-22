@@ -1,4 +1,5 @@
 import type { Auth } from './auth.ts';
+import type { TeamView } from './team.view.ts';
 import { OffHeapSessionStore } from './session.store.ts';
 
 /**
@@ -57,9 +58,21 @@ const SWEEP_PASSES = 20;
 /** Floor on the per-tick scan budget so a small store still sweeps promptly. */
 const MIN_SWEEP_BUDGET = 4096;
 
+/**
+ * be-09f — privileged/team sessions are CACHED for at most ~8h (end-users keep PG's 7d). better-auth's
+ * `expiresIn` is GLOBAL, so the per-principal short TTL is enforced HERE — at the {@link SessionCache}
+ * `store.set` — by capping the cached horizon when the validated user is in `team_view`. This is the
+ * BACKSTOP that bounds how long a stale WARM entry can survive a missed revocation: suspend itself is the
+ * PUSH path (banUser + revokeUserSessions → session.delete.after → evict). It is a CACHE horizon only — it
+ * never shortens the PG row; on a re-validate after 8h the cache misses, re-reads PG (still valid up to 7d),
+ * and re-caps.
+ */
+const TEAM_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+
 export class SessionCache {
   private readonly store: OffHeapSessionStore;
   private readonly auth: () => Auth;
+  private readonly teamView: TeamView | undefined;
   private readonly sweepTimer: ReturnType<typeof setInterval> | null;
 
   /**
@@ -73,9 +86,19 @@ export class SessionCache {
    * starting hint, not a cap. `sweepIntervalMs` is the cadence of the background ACTIVE-EXPIRY sweep that
    * evicts sessions which expired without ever being re-validated (0 disables it — used by tests that
    * drive `pruneExpired` directly). The timer is `unref`'d, so it NEVER keeps the process alive.
+   *
+   * be-09f — `teamView` is OPTIONAL (absent for read-only / legacy servers). When present, a validated
+   * team member's cached horizon is capped to {@link TEAM_SESSION_TTL_MS}. It is threaded in as a trailing
+   * arg AFTER the auth thunk so existing positional call sites are unaffected.
    */
-  constructor(auth: () => Auth, initialSlots?: number, sweepIntervalMs: number = DEFAULT_SWEEP_INTERVAL_MS) {
+  constructor(
+    auth: () => Auth,
+    initialSlots?: number,
+    sweepIntervalMs: number = DEFAULT_SWEEP_INTERVAL_MS,
+    teamView?: TeamView,
+  ) {
     this.auth = auth;
+    this.teamView = teamView;
     this.store = new OffHeapSessionStore(initialSlots);
     if (sweepIntervalMs > 0) {
       this.sweepTimer = setInterval(() => {
@@ -112,7 +135,13 @@ export class SessionCache {
     // MISS / expiry / no-token: the single Postgres touch.
     const s = await this.auth().api.getSession({ headers });
     if (s === null) return null;
-    this.store.set(s.session.token, s.user.id, +new Date(s.session.expiresAt));
+    const pgExpiry = +new Date(s.session.expiresAt);
+    // be-09f — PUSH-not-pull suspend bound: a team member's WARM zero-PG validate cannot re-read a status
+    // flag, so we CAP the cached horizon to TEAM_SESSION_TTL_MS. The active expiry sweep is the backstop
+    // that evicts any session missed by a revocation. Non-team consumers (team_view miss) keep PG's 7d.
+    const isTeam = this.teamView !== undefined && this.teamView.get(s.user.id) !== null;
+    const expiresAt = isTeam ? Math.min(pgExpiry, Date.now() + TEAM_SESSION_TTL_MS) : pgExpiry;
+    this.store.set(s.session.token, s.user.id, expiresAt);
     return { userId: s.user.id, sessionToken: s.session.token };
   }
 
@@ -127,5 +156,14 @@ export class SessionCache {
   /** Test/diagnostic: current live cached entry count (NOT a public route surface). */
   size(): number {
     return this.store.size();
+  }
+
+  /**
+   * Test/diagnostic: the cached expiry (epoch ms) for a token, or null if absent. Exposes the per-principal
+   * horizon the cache actually committed — used to prove the be-09f short-TTL CAP (a team member is capped
+   * to ~8h while a non-team consumer keeps PG's 7d). NOT a public route surface.
+   */
+  peekExpiry(token: string): number | null {
+    return this.store.get(token)?.expiresAt ?? null;
   }
 }
