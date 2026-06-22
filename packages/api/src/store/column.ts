@@ -1,5 +1,6 @@
 import { Bitset } from './bitset.ts';
 import { SubstringIndex } from './indexes/substring.index.ts';
+import { OffHeapStringInterner, OffHeapStringArena } from './string-interner.ts';
 import { DECIMAL_MAX_SAFE_PRECISION } from '../db/type.catalog.ts';
 
 export type ColumnType =
@@ -939,27 +940,53 @@ function fold(s: string): string {
  * and the column stores codes in an Int32Array. Equality scans compare ints, not strings,
  * and low-cardinality fields (status, locale, type) cost ~4 bytes/row regardless of text length.
  *
+ * OFF-HEAP DICTIONARY (be-22): the intern table + code->string dictionary are an
+ * {@link OffHeapStringInterner} (open-addressing hash over an `Int32Array` + a UTF-8 byte arena),
+ * NOT a `Map<string, number>` + `string[]`. The Map version threw `RangeError: Map maximum size
+ * exceeded` at V8's 2^24 (~16.7M) entry ceiling on a near-unique column (title/slug) and pinned N
+ * long-lived heap strings; the interner has neither limit (a handful of large buffers off the
+ * object heap). `intern(s)` at push, `at(row) = interner.decode(codes[row])`, and a query value is
+ * resolved to a code via `interner.codeOf(s)` — the operator surface is byte-identical, only the
+ * dictionary STORAGE changed. The interner round-trips byte-exact (UTF-8 encode at intern, decode at
+ * read), so a response is byte-for-byte what the Map dictionary returned. The interner's distinct-COUNT
+ * ceiling rises from the Map's 2^24 to ~2^31 (the Int32 slot table); its one residual is a ~2 GiB arena
+ * byte ceiling (the Int32 offset lane), enforced as a LOUD, NAMED throw — never a silent byte-corrupting
+ * wrap — and documented in {@link OffHeapStringInterner}. Only a column whose distinct TEXT totals
+ * >2 GiB (e.g. ~17M near-unique ~130-byte titles) reaches it, and it fails loud like the old Map did.
+ *
  * For case-insensitive equality (`$eqi`/`$nei`) a PARALLEL folded dictionary is kept:
- * `foldedDict[code] = fold(dict[code])` aligned by code (same length, same indices), plus
- * `foldedLookup: folded -> code[]` grouping every raw code that folds to the same key. Both
- * are built lazily once, on the first `-i` query, and reused thereafter. `$eqi value` resolves
- * to `foldedLookup.get(fold(value))` — a small set of raw codes — then runs the existing `$in`
- * row-expansion machinery. The fold is therefore paid once per distinct string, never per row.
+ * `foldedRaw.decode(code) === fold(dict[code])` aligned by raw code (one folded entry appended per
+ * distinct raw string, in code order), so the `foldedDict` string[] pin is gone too — it is also an
+ * {@link OffHeapStringInterner}. Plus `foldedLookup: folded key -> raw codes` groups every raw code
+ * that folds to the same key. Both build lazily on the first `-i` query and are reused thereafter;
+ * `$eqi value` resolves to `foldedLookup.get(fold(value))` — a small set of raw codes — then runs the
+ * existing `$in` row-expansion machinery. The fold is paid once per distinct string, never per row.
+ *
+ * RESIDUAL CEILING (be-22 scope fence — documented, NOT silently covered): `foldedLookup` is still a
+ * `Map<string, number[]>` keyed by distinct FOLDED value. It is built ONLY on a `-i` query, and only
+ * then can it grow toward the 2^24 Map ceiling — i.e. a column with >16.7M near-unique values that is
+ * ALSO hit with `$eqi`/`$nei`/`-i contains` can still overflow on that folded Map. The raw dictionary
+ * (the universal defect, paid by every string column) is fully off-heap; the folded-Map grouping is a
+ * narrow, opt-in-by-query residual left for a follow-up (a CSR/off-heap grouping). The same applies to
+ * an explicitly eq-indexed high-card column — see {@link EqIndex}, whose `codeOf` Map is its own slice.
  */
 export class StringColumn implements Column {
   readonly type = 'string';
-  private dict: string[] = [];
-  private lookup = new Map<string, number>();
+  /** Off-heap intern table + code->string dictionary (replaces the `Map` + `string[]`). */
+  private interner = new OffHeapStringInterner();
   private codes = new Int32Array(INITIAL_CAPACITY);
   length = 0;
 
   /**
-   * Folded mirror of `dict`, aligned by code: `foldedDict[code] === fold(dict[code])`.
-   * Built lazily (and kept in sync if more strings are interned after a build) so a column
-   * that never sees a `-i` query pays nothing.
+   * Folded mirror of the dictionary, aligned by raw code: `foldedRaw.decode(code) === fold(dict[code])`.
+   * An off-heap, NON-deduping code-aligned arena (NOT a `string[]` — and NOT an interner, because two
+   * distinct raw strings can fold to the same key yet must each keep their own code-aligned slot),
+   * appended one entry per distinct raw string in code order, so it is addressable by raw code exactly
+   * like the old parallel array. Built lazily (and kept in sync as more strings are interned) so a
+   * column that never sees a `-i` query pays nothing.
    */
-  private foldedDict: string[] = [];
-  /** folded key -> raw codes that fold to it. Built alongside `foldedDict`. */
+  private foldedRaw = new OffHeapStringArena();
+  /** folded key -> raw codes that fold to it (the residual Map — see the class doc's ceiling note). */
   private foldedLookup = new Map<string, number[]>();
   /** Number of dict entries already mirrored into the folded structures. */
   private foldedBuilt = 0;
@@ -972,8 +999,10 @@ export class StringColumn implements Column {
    * interned, so it always covers the full dictionary before it is consulted.
    *
    * Two indexes are kept: a RAW-dict index for `$contains`/`$notContains`, and a FOLDED-dict
-   * index for `$containsi`/`$notContainsi` (built over `foldedDict`, exactly the space the brute
-   * `-i` path scans). Either may be null until its first relevant query builds it.
+   * index for `$containsi`/`$notContainsi` (built over the folded dictionary, exactly the space
+   * the brute `-i` path scans). Either may be null until its first relevant query builds it. Both
+   * build via {@link SubstringIndex.over}, decoding each code's text FROM THE OFF-HEAP dictionary
+   * (the interner for raw, `foldedRaw` for folded) — no heap `string[]` is materialized.
    */
   private substringEnabled = false;
   private rawTrigrams: SubstringIndex | null = null;
@@ -1005,12 +1034,17 @@ export class StringColumn implements Column {
     return this.rawTrigrams === null ? 0 : this.rawTrigrams.trigramCount;
   }
 
-  /** (Re)build the raw-dict trigram index if enabled and the dictionary has grown since. */
+  /**
+   * (Re)build the raw-dict trigram index if enabled and the dictionary has grown since. Postings
+   * are dict CODES; each code's text is decoded FROM THE OFF-HEAP interner during the build pass
+   * (transient strings, GC'd) — no persistent heap `string[]`.
+   */
   private ensureRawTrigrams(): void {
     if (!this.substringEnabled) return;
-    if (this.rawTrigramsBuilt !== this.dict.length) {
-      this.rawTrigrams = new SubstringIndex(this.dict);
-      this.rawTrigramsBuilt = this.dict.length;
+    const d = this.interner.size();
+    if (this.rawTrigramsBuilt !== d) {
+      this.rawTrigrams = SubstringIndex.over(d, (code) => this.interner.decode(code));
+      this.rawTrigramsBuilt = d;
     }
   }
 
@@ -1018,43 +1052,51 @@ export class StringColumn implements Column {
   private ensureFoldedTrigrams(): void {
     if (!this.substringEnabled) return;
     this.ensureFolded();
-    if (this.foldedTrigramsBuilt !== this.foldedDict.length) {
-      this.foldedTrigrams = new SubstringIndex(this.foldedDict);
-      this.foldedTrigramsBuilt = this.foldedDict.length;
+    const d = this.foldedRaw.size();
+    if (this.foldedTrigramsBuilt !== d) {
+      this.foldedTrigrams = SubstringIndex.over(d, (code) => this.foldedRaw.decode(code));
+      this.foldedTrigramsBuilt = d;
     }
   }
 
   private intern(s: string): number {
-    let code = this.lookup.get(s);
-    if (code === undefined) {
-      code = this.dict.length;
-      this.dict.push(s);
-      this.lookup.set(s, code);
-    }
-    return code;
+    return this.interner.intern(s);
   }
 
   /**
    * Lazily extend the folded dictionary to cover every interned code. Idempotent and
    * incremental: only codes added since the last call are folded, so the fold runs exactly
    * once per distinct string over the column's lifetime regardless of how many `-i` queries
-   * (or interleaved inserts) follow.
+   * (or interleaved inserts) follow. `foldedRaw` is appended in raw-code order (one slot per raw
+   * code, NO dedup) so `foldedRaw.decode(code) === fold(dict[code])`; `foldedLookup` groups the
+   * raw codes by folded key (the residual Map — see the class doc's ceiling note).
    */
   private ensureFolded(): void {
-    for (let code = this.foldedBuilt; code < this.dict.length; code++) {
-      const f = fold(this.dict[code]!);
-      this.foldedDict.push(f);
+    const d = this.interner.size();
+    for (let code = this.foldedBuilt; code < d; code++) {
+      const f = fold(this.interner.decode(code));
+      this.foldedRaw.push(f);
       const bucket = this.foldedLookup.get(f);
       if (bucket === undefined) this.foldedLookup.set(f, [code]);
       else bucket.push(code);
     }
-    this.foldedBuilt = this.dict.length;
+    this.foldedBuilt = d;
   }
 
-  /** Test seam / invariant check: the folded dictionary is aligned 1:1 with `dict` by code. */
+  /** Test seam / invariant check: the folded dictionary is aligned 1:1 with the dict by code. */
   foldedDictLength(): number {
     this.ensureFolded();
-    return this.foldedDict.length;
+    return this.foldedRaw.size();
+  }
+
+  /**
+   * Test/sizing seam (a real measurement, NOT a mock): the EXACT off-heap byte footprint of the raw
+   * dictionary (the interner's slot table + code lanes + UTF-8 arena). A low-card enum/locale/status
+   * column must read in the low KiBs here — the proof the small-minimum-allocation policy holds and a
+   * 3-value column did not regress into megabytes.
+   */
+  dictionaryMemoryBytes(): number {
+    return this.interner.memoryBytes().total;
   }
 
   private grow(): void {
@@ -1071,7 +1113,7 @@ export class StringColumn implements Column {
   }
 
   at(row: number): string {
-    return this.dict[this.codes[row]!]!;
+    return this.interner.decode(this.codes[row]!);
   }
 
   scan(op: ScanOp, value: unknown, out: Bitset): void {
@@ -1080,13 +1122,13 @@ export class StringColumn implements Column {
     switch (op) {
       case 'eq': {
         // Resolve the target to a code once; if never interned, eq matches nothing.
-        const code = this.lookup.get(value as string);
+        const code = this.interner.codeOf(value as string);
         if (code === undefined) return;
         for (let i = 0; i < n; i++) if (codes[i] === code) out.set(i);
         return;
       }
       case 'ne': {
-        const code = this.lookup.get(value as string);
+        const code = this.interner.codeOf(value as string);
         // Unknown value => every row differs from it. Null-awareness (excluding NULL rows
         // whose sentinel '' would otherwise count) is applied once at the Table boundary.
         if (code === undefined) {
@@ -1104,7 +1146,7 @@ export class StringColumn implements Column {
         const wanted = new Set<number>();
         const arr = Array.isArray(value) ? value : [value];
         for (const s of arr) {
-          const c = this.lookup.get(s as string);
+          const c = this.interner.codeOf(s as string);
           if (c !== undefined) wanted.add(c);
         }
         if (op === 'in') {
@@ -1193,12 +1235,12 @@ export class StringColumn implements Column {
     const codes = this.codes;
     switch (op) {
       case 'eq': {
-        const code = this.lookup.get(value as string);
+        const code = this.interner.codeOf(value as string);
         if (code === undefined) return () => false; // never interned => matches nothing.
         return (row) => codes[row] === code;
       }
       case 'ne': {
-        const code = this.lookup.get(value as string);
+        const code = this.interner.codeOf(value as string);
         if (code === undefined) return () => true; // unknown value => every row differs.
         return (row) => codes[row] !== code;
       }
@@ -1206,7 +1248,7 @@ export class StringColumn implements Column {
       case 'notIn': {
         const wanted = new Set<number>();
         for (const s of Array.isArray(value) ? value : [value]) {
-          const c = this.lookup.get(s as string);
+          const c = this.interner.codeOf(s as string);
           if (c !== undefined) wanted.add(c);
         }
         if (op === 'in') return (row) => wanted.has(codes[row]!);
@@ -1239,15 +1281,20 @@ export class StringColumn implements Column {
     const insensitive =
       op === 'containsi' || op === 'notContainsi' || op === 'startsWithi' || op === 'endsWithi';
     // For `-i` ops the search space is the folded dictionary and the needle is folded the same
-    // way; for case-sensitive ops it is the raw dictionary and the raw needle.
-    let space: string[];
+    // way; for case-sensitive ops it is the raw dictionary and the raw needle. Either space is the
+    // OFF-HEAP dictionary, addressed by code via a `decode(code)` accessor — D distinct strings are
+    // decoded from the arena (D << N), NEVER pinned in a heap `string[]`.
+    let decode: (code: number) => string;
+    let count: number;
     let needle: string;
     if (insensitive) {
       this.ensureFolded();
-      space = this.foldedDict;
+      decode = (code) => this.foldedRaw.decode(code);
+      count = this.foldedRaw.size();
       needle = fold(value);
     } else {
-      space = this.dict;
+      decode = (code) => this.interner.decode(code);
+      count = this.interner.size();
       needle = value;
     }
     const isContains =
@@ -1260,8 +1307,8 @@ export class StringColumn implements Column {
     // also runs whenever the index isn't built. Either way the mask is then expanded identically.
     const mask =
       isContains && this.substringEnabled
-        ? this.containsMaskAccel(space, needle, insensitive)
-        : this.bruteMask(op, space, needle);
+        ? this.containsMaskAccel(decode, count, needle, insensitive)
+        : this.bruteMask(op, decode, count, needle);
 
     const codes = this.codes;
     const n = this.length;
@@ -1282,11 +1329,11 @@ export class StringColumn implements Column {
    * cheap dictionary-side pass; the caller expands the mask to rows. Also the mandatory fallback
    * whenever the trigram accelerator can't apply (short needle / absent trigram / column unflagged).
    */
-  private bruteMask(op: ScanOp, space: string[], needle: string): Uint8Array {
-    const d = space.length;
+  private bruteMask(op: ScanOp, decode: (code: number) => string, count: number, needle: string): Uint8Array {
+    const d = count;
     const mask = new Uint8Array(d);
     for (let c = 0; c < d; c++) {
-      const s = space[c]!;
+      const s = decode(c);
       let hit = false;
       switch (op) {
         case 'gt':  hit = s >  needle; break;
@@ -1316,11 +1363,16 @@ export class StringColumn implements Column {
    * generates, so verification is what kills false positives and guarantees correctness regardless
    * of trigram granularity), setting the mask only for verified codes.
    *
-   * `space`/`needle` are already RAW (for `$contains`) or FOLDED (for `$containsi`); the matching
+   * `decode`/`needle` are already RAW (for `$contains`) or FOLDED (for `$containsi`); the matching
    * trigram index (`rawTrigrams` / `foldedTrigrams`) is consulted accordingly, so case-sensitive
-   * and case-insensitive each verify with their own dictionary, exactly like the brute path.
+   * and case-insensitive each verify with their own off-heap dictionary, exactly like the brute path.
    */
-  private containsMaskAccel(space: string[], needle: string, insensitive: boolean): Uint8Array {
+  private containsMaskAccel(
+    decode: (code: number) => string,
+    count: number,
+    needle: string,
+    insensitive: boolean,
+  ): Uint8Array {
     if (insensitive) this.ensureFoldedTrigrams();
     else this.ensureRawTrigrams();
     const index = insensitive ? this.foldedTrigrams : this.rawTrigrams;
@@ -1328,17 +1380,17 @@ export class StringColumn implements Column {
     const candidates = index === null ? null : index.candidateCodes(needle);
     if (candidates === null) {
       // Not acceleratable for this needle — the brute dictionary scan is the mandatory floor.
-      return this.bruteMask('contains', space, needle);
+      return this.bruteMask('contains', decode, count, needle);
     }
 
     // Acceleration fired: build the mask only from VERIFIED candidates. This is what makes the
     // accelerator return BYTE-IDENTICAL rows to brute — the trigram set is a superset, includes()
     // removes every false positive (a value whose trigrams cover the needle but not contiguously).
     this.substringAccelHits++;
-    const mask = new Uint8Array(space.length);
+    const mask = new Uint8Array(count);
     for (let k = 0; k < candidates.length; k++) {
       const code = candidates[k]!;
-      if (space[code]!.includes(needle)) mask[code] = 1;
+      if (decode(code).includes(needle)) mask[code] = 1;
     }
     return mask;
   }
