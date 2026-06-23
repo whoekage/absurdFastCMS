@@ -220,6 +220,59 @@ export interface ExtensionApi {
    NOT reintroduce the cross-instance ChangeBus we removed).
 5. **(Optional, hard) Sandbox for untrusted extensions** — worker/isolated-vm + capability-scoped API.
 
+## 10b. Custom controllers & typing DYNAMIC content (the schema-in-DB problem)
+
+**The hard constraint:** TypeScript types are STATIC and cannot read Postgres at type-check time (TS has no
+live type-provider). Our schema is DYNAMIC and lives in PG (content_types/fields → the Registry at boot),
+NOT in files like Strapi. So "typed access to dynamic content" decomposes into two independent layers —
+there is no third "magic" option in TS:
+
+1. **Runtime layer — always correct.** The Registry (PG→RAM) validates every read/write; a controller can
+   introspect the live schema via `ctx.schema(apiId)`. Content rows default to `Entry = Record<string,
+   unknown>`. No codegen needed; always safe (the engine/query-parser reject an unknown field).
+2. **Compile-time layer — optional DX via CODEGEN.** Static types over a runtime schema REQUIRE a codegen
+   step. The reversal vs Strapi: our schema is in PG, so codegen reads **PG/the Registry, not files** — the
+   schema is the single source of truth and types are a derived PROJECTION (Strapi is the opposite:
+   file-source, DB-mirror). A CLI `absurd gen:types` (NOT a build step — we are no-build) connects to PG /
+   the Registry and emits `content-types.d.ts` with a mechanical cmsType→TS mapping:
+   `string|text→string`, `integer|float→number`, `biginteger|decimal→string`, `boolean→boolean`,
+   `datetime|date→string`, `enumeration→a union of members`, `json→unknown`, `relation→number | RelatedType`,
+   `media→MediaRef`, `component→ComponentInterface`, nullable → `| null`. The generated file is for the
+   author's editor + their `tsc --noEmit` ONLY; the runtime never imports it (it validates against the live
+   Registry). Codegen is opt-in and decoupled from the no-build runtime.
+
+**Custom controllers = a statically-typed shell over the dynamic engine; the CONTENT is generic.** A
+controller is a route handler (`api.route(method, path, handler, { permission })`, Phase 2):
+```ts
+api.route('GET', '/articles/featured', async (ctx) => {
+  // read = the fast engine (zero-PG). No codegen -> Entry; with codegen -> Article + keyof-checked fields.
+  const rows = await ctx.read<Article>('article', {
+    filters: [{ field: 'status', op: 'eq', value: 'published' }], // field: keyof Article when T is supplied
+    sort: [{ field: 'views', dir: 'desc' }], limit: 10,
+  });
+  return ctx.json({ data: rows });
+});
+```
+- `ctx.read<T = Entry>(apiId, query): Promise<T[]>` — generic; a codegen'd `T` gives full autocomplete +
+  `keyof`-checked filter/sort field names, else `Entry`/`string` (runtime-validated, fewer hints).
+- `ctx.write(apiId, op, payload)` — goes through the VALIDATED write path (`handleWrite`), NOT raw SQL, so
+  content hooks fire and the engine stays consistent. An extension writing content is a first-class citizen.
+- `ctx.principal` (be-09b), `ctx.params/query/body`, `ctx.schema(apiId)` (live introspection), `ctx.json/error`.
+- No Strapi-style "services" abstraction: business logic is just TS functions the author imports; the
+  controller is a thin typed shell, the engine does the heavy lifting.
+
+**Tradeoffs / open items:** generated types are a SNAPSHOT → drift after a Builder change (mitigate:
+`gen:types --watch`, and/or embed a `schemaVersion` the runtime can warn on; commit the generated `.d.ts`
+for reproducible typechecks). Populate/i18n/D&P change the row shape (populated relation = object vs id;
+localized fields) → v1 emits the base stored-shape type + the author narrows (a `Populated<T>` helper +
+variant types are a later refinement). Relations/components/dynamic-zones → `number | T` / nested interfaces
+/ unions.
+
+**One-line summary:** static TS types cannot track a runtime schema, so the runtime is always correct
+(Registry-validated, `Entry` by default) and static types are an OPTIONAL codegen projection FROM our PG
+schema; controllers are a generic shell, type-safe exactly as far as the author generated types — and this
+is arguably cleaner than Strapi (file-source) since for us PG is the source and types are derived.
+
 ## 11. Open questions (to resolve before/while building)
 
 - **Atomicity:** should `before`-filters with co-writes share the content tx (`ctx.tx`), and should a
