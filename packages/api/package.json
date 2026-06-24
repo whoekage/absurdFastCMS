@@ -10,6 +10,7 @@
     "dev": "node --env-file=.env src/http/server.ts",
     "test": "node --env-file=.env.test --test --test-global-setup=./test/global-setup.ts",
     "bench": "node bench/scan.bench.ts",
+    "typecheck": "tsc -p tsconfig.json",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:migrate": "node --env-file=.env src/db/migration.runner.ts"
