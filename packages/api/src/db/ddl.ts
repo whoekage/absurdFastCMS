@@ -51,7 +51,7 @@ export const TABLE_PREFIX = 'ct_';
 // type cannot declare a column that would collide if it later opted in, and a client cannot spoof one.
 export const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(['id', 'document_id', 'created_at', 'updated_at', 'published_at', 'locale']);
 /** Tables/api_ids a user type may not collide with. */
-export const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['content_types', 'content_type_fields', 'content_type_relations', 'component_types', 'component_type_fields', 'files', '_migrations']);
+export const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['content_types', 'content_type_fields', 'content_type_relations', 'component_types', 'component_type_fields', 'files', '_migrations', '_schema_applied']);
 
 // --- typed error classes (deterministic; never leak a raw PG error) ----------------------------
 
@@ -419,6 +419,19 @@ export function compileAddColumn(tableName: string, field: ResolvedField): Compi
 /** ALTER TABLE ... RENAME COLUMN (real rename — never drop+recreate). */
 export function compileRenameColumn(tableName: string, from: string, to: string): CompiledQuery {
   return compiler.schema.alterTable(tableName).renameColumn(from, to).compile();
+}
+
+/** ALTER TABLE ... RENAME TO ... (real TABLE rename for a content-type apiId change — lossless). */
+export function compileRenameTable(from: string, to: string): CompiledQuery {
+  return compiler.schema.alterTable(from).renameTo(to).compile();
+}
+
+/** ALTER TABLE ... ALTER COLUMN ... SET/DROP NOT NULL. SET NOT NULL fails (23502) if existing rows are NULL. */
+export function compileSetColumnNotNull(tableName: string, name: string, notNull: boolean): CompiledQuery {
+  return compiler.schema
+    .alterTable(tableName)
+    .alterColumn(name, (ac) => (notNull ? ac.setNotNull() : ac.dropNotNull()))
+    .compile();
 }
 
 /** ALTER TABLE ... DROP COLUMN (RESTRICT by default — PG's default; a dependent object errors). */

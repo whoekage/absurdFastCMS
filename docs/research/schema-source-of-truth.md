@@ -93,6 +93,10 @@ prod:  deploy → conti migrate (from committed schema/) → data-preserving ALT
   prod replays files. More reviewable (explicit SQL in the PR), Rails-like.
   → Lean **(a)** first (less moving parts; the schema.json IS the reviewable artifact), keep (b) as an
   upgrade. Either way the engine is the same diff + DDL; only WHERE/WHEN the SQL is materialized differs.
+  → **DECIDED (S4): (a) diff-at-deploy.** The "applied" state is stored as a `_schema_applied` snapshot of
+  OUR canonical schema JSON (not introspected DB metadata) — so the diff compares like-for-like and never
+  produces a phantom diff from type-spelling/default/collation normalization (the churn class that forces
+  Atlas's `--dev-url`). (b) capture-to-file remains a future upgrade if explicit reviewable SQL is wanted.
 
 ## 7. Slice decomposition (each: tested, real-PG suite as oracle, no behaviour/byte regression)
 
@@ -140,9 +144,17 @@ prod:  deploy → conti migrate (from committed schema/) → data-preserving ALT
   presentation (`info`, derived `collectionName`) emits no DDL (Directus #10755); type changes reuse
   `classifyTypeChange`; `diff(x,x)` is empty (anti-churn idempotency invariant). Relations + component-type
   schemas DEFERRED (fail loud, consistent with S1). Exhaustive pure unit tests; no DB.
-- **S4 — migrate + lint.** Apply the change-set to PG (data-preserving DDL via the existing `ddl.ts` +
-  `migration.runner.ts`); `_schema_applied` tracking; `conti migrate lint` destructive gate. Real-PG tests:
-  rename preserves data, drop blocked-without-ack, retype, add-with-default.
+- **S4 — migrate + lint.** SHIPPED (`db/schema/migrate.ts`). `migrate(sql, schemaDir, {allowDestructive})`
+  diffs the committed files against the STORED applied snapshot (`_schema_applied`, our canonical JSON —
+  NOT introspected DB metadata, so no phantom-diff churn), gates, and applies the change-set in ONE
+  transaction via the existing `ddl.ts` compile-only builders (+ two new ones: `compileRenameTable`,
+  `compileSetColumnNotNull`). Per-op gate: `forbidden` always blocks; `destructive`/`data-dependent` block
+  unless `allowDestructive` (the `migrate lint` engine reports the blocked subset without applying). reorder
+  is a NO-OP (file order drives the registry); `setTypeOption` (D&P/i18n toggle) is DEFERRED (loud). Idempotent
+  (a no-change re-run is a no-op). `_schema_applied` is created on-demand like `_migrations` (no hand-written
+  migration file). Real-PG tests prove: rename preserves data (the Strapi #12626/#19141 fix), rename-TYPE
+  preserves data, drop blocked-without-ack, add NOT NULL + default backfills, retype gated + value carried
+  across the cast.
 - **S5 — Builder rewrites schema.json + START the CONTRACT (delete the scaffolding).** The Builder's write
   target flips PG-meta → `schema/*.json` (preserving ids; mint a new id only for genuinely-new fields); dev
   edits call `conti migrate` locally. Builder routes GATED OFF in prod (env). With files now the source, the

@@ -1,7 +1,7 @@
 import type { ContentTypeRow, FieldRow, RelationRow, FieldSpec } from '../content-type.repository.ts';
 import { resolveFields } from '../content-type.repository.ts';
 import { deriveTableName } from '../ddl.ts';
-import type { ContentTypeSchema } from './model.ts';
+import type { ContentTypeSchema, FieldSchema } from './model.ts';
 
 /**
  * The ADAPTER from the files-first schema model to the meta ROW shapes the {@link Registry} already
@@ -39,13 +39,15 @@ const SYNTHETIC_ID = 0;
  * forbids an explicit `undefined` on an optional key). Shared by {@link schemaToRows} (registry build) and
  * the file-driven seed (table materialization). Relations are not fields and are not projected here.
  */
+export function fieldSchemaToSpec(f: FieldSchema): FieldSpec {
+  const spec: FieldSpec = { name: f.name, cmsType: f.type };
+  if (f.options !== undefined) spec.options = f.options;
+  if (f.localized !== undefined) spec.localized = f.localized;
+  return spec;
+}
+
 export function schemaToFieldSpecs(schema: ContentTypeSchema): FieldSpec[] {
-  return schema.fields.map((f) => {
-    const spec: FieldSpec = { name: f.name, cmsType: f.type };
-    if (f.options !== undefined) spec.options = f.options;
-    if (f.localized !== undefined) spec.localized = f.localized;
-    return spec;
-  });
+  return schema.fields.map(fieldSchemaToSpec);
 }
 
 /** Stringify a bound default for the `default_value` text column — mirrors the meta writer's `defaultText`. */
