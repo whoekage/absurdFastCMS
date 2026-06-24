@@ -13,7 +13,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "conti start",
+    "dev": "conti dev",
     "start": "conti start",
     "test": "node --env-file=.env.test --test --test-global-setup=./test/global-setup.ts",
     "bench": "node bench/scan.bench.ts",

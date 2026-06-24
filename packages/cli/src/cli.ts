@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createConti, type ContiApp, type ContiConfig, type ServerLifecycle } from '@conti/core';
 
 /**
@@ -78,14 +79,37 @@ export async function runStart(cwd: string = process.cwd()): Promise<void> {
   installSignals(app);
 }
 
+/**
+ * The argv (after the node binary) for the watched dev child — exported for testing. `conti dev` runs the
+ * server under Node's built-in `--watch`: it watches this CLI entry + its whole import graph (including the
+ * dynamically-loaded conti.config.ts / bootstrap.ts), so editing source restarts the server. No custom
+ * watcher (no-build ethos). On a change, `--watch` SIGTERMs the child — runStart()'s handler stops it
+ * gracefully (socket closed, PG pool drained) so the port is free before the restart.
+ */
+export function devChildArgs(): string[] {
+  return ['--watch', '--watch-preserve-output', fileURLToPath(import.meta.url), 'start'];
+}
+
+/** `conti dev` — run `conti start` under `node --watch` (auto-reload), supervising the child + signals. */
+export function runDev(cwd: string = process.cwd()): void {
+  const child = spawn(process.execPath, devChildArgs(), { cwd, stdio: 'inherit' });
+  // Forward termination so Ctrl-C reaches the watched child (which graceful-stops), then mirror its exit.
+  process.on('SIGINT', () => child.kill('SIGINT'));
+  process.on('SIGTERM', () => child.kill('SIGTERM'));
+  child.on('exit', (code) => process.exit(code ?? 0));
+}
+
 async function main(argv: string[]): Promise<void> {
   const cmd = argv[2];
   switch (cmd) {
     case 'start':
       await runStart();
       break;
+    case 'dev':
+      runDev();
+      break;
     default:
-      console.error(`conti: unknown command ${JSON.stringify(cmd ?? '')}. Available: start`);
+      console.error(`conti: unknown command ${JSON.stringify(cmd ?? '')}. Available: start, dev`);
       process.exit(1);
   }
 }
