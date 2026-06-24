@@ -22,6 +22,7 @@
     "lint:layers": "biome lint packages/api/src"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.1"
+    "@biomejs/biome": "2.5.1",
+    "@conti/cli": "*"
   }
 }

@@ -164,43 +164,6 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
   return { start, stop };
 }
 
-/**
- * The entrypoint. Run directly: `node --env-file=.env src/compose/conti.ts`. Loads the project's two
- * files — conti.config.ts (server config) + bootstrap.ts (server lifecycle) — and boots from them. The
- * fixed `../../` path is the monolith's project root; the future CLI resolves the project dir instead.
- */
-export async function main(): Promise<void> {
-  const [{ default: config }, { default: lifecycle }] = await Promise.all([
-    import('../../conti.config.ts'),
-    import('../../bootstrap.ts'),
-  ]);
-  const app = createConti(config, lifecycle);
-  app.start().catch((e) => {
-    console.error('boot failed', e);
-    process.exit(1);
-  });
-  // Graceful shutdown on a termination signal: stop once (idempotent), then exit; a guardian timer forces
-  // exit if teardown hangs. `once` means a second Ctrl-C falls through to Node's default hard terminate.
-  const shutdown = (signal: string): void => {
-    console.log(`${signal} received — shutting down`);
-    const guard = setTimeout(() => {
-      console.error('shutdown timed out after 10s — forcing exit');
-      process.exit(1);
-    }, 10_000);
-    guard.unref();
-    app.stop().then(
-      () => process.exit(0),
-      (e) => {
-        console.error('error during shutdown', e);
-        process.exit(1);
-      },
-    );
-  };
-  process.once('SIGTERM', () => shutdown('SIGTERM'));
-  process.once('SIGINT', () => shutdown('SIGINT'));
-}
-
-// Run only when invoked as the entrypoint (not when imported by a test/bench).
-if (import.meta.url === `file://${process.argv[1]}`) {
-  void main();
-}
+// The process entrypoint lives in @conti/cli (`conti start` / `conti dev`): the CLI resolves the project
+// directory, loads conti.config.ts + bootstrap.ts, then calls createConti(config, lifecycle).start() and
+// wires signal-based graceful shutdown. @conti/core is a pure library — no entrypoint, no project-file load.
