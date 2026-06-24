@@ -29,7 +29,45 @@ export interface ContiApp {
   stop(): Promise<void>;
 }
 
-export function createConti(config: ContiConfig): ContiApp {
+/**
+ * Context handed to server-lifecycle hooks. Intentionally MINIMAL — `{ config, log }` (+ the resolved
+ * `port` once listening). It deliberately does NOT expose the columnar engine/store/registry: the read
+ * engine stays out of user/extension reach by design (data access is a separate concern, not server
+ * lifecycle). Contrast Strapi, which hands hooks the whole `strapi` instance.
+ */
+export interface ServerContext {
+  readonly config: ContiConfig;
+  /** Namespaced logger (currently console-backed). */
+  log(message: string): void;
+}
+/** {@link ServerContext} plus the resolved listen port (only known after the server is listening). */
+export interface StartedContext extends ServerContext {
+  readonly port: number;
+}
+/**
+ * SERVER lifecycle — the `bootstrap.ts` contract. This is NOT the content/data hook system (that is a
+ * separate, later concern). Modelled on Strapi register/bootstrap/destroy + Fastify onReady/onListen/
+ * onClose; hooks are awaited sequentially. Error semantics:
+ * - `onBeforeStart` throwing ABORTS boot (nothing is opened yet) — like a failed Strapi register().
+ * - `onAfterStart` throwing is LOGGED and the server STAYS UP (it is already listening) — like Fastify onListen.
+ * - `onShutdown` throwing is COLLECTED and teardown CONTINUES (a hook failure must never leak resources).
+ */
+export interface ServerLifecycle {
+  /** Before any boot work (no DB/engine yet): env checks, registering external resources. Throw = abort boot. */
+  onBeforeStart?(ctx: ServerContext): void | Promise<void>;
+  /** After the server is listening (ready): warmup pings, readiness signals. Throw = logged, server stays up. */
+  onAfterStart?(ctx: StartedContext): void | Promise<void>;
+  /** During shutdown, after the listen socket is closed (no new requests): release the user's own resources. */
+  onShutdown?(ctx: ServerContext): void | Promise<void>;
+}
+/** Typed-authoring helper for `bootstrap.ts` (mirrors {@link defineConfig}). */
+export function defineBootstrap(lifecycle: ServerLifecycle): ServerLifecycle {
+  return lifecycle;
+}
+
+export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}): ContiApp {
+  const log = (message: string): void => console.log(message);
+  const ctx: ServerContext = { config, log };
   // Captured at start() for stop().
   let store: PostgresStore | undefined;
   let sessionCache: SessionCache | undefined;
@@ -37,6 +75,8 @@ export function createConti(config: ContiConfig): ContiApp {
   let listenToken: ListenToken | undefined;
 
   async function start(): Promise<void> {
+    // onBeforeStart: nothing is opened yet, so a throw cleanly ABORTS boot (start() rejects).
+    if (lifecycle.onBeforeStart) await lifecycle.onBeforeStart(ctx);
     await runMigrations(config.database.url);
     store = new PostgresStore(config.database.url);
     await seedArticleIfAbsent(store.sql);
@@ -65,6 +105,14 @@ export function createConti(config: ContiConfig): ContiApp {
     listenToken = await server.listen(config.server.port);
     const rows = engine.has('article') ? engine.rowCount('article') : 0;
     console.log(`ready on ${config.server.port} (${rows} article rows from postgres)`);
+    // onAfterStart: the server is already listening, so a throw is logged and does NOT bring it down.
+    if (lifecycle.onAfterStart) {
+      try {
+        await lifecycle.onAfterStart({ ...ctx, port: config.server.port });
+      } catch (e) {
+        log(`onAfterStart hook failed (server stays up): ${String(e)}`);
+      }
+    }
   }
 
   // Idempotent, ordered, error-resilient teardown (Strapi destroy() style: stop services, close
@@ -81,6 +129,15 @@ export function createConti(config: ContiConfig): ContiApp {
       if (close !== undefined && listenToken !== undefined) {
         try {
           close(listenToken);
+        } catch (e) {
+          errors.push(e);
+        }
+      }
+      // onShutdown: the listen socket is already closed (no new requests). A throw is collected and
+      // teardown continues so a hook failure never leaks the session sweep / PG pool.
+      if (lifecycle.onShutdown) {
+        try {
+          await lifecycle.onShutdown(ctx);
         } catch (e) {
           errors.push(e);
         }
@@ -110,7 +167,10 @@ export function createConti(config: ContiConfig): ContiApp {
 /** The entrypoint. Run directly: `node --env-file=.env src/compose/conti.ts [port]`. */
 export function main(): void {
   const app = createConti(loadConfigFromEnv(process.argv[2]));
-  void app.start();
+  app.start().catch((e) => {
+    console.error('boot failed', e);
+    process.exit(1);
+  });
   // Graceful shutdown on a termination signal: stop once (idempotent), then exit; a guardian timer forces
   // exit if teardown hangs. `once` means a second Ctrl-C falls through to Node's default hard terminate.
   const shutdown = (signal: string): void => {
