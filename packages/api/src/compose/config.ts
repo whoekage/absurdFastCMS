@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { S3Config } from '../config.ts';
 import { config } from '../config.ts';
 
@@ -29,6 +30,13 @@ export interface ContiConfig {
   };
   readonly i18n: { readonly defaultLocale: string };
   readonly debug: { readonly inspector: boolean };
+  /**
+   * Files-first content SCHEMA location — the project's `schema/` dir holding one `schema/<apiId>.json` per
+   * content-type (the SOURCE OF TRUTH; see docs/research/schema-source-of-truth.md). Optional: when absent,
+   * {@link createConti} defaults to `<cwd>/schema`. Resolved to an absolute path by {@link loadConfigFromEnv}
+   * (relative to the project dir = cwd), so the CLI and direct callers agree.
+   */
+  readonly schema?: { readonly dir: string };
 }
 
 /**
@@ -63,5 +71,7 @@ export function loadConfigFromEnv(cliPort?: string): ContiConfig {
     },
     i18n: { defaultLocale: config.defaultLocale },
     debug: { inspector: config.debugInspector },
+    // The project dir is cwd (the CLI loads conti.config.ts from there); the schema files sit beside it.
+    schema: { dir: path.join(process.cwd(), 'schema') },
   };
 }

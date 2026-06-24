@@ -1,6 +1,8 @@
+import path from 'node:path';
 import { runMigrations } from '../db/migration.runner.ts';
 import { PostgresStore } from '../db/postgres.store.ts';
-import { seedArticleIfAbsent } from '../db/seed.ts';
+import { seedFromSchemas } from '../db/seed.ts';
+import { loadSchemaDir } from '../db/schema/serialize.ts';
 import { createServer, type ListenToken } from '../http/uws.adapter.ts';
 import { CursorCodec } from '../store/cursor.codec.ts';
 import { buildAuth } from '../auth/auth.ts';
@@ -79,9 +81,14 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     if (lifecycle.onBeforeStart) await lifecycle.onBeforeStart(ctx);
     await runMigrations(config.database.url);
     store = new PostgresStore(config.database.url);
-    await seedArticleIfAbsent(store.sql);
+    // FILES-FIRST source of truth: read the project's committed schema/<apiId>.json files at the EDGE,
+    // materialize any missing ct_ table from them (the S1 bridge until `conti migrate` owns this), then
+    // build the registry FROM the files (not the meta tables). Default the dir to <cwd>/schema.
+    const schemaDir = config.schema?.dir ?? path.join(process.cwd(), 'schema');
+    const schemas = await loadSchemaDir(schemaDir);
+    await seedFromSchemas(store.sql, schemas);
     // Keyset cursor codec (HMAC over the configured secret) wired once at the composition root.
-    const { engine, registry } = await store.loadWithRegistry({ cursorCodec: new CursorCodec(config.cursor.secret) });
+    const { engine, registry } = await store.loadFromSchemas(schemas, { cursorCodec: new CursorCodec(config.cursor.secret) });
 
     // AUTH (be-09a/b/f): build over the SAME postgres.js handle. teamView BEFORE auth (auth's user hooks call
     // teamView.rebuild) and BEFORE the session cache (caps a team member's cached TTL); the cache references

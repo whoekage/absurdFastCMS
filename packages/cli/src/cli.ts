@@ -105,6 +105,26 @@ const GITIGNORE_TEMPLATE = `node_modules
 .env
 `;
 
+// The demo content-type, files-first: `schema/<apiId>.json` is the SOURCE OF TRUTH (committed, dev-edited,
+// git-reviewed). createConti materializes it into `ct_article` + builds the registry from it at boot.
+const SCHEMA_ARTICLE_TEMPLATE = `{
+  "id": "ct_article",
+  "apiId": "article",
+  "collectionName": "ct_article",
+  "info": { "singularName": "article", "pluralName": "articles", "displayName": "Article" },
+  "options": { "draftAndPublish": false, "i18n": false },
+  "fields": [
+    { "id": "f_title", "name": "title", "type": "string", "options": { "length": 512, "nullable": true } },
+    { "id": "f_body", "name": "body", "type": "text", "options": { "nullable": false } },
+    { "id": "f_status", "name": "status", "type": "enumeration", "options": { "values": ["draft", "published", "archived"], "nullable": false } },
+    { "id": "f_views", "name": "views", "type": "integer", "options": { "nullable": true } },
+    { "id": "f_rating", "name": "rating", "type": "float", "options": { "nullable": true } },
+    { "id": "f_active", "name": "active", "type": "boolean", "options": { "nullable": false } },
+    { "id": "f_publishedAt", "name": "publishedAt", "type": "datetime", "options": { "nullable": false } }
+  ]
+}
+`;
+
 function packageJsonTemplate(name: string): string {
   return `${JSON.stringify(
     {
@@ -143,10 +163,13 @@ export async function initProject(dir: string, opts: { name?: string } = {}): Pr
   }
   const name = opts.name ?? path.basename(path.resolve(dir));
   await mkdir(dir, { recursive: true });
-  for (const sub of ['extensions', 'schema', 'generated']) {
+  for (const sub of ['extensions', 'generated']) {
     await mkdir(path.join(dir, sub), { recursive: true });
     await writeFile(path.join(dir, sub, '.gitkeep'), '');
   }
+  // schema/ ships the demo `article` type (files-first source of truth) instead of an empty .gitkeep.
+  await mkdir(path.join(dir, 'schema'), { recursive: true });
+  await writeFile(path.join(dir, 'schema', 'article.json'), SCHEMA_ARTICLE_TEMPLATE);
   await writeFile(path.join(dir, 'conti.config.ts'), CONFIG_TEMPLATE);
   await writeFile(path.join(dir, 'bootstrap.ts'), BOOTSTRAP_TEMPLATE);
   await writeFile(path.join(dir, 'package.json'), packageJsonTemplate(name));

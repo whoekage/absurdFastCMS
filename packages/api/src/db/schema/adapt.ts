@@ -33,6 +33,21 @@ export class SchemaAdaptError extends Error {
 // so a stray reader sees an obviously-synthetic value rather than a plausible real DB id.
 const SYNTHETIC_ID = 0;
 
+/**
+ * Project a schema's fields to the {@link FieldSpec}[] the meta writer (`createContentType`) + the catalog
+ * (`resolveFields`) consume. Each `options`/`localized` is set ONLY when present (exactOptionalPropertyTypes
+ * forbids an explicit `undefined` on an optional key). Shared by {@link schemaToRows} (registry build) and
+ * the file-driven seed (table materialization). Relations are not fields and are not projected here.
+ */
+export function schemaToFieldSpecs(schema: ContentTypeSchema): FieldSpec[] {
+  return schema.fields.map((f) => {
+    const spec: FieldSpec = { name: f.name, cmsType: f.type };
+    if (f.options !== undefined) spec.options = f.options;
+    if (f.localized !== undefined) spec.localized = f.localized;
+    return spec;
+  });
+}
+
 /** Stringify a bound default for the `default_value` text column — mirrors the meta writer's `defaultText`. */
 function defaultText(value: unknown): string | null {
   if (value === undefined || value === null) return null;
@@ -52,15 +67,7 @@ export function schemaToRows(schema: ContentTypeSchema): { ct: ContentTypeRow; f
   if (schema.relations && schema.relations.length > 0) {
     throw new SchemaAdaptError(schema.apiId, 'relations in schema files are deferred to a later slice (use the meta path for now)');
   }
-  // Build each FieldSpec setting `options`/`localized` ONLY when present (exactOptionalPropertyTypes forbids
-  // an explicit `undefined` on an optional key). `resolveFields` defaults nullable→true and localized→true.
-  const specs: FieldSpec[] = schema.fields.map((f) => {
-    const spec: FieldSpec = { name: f.name, cmsType: f.type };
-    if (f.options !== undefined) spec.options = f.options;
-    if (f.localized !== undefined) spec.localized = f.localized;
-    return spec;
-  });
-  const resolved = resolveFields(specs);
+  const resolved = resolveFields(schemaToFieldSpecs(schema));
   const epoch = new Date(0); // synthetic created_at/updated_at — buildDef does not read them.
   const ct: ContentTypeRow = {
     id: SYNTHETIC_ID,

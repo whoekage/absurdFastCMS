@@ -1,6 +1,7 @@
 import type { Sql } from 'postgres';
 import type { Engine, EngineOptions } from '../store/engine.ts';
 import { Registry } from './registry.ts';
+import type { ContentTypeSchema } from './schema/model.ts';
 import type { Store } from '../store/store.ts';
 import { buildEngine } from './engine.loader.ts';
 import { createSql } from './database.client.ts';
@@ -43,6 +44,19 @@ export class PostgresStore implements Store {
    */
   async loadWithRegistry(opts?: EngineOptions): Promise<{ engine: Engine; registry: Registry }> {
     const registry = await Registry.build(this.sql);
+    const engine = await buildEngine(this.sql, registry, opts);
+    return { engine, registry };
+  }
+
+  /**
+   * FILES-FIRST load (the permanent path): build the registry from committed schema OBJECTS (read at the
+   * EDGE by the composition root via `loadSchemaDir`) rather than the meta tables, then stream the `ct_`
+   * data into a fresh engine exactly as {@link loadWithRegistry} does. The `ct_` tables themselves are
+   * materialized by the file-driven seed before this runs, so the schema source and the physical tables
+   * agree. Supersedes `loadWithRegistry` once the meta compat shim is removed (S5, §7.1 Cleanup ledger).
+   */
+  async loadFromSchemas(schemas: ContentTypeSchema[], opts?: EngineOptions): Promise<{ engine: Engine; registry: Registry }> {
+    const registry = Registry.fromSchemas(schemas);
     const engine = await buildEngine(this.sql, registry, opts);
     return { engine, registry };
   }
