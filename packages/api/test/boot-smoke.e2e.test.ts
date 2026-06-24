@@ -42,3 +42,16 @@ test('createConti boots the full stack and serves a content read', async () => {
   const body = (await res.json()) as { data: unknown };
   assert.ok(Array.isArray(body.data), 'GET /article returns a {data:[...]} collection');
 });
+
+test('stop() before start() is a safe no-op', async () => {
+  // A never-started app holds no resources, so stop() must resolve without touching anything.
+  const fresh = createConti({ ...loadConfigFromEnv(), database: { url: db.url }, server: { port } });
+  await fresh.stop();
+});
+
+// MUST be the last test: it tears down the shared `app`. stop() is idempotent, so the after() hook's
+// stop() (a 3rd call) is a no-op; calling it twice here proves no double-close / re-run.
+test('stop() is idempotent (double call is safe)', async () => {
+  await app.stop();
+  await app.stop();
+});

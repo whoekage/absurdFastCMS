@@ -67,10 +67,41 @@ export function createConti(config: ContiConfig): ContiApp {
     console.log(`ready on ${config.server.port} (${rows} article rows from postgres)`);
   }
 
-  async function stop(): Promise<void> {
-    if (close !== undefined && listenToken !== undefined) close(listenToken);
-    sessionCache?.stop();
-    if (store !== undefined) await store.close();
+  // Idempotent, ordered, error-resilient teardown (Strapi destroy() style: stop services, close
+  // connections, remove timers — sequentially, each step guarded). The FIRST call runs it; every later
+  // call awaits the SAME result, so double-stop and stop-before-start are safe. Ordering follows the Node
+  // graceful-shutdown rule: (1) stop accepting new connections (close the uWS listen socket), (2) stop the
+  // background session sweep timer, (3) drain + close the owned PG pool — postgres.js `end()` waits for
+  // in-flight queries, and warm reads are zero-PG so they are unaffected.
+  let stopping: Promise<void> | undefined;
+  function stop(): Promise<void> {
+    if (stopping !== undefined) return stopping;
+    stopping = (async () => {
+      const errors: unknown[] = [];
+      if (close !== undefined && listenToken !== undefined) {
+        try {
+          close(listenToken);
+        } catch (e) {
+          errors.push(e);
+        }
+      }
+      if (sessionCache !== undefined) {
+        try {
+          sessionCache.stop();
+        } catch (e) {
+          errors.push(e);
+        }
+      }
+      if (store !== undefined) {
+        try {
+          await store.close();
+        } catch (e) {
+          errors.push(e);
+        }
+      }
+      if (errors.length > 0) throw new AggregateError(errors, 'errors during conti shutdown');
+    })();
+    return stopping;
   }
 
   return { start, stop };
@@ -78,7 +109,27 @@ export function createConti(config: ContiConfig): ContiApp {
 
 /** The entrypoint. Run directly: `node --env-file=.env src/compose/conti.ts [port]`. */
 export function main(): void {
-  void createConti(loadConfigFromEnv(process.argv[2])).start();
+  const app = createConti(loadConfigFromEnv(process.argv[2]));
+  void app.start();
+  // Graceful shutdown on a termination signal: stop once (idempotent), then exit; a guardian timer forces
+  // exit if teardown hangs. `once` means a second Ctrl-C falls through to Node's default hard terminate.
+  const shutdown = (signal: string): void => {
+    console.log(`${signal} received — shutting down`);
+    const guard = setTimeout(() => {
+      console.error('shutdown timed out after 10s — forcing exit');
+      process.exit(1);
+    }, 10_000);
+    guard.unref();
+    app.stop().then(
+      () => process.exit(0),
+      (e) => {
+        console.error('error during shutdown', e);
+        process.exit(1);
+      },
+    );
+  };
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
 }
 
 // Run only when invoked as the entrypoint (not when imported by a test/bench).
