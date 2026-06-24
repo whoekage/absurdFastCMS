@@ -17,6 +17,11 @@
     "bench": "npm run bench --workspace @conti/api",
     "db:up": "npm run db:up --workspace @conti/api",
     "db:down": "npm run db:down --workspace @conti/api",
-    "db:migrate": "npm run db:migrate --workspace @conti/api"
+    "db:migrate": "npm run db:migrate --workspace @conti/api",
+    "lint": "biome lint",
+    "lint:layers": "biome lint packages/api/src"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.1"
   }
 }
