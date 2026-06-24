@@ -28,7 +28,7 @@ const KEY_U32 = new Uint32Array(KEY_BUF); // [0]=low word, [1]=high word on litt
  * The sort is stable (counting sort per byte), so equal keys keep ascending row-id order — the
  * same tie-break the old comparator's stable `Array.sort` gave on equal values.
  */
-function radixSortRows(vals: Float64Array, n: number, type: ColumnType): Int32Array {
+function radixSortRows(vals: Float64Array, n: number, type: ColumnType): Int32Array<ArrayBuffer> {
   const loKey = new Uint32Array(n);
   const hiKey = new Uint32Array(n);
   if (type === 'i32') {
@@ -85,7 +85,7 @@ function radixSortRows(vals: Float64Array, n: number, type: ColumnType): Int32Ar
  * The 8-byte LSD counting-sort loop is identical to {@link radixSortRows} (and stable), so equal keys
  * keep ascending row-id order.
  */
-function radixSortRowsI64(vals: BigInt64Array, n: number): Int32Array {
+function radixSortRowsI64(vals: BigInt64Array, n: number): Int32Array<ArrayBuffer> {
   const loKey = new Uint32Array(n);
   const hiKey = new Uint32Array(n);
   const FLIP = 1n << 63n;
@@ -238,6 +238,7 @@ export class SortedIndex {
       case 'lte': return [0, this.upperBound(value)];
       case 'eq':  return [this.lowerBound(value), this.upperBound(value)];
       case 'ne':  return [0, 0]; // not range-shaped; caller falls back to a scan
+      default: throw new Error(`rangeSlice: non-range op ${op}`); // only gt/gte/lt/lte/eq/ne reach here
     }
   }
 

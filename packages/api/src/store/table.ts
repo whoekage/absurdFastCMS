@@ -383,7 +383,7 @@ export class Table {
       this.nullWords.set(field, next);
       words = next;
     }
-    words[wordIdx] |= 1 << (rowId & 31);
+    words[wordIdx] = words[wordIdx]! | (1 << (rowId & 31));
   }
 
   /** True if `field` carries a NULL/missing value at `row`. */

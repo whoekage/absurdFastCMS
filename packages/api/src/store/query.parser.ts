@@ -172,8 +172,8 @@ export type ParamNode = string | ParamNode[] | { [k: string]: ParamNode };
  */
 export interface SchemaEntry {
   type: ColumnType;
-  scale?: number;
-  precision?: number;
+  scale?: number | undefined;
+  precision?: number | undefined;
 }
 export type Schema = Map<string, SchemaEntry>;
 

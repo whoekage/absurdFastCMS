@@ -16,7 +16,7 @@ export function buildCsr(
   numKeys: number,
   keys: ArrayLike<number>,
   values: ArrayLike<number>,
-): { offsets: Int32Array; postings: Int32Array } {
+): { offsets: Int32Array<ArrayBuffer>; postings: Int32Array<ArrayBuffer> } {
   const offsets = new Int32Array(numKeys + 1);
   for (let i = 0; i < n; i++) offsets[keys[i]! + 1]!++; // count: key k -> offsets[k+1]
   for (let k = 0; k < numKeys; k++) offsets[k + 1]! += offsets[k]!; // prefix-sum into group starts

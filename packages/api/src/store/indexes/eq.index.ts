@@ -177,7 +177,8 @@ export class EqIndex {
     for (let k = 0; k < c; k++) planes[k] = new Uint32Array(wordsPerPlane);
     for (let i = 0; i < n; i++) {
       const row = rowsBuf[i]!;
-      planes[codeForRow[i]!]![row >>> 5] |= 1 << (row & 31);
+      const plane = planes[codeForRow[i]!]!;
+      plane[row >>> 5] = plane[row >>> 5]! | (1 << (row & 31));
     }
     return planes;
   }

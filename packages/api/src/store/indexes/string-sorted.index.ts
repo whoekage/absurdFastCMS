@@ -11,7 +11,7 @@ import type { SortDir } from './sorted.index.ts';
  * so the sign-flip is a no-op on value order; we keep it verbatim from the numeric path so the two
  * sort engines are provably identical.
  */
-function radixSortByRank(keys: Int32Array, n: number): Int32Array {
+function radixSortByRank(keys: Int32Array, n: number): Int32Array<ArrayBuffer> {
   const loKey = new Uint32Array(n);
   for (let r = 0; r < n; r++) loKey[r] = (keys[r]! ^ 0x80000000) >>> 0;
 

@@ -16,11 +16,13 @@ export class Bitset {
   }
 
   set(i: number): void {
-    this.words[i >>> 5] |= 1 << (i & 31);
+    const w = i >>> 5;
+    this.words[w] = this.words[w]! | (1 << (i & 31));
   }
 
   clear(i: number): void {
-    this.words[i >>> 5] &= ~(1 << (i & 31));
+    const w = i >>> 5;
+    this.words[w] = this.words[w]! & ~(1 << (i & 31));
   }
 
   get(i: number): boolean {

@@ -43,8 +43,8 @@ export interface SigInput {
  */
 export interface SortFieldType {
   type: ColumnType;
-  scale?: number;
-  precision?: number;
+  scale?: number | undefined;
+  precision?: number | undefined;
 }
 
 const CURSOR_VERSION = 1;
