@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -201,7 +201,19 @@ async function main(argv: string[]): Promise<void> {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+// "Am I the CLI entry?" — realpath BOTH sides so a SYMLINKED bin (npm link / global install) matches: there
+// process.argv[1] is the symlink path while import.meta.url is the real path, so a raw compare (or
+// import.meta.main) silently skipped main(). When a test imports this module, argv[1] is the test file, so
+// realpath differs and main() does not run.
+function isEntrypoint(): boolean {
+  try {
+    return realpathSync(process.argv[1] ?? '') === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isEntrypoint()) {
   main(process.argv).catch((e) => {
     console.error('conti: fatal', e);
     process.exit(1);
