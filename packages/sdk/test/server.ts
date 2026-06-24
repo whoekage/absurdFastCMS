@@ -15,7 +15,7 @@ import {
   type RelationSpec,
 } from '../../api/src/db/content-type.repository.ts';
 import type { Engine } from '../../api/src/store/engine.ts';
-import type { Registry } from '../../api/src/store/registry.ts';
+import type { Registry } from '../../api/src/db/registry.ts';
 
 /**
  * Slice 3.5 — the mock-free integration harness for @conti/sdk.

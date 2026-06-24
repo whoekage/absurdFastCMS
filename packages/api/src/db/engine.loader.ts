@@ -4,7 +4,7 @@ import { CursorCodec } from '../store/cursor.codec.ts';
 import { Relation } from '../store/relation.ts';
 import type { Table } from '../store/table.ts';
 import { quoteIdent, validateIdentifier, inverseKind } from './ddl.ts';
-import type { ContentTypeDef, ColumnDescriptor, Registry, RelationMeta } from '../store/registry.ts';
+import type { ContentTypeDef, ColumnDescriptor, Registry, RelationMeta } from './registry.ts';
 import { config } from '../config.ts';
 
 /** Rows pulled per cursor batch — bounds peak memory so a multi-million-row table never buffers whole. */

@@ -1,7 +1,7 @@
 import uWS from 'uWebSockets.js';
 import busboy from 'busboy';
 import type { Engine } from '../store/engine.ts';
-import type { Registry } from '../store/registry.ts';
+import type { Registry } from '../db/registry.ts';
 import type { PostgresStore } from '../db/postgres.store.ts';
 import { rebuildType } from '../db/engine.loader.ts';
 import { handleRequest, errorResponse, JSON_CT, type CoreResponse } from './read.router.ts';

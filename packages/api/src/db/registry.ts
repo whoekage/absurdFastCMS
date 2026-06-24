@@ -1,7 +1,7 @@
 import type { Sql } from 'postgres';
-import type { ColumnType } from './column.ts';
-import type { FieldDef } from './table.ts';
-import { deriveTableName, validateIdentifier, RELATION_KINDS, type RelationKind } from '../db/ddl.ts';
+import type { ColumnType } from '../store/column.ts';
+import type { FieldDef } from '../store/table.ts';
+import { deriveTableName, validateIdentifier, RELATION_KINDS, type RelationKind } from './ddl.ts';
 import {
   listContentTypes,
   getContentType,
@@ -10,15 +10,15 @@ import {
   type ContentTypeRow,
   type FieldRow,
   type RelationRow,
-} from '../db/content-type.repository.ts';
+} from './content-type.repository.ts';
 import {
   listComponentTypes,
   getComponentType,
   getComponentFields,
   type ComponentTypeRow,
   type ComponentFieldRow,
-} from '../db/component-type.repository.ts';
-import { isComponentFieldKind, type CmsType, type ComponentFieldKind } from '../db/type.catalog.ts';
+} from './component-type.repository.ts';
+import { isComponentFieldKind, type CmsType, type ComponentFieldKind } from './type.catalog.ts';
 
 /**
  * THE RAM SOURCE OF TRUTH at runtime. Built at boot from `content_types` + `content_type_fields`, the

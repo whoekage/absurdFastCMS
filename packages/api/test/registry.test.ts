@@ -2,7 +2,7 @@ import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { createContentType } from '../src/db/content-type.repository.ts';
-import { Registry, RegistryError } from '../src/store/registry.ts';
+import { Registry, RegistryError } from '../src/db/registry.ts';
 import { loadType } from '../src/db/engine.loader.ts';
 import { Engine } from '../src/store/engine.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';

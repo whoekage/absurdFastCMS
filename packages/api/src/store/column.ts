@@ -2,7 +2,7 @@ import { Bitset } from './bitset.ts';
 import { buildCsr } from './csr.ts';
 import { SubstringIndex } from './indexes/substring.index.ts';
 import { OffHeapStringInterner, OffHeapStringArena } from './string-interner.ts';
-import { DECIMAL_MAX_SAFE_PRECISION } from '../db/type.catalog.ts';
+import { DECIMAL_MAX_SAFE_PRECISION } from './decimal.const.ts';
 
 export type ColumnType =
   | 'i32'

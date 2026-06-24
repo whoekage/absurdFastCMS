@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { Registry } from '../src/store/registry.ts';
+import { Registry } from '../src/db/registry.ts';
 import { DetachedTable, Engine } from '../src/store/engine.ts';
 import { insertEntry, EntryWriteError } from '../src/db/entry.repository.ts';
 import { createContentType } from '../src/db/content-type.repository.ts';

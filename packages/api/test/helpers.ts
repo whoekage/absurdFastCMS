@@ -3,7 +3,7 @@ import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer } from '../src/http/uws.adapter.ts';
 import type { Engine } from '../src/store/engine.ts';
-import type { Registry } from '../src/store/registry.ts';
+import type { Registry } from '../src/db/registry.ts';
 
 /** Shared test helpers: extracted verbatim from the per-file copies so behavior stays byte-identical. */
 

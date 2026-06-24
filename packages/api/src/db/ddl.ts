@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler, DummyDriver, sql, type CompiledQuery } from 'kysely';
 import type { Sql } from 'postgres';
 import type { ResolvedType } from './type.catalog.ts';
+import type { RelationKind } from '../store/relation.ts';
 
 /**
  * Identifier safety + the Kysely COMPILE-ONLY DDL builders + the one atomic transactional applier.
@@ -173,7 +174,7 @@ export class UnknownRelationKindError extends Error {
 
 // --- relation kinds (a CLOSED set; relations are NOT scalar CmsTypes — they never touch resolveType) --
 
-export type RelationKind = 'oneToOne' | 'oneToMany' | 'manyToOne' | 'manyToMany';
+export type { RelationKind }; // engine-owned vocabulary (../store/relation.ts); re-exported for existing db/http consumers
 export const RELATION_KINDS: ReadonlySet<string> = new Set<RelationKind>(['oneToOne', 'oneToMany', 'manyToOne', 'manyToMany']);
 
 /** Closed-set validate a relation kind; the value is NEVER interpolated into SQL (it only selects a fixed template). */

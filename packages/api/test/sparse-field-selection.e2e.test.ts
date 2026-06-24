@@ -2,7 +2,7 @@ import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { createContentType, addRelation } from '../src/db/content-type.repository.ts';
-import { Registry } from '../src/store/registry.ts';
+import { Registry } from '../src/db/registry.ts';
 import { buildEngine } from '../src/db/engine.loader.ts';
 import { Engine } from '../src/store/engine.ts';
 import { handleRequest } from '../src/http/read.router.ts';

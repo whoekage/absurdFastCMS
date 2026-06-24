@@ -3,7 +3,7 @@ import { Bitset } from './bitset.ts';
 import { RawJson } from './column.ts';
 import { Relation } from './relation.ts';
 import { QueryParseError, type RelationParseContext, type PopulateNode, type PopulatePlan } from './query.parser.ts';
-import type { RelationKind } from '../db/ddl.ts';
+import type { RelationKind } from './relation.ts';
 import {
   CursorCodec,
   InvalidCursorError,

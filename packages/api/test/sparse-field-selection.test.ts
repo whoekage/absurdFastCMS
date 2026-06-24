@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Engine } from '../src/store/engine.ts';
 import { queryKey } from '../src/store/response.cache.ts';
-import { SYSTEM_FIELDS } from '../src/store/registry.ts';
+import { SYSTEM_FIELDS } from '../src/db/registry.ts';
 import { type FieldDef, type QueryOptions } from '../src/store/table.ts';
 
 /**

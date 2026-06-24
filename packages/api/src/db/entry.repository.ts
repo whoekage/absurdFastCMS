@@ -1,6 +1,6 @@
 import type { Sql } from 'postgres';
 import { RawJson } from '../store/column.ts';
-import type { ContentTypeDef, RegistryField } from '../store/registry.ts';
+import type { ContentTypeDef, RegistryField } from './registry.ts';
 import { quoteIdent } from './ddl.ts';
 import { assertTableName } from './engine.loader.ts';
 

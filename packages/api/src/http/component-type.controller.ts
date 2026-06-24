@@ -1,5 +1,5 @@
 import type { Sql } from 'postgres';
-import type { Registry, ComponentDef } from '../store/registry.ts';
+import type { Registry, ComponentDef } from '../db/registry.ts';
 import {
   createComponentType,
   addComponentField,

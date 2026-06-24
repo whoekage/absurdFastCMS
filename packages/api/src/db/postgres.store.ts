@@ -1,6 +1,6 @@
 import type { Sql } from 'postgres';
 import type { Engine, EngineOptions } from '../store/engine.ts';
-import { Registry } from '../store/registry.ts';
+import { Registry } from './registry.ts';
 import type { Store } from '../store/store.ts';
 import { buildEngine } from './engine.loader.ts';
 import { createSql } from './database.client.ts';

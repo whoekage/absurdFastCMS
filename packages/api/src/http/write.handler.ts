@@ -1,7 +1,7 @@
 import type { Sql } from 'postgres';
 import type { Engine } from '../store/engine.ts';
-import type { Registry, ContentTypeDef, ComponentDef } from '../store/registry.ts';
-import { validateBody, BodyParseError } from '../store/body.parser.ts';
+import type { Registry, ContentTypeDef, ComponentDef } from '../db/registry.ts';
+import { validateBody, BodyParseError } from '../db/body.parser.ts';
 import { insertEntry, updateEntry, deleteEntry, publishEntry, unpublishEntry, readSiblingForVariant, serializeEntry, missingEntryIds, EntryWriteError } from '../db/entry.repository.ts';
 import { applyRelationOps } from '../db/relation.repository.ts';
 import { missingFileIds } from '../db/file.repository.ts';

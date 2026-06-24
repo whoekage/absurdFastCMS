@@ -1,5 +1,5 @@
 import type { Sql } from 'postgres';
-import type { ContentTypeDef } from '../store/registry.ts';
+import type { ContentTypeDef } from '../db/registry.ts';
 import { getFilesByIds, type FileAsset } from '../db/file.repository.ts';
 import { JSON_CT, type CoreResponse } from './read.router.ts';
 

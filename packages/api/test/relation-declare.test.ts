@@ -8,7 +8,7 @@ import {
   getContentType,
   getRelations,
 } from '../src/db/content-type.repository.ts';
-import { Registry } from '../src/store/registry.ts';
+import { Registry } from '../src/db/registry.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog, tableExists, physicalColumns } from './helpers.ts';
 import {

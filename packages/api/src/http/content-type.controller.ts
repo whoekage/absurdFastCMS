@@ -1,6 +1,6 @@
 import type { Sql } from 'postgres';
 import type { Engine } from '../store/engine.ts';
-import type { Registry, ContentTypeDef } from '../store/registry.ts';
+import type { Registry, ContentTypeDef } from '../db/registry.ts';
 import { loadType, rebuildType, loadAllRelations } from '../db/engine.loader.ts';
 import {
   createContentType,

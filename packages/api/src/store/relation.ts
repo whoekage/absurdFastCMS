@@ -3,6 +3,13 @@ import { Table } from './table.ts';
 import { buildCsr } from './csr.ts';
 
 /**
+ * The closed set of relation kinds — engine-level vocabulary, so both the engine and the db
+ * layer import it downward. The DDL logic (RELATION_KINDS set, validators, inverseKind) stays
+ * in db/ddl.ts, which re-exports this type for its existing consumers.
+ */
+export type RelationKind = 'oneToOne' | 'oneToMany' | 'manyToOne' | 'manyToMany';
+
+/**
  * A single-hop relation between an OWNER table and a RELATED table, stored as a CSR
  * (compressed-sparse-row) adjacency over EXPLICIT edges `ownerRow -> relatedRow`.
  *

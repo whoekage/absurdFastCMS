@@ -1,7 +1,7 @@
-import { coerceI64, coerceDecimal, formatDecimal } from './column.ts';
+import { coerceI64, coerceDecimal, formatDecimal } from '../store/column.ts';
 import type { ComponentDef, ContentTypeDef, Registry, RegistryField, RelationMeta } from './registry.ts';
 import { SYSTEM_COLUMN_NAMES } from './registry.ts';
-import type { ComponentFieldKind } from '../db/type.catalog.ts';
+import type { ComponentFieldKind } from './type.catalog.ts';
 
 /** The Postgres int4 PK upper bound — a related id must be a positive int4 (mirrors {@link write.ts}). */
 const MAX_INT4 = 2147483647;

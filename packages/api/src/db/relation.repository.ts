@@ -1,6 +1,6 @@
 import type { Sql } from 'postgres';
-import type { ContentTypeDef, RelationMeta } from '../store/registry.ts';
-import type { RelationOp } from '../store/body.parser.ts';
+import type { ContentTypeDef, RelationMeta } from './registry.ts';
+import type { RelationOp } from './body.parser.ts';
 import { quoteIdent, validateIdentifier, inverseKind, type RelationKind } from './ddl.ts';
 import { EntryWriteError, mapPgError } from './entry.repository.ts';
 

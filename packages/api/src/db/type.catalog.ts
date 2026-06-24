@@ -1,4 +1,5 @@
 import type { ColumnType } from '../store/column.ts';
+import { DECIMAL_MAX_SAFE_PRECISION } from '../store/decimal.const.ts';
 
 /**
  * The SINGLE source of the `cms_type -> { pgType, engineType, params }` mapping. Both the DDL
@@ -127,7 +128,6 @@ const DEFAULT_EMAIL_LENGTH = 254;
 const DEFAULT_UID_LENGTH = 255;
 /** Hard numeric ceilings from PG, plus our scaled-i64 cap so a `decimal` round-trips through int64. */
 const NUMERIC_MAX_PRECISION = 1000;
-export const DECIMAL_MAX_SAFE_PRECISION = 18;
 
 /**
  * Volatile default expressions that force a table rewrite (and a non-deterministic baked value):

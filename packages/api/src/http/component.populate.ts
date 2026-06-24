@@ -1,5 +1,5 @@
 import type { Sql } from 'postgres';
-import type { ComponentDef, ContentTypeDef, Registry } from '../store/registry.ts';
+import type { ComponentDef, ContentTypeDef, Registry } from '../db/registry.ts';
 import type { Engine } from '../store/engine.ts';
 import type { FilterNode } from '../store/table.ts';
 import { getFilesByIds, type FileAsset } from '../db/file.repository.ts';
