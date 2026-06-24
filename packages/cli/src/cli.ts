@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createConti, type ContiApp, type ContiConfig, type ServerLifecycle } from '@conti/core';
@@ -79,6 +81,82 @@ export async function runStart(cwd: string = process.cwd()): Promise<void> {
   installSignals(app);
 }
 
+// ----- conti init: scaffold a thin project (the two-file contract + the standard dirs) -----
+
+const CONFIG_TEMPLATE = `import { defineConfig, loadConfigFromEnv } from '@conti/core';
+
+// Server config-as-code. Env-driven by default; override any field inline, e.g.:
+//   export default defineConfig({ ...loadConfigFromEnv(), server: { port: 8080 } });
+export default defineConfig(loadConfigFromEnv());
+`;
+
+const BOOTSTRAP_TEMPLATE = `import { defineBootstrap } from '@conti/core';
+
+// SERVER lifecycle (NOT content/data hooks). Fail-fast in onBeforeStart, readiness/warmup in
+// onAfterStart, graceful resource close in onShutdown. Context is { config, log } (+ port for afterStart).
+export default defineBootstrap({
+  onAfterStart(ctx) {
+    ctx.log(\`ready on :\${ctx.port}\`);
+  },
+});
+`;
+
+const GITIGNORE_TEMPLATE = `node_modules
+.env
+`;
+
+function packageJsonTemplate(name: string): string {
+  return `${JSON.stringify(
+    {
+      name,
+      version: '0.0.0',
+      private: true,
+      type: 'module',
+      engines: { node: '>=24' },
+      scripts: { dev: 'conti dev', start: 'conti start' },
+      dependencies: { '@conti/core': '^0.1.0', '@conti/cli': '^0.1.0' },
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+function envExampleTemplate(authSecret: string, cursorSecret: string): string {
+  return [
+    '# Copy to .env and set DATABASE_URL. Dev reads .env; tests read .env.test.',
+    'DATABASE_URL=postgres://conti:conti@localhost:5432/conti_dev',
+    `AUTH_SECRET=${authSecret}`,
+    `CURSOR_SECRET=${cursorSecret}`,
+    'PORT=3000',
+    '',
+  ].join('\n');
+}
+
+/**
+ * Scaffold a thin conti project at `dir`: the two-file contract (conti.config.ts + bootstrap.ts), a
+ * package.json wired to the `conti` CLI, an .env.example with freshly-generated secrets, and the standard
+ * extensions/ schema/ generated/ dirs. Refuses to overwrite an existing project.
+ */
+export async function initProject(dir: string, opts: { name?: string } = {}): Promise<void> {
+  if (existsSync(path.join(dir, 'conti.config.ts'))) {
+    throw new Error(`conti: ${dir} already contains a conti.config.ts — refusing to overwrite`);
+  }
+  const name = opts.name ?? path.basename(path.resolve(dir));
+  await mkdir(dir, { recursive: true });
+  for (const sub of ['extensions', 'schema', 'generated']) {
+    await mkdir(path.join(dir, sub), { recursive: true });
+    await writeFile(path.join(dir, sub, '.gitkeep'), '');
+  }
+  await writeFile(path.join(dir, 'conti.config.ts'), CONFIG_TEMPLATE);
+  await writeFile(path.join(dir, 'bootstrap.ts'), BOOTSTRAP_TEMPLATE);
+  await writeFile(path.join(dir, 'package.json'), packageJsonTemplate(name));
+  await writeFile(
+    path.join(dir, '.env.example'),
+    envExampleTemplate(randomBytes(32).toString('hex'), randomBytes(32).toString('hex')),
+  );
+  await writeFile(path.join(dir, '.gitignore'), GITIGNORE_TEMPLATE);
+}
+
 /**
  * The argv (after the node binary) for the watched dev child — exported for testing. `conti dev` runs the
  * server under Node's built-in `--watch`: it watches this CLI entry + its whole import graph (including the
@@ -108,8 +186,17 @@ async function main(argv: string[]): Promise<void> {
     case 'dev':
       runDev();
       break;
+    case 'init': {
+      const target = path.resolve(argv[3] ?? '.');
+      await initProject(target);
+      console.log(
+        `conti: scaffolded a project in ${target}\n` +
+          "next: cp .env.example .env, set DATABASE_URL, then run 'conti dev'.",
+      );
+      break;
+    }
     default:
-      console.error(`conti: unknown command ${JSON.stringify(cmd ?? '')}. Available: start, dev`);
+      console.error(`conti: unknown command ${JSON.stringify(cmd ?? '')}. Available: start, dev, init`);
       process.exit(1);
   }
 }
