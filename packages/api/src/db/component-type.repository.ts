@@ -1,4 +1,4 @@
-import type { Sql } from 'postgres';
+import type { Sql, JSONValue } from 'postgres';
 import {
   resolveType,
   resolveComponentField,
@@ -61,7 +61,7 @@ export interface ComponentFieldRow {
 export interface ComponentFieldSpec {
   name: string;
   cmsType: CmsType | ComponentFieldKind;
-  options?: FieldOptions;
+  options?: FieldOptions | undefined;
 }
 
 // --- typed errors (deterministic; never leak a raw PG error) -----------------------------------
@@ -281,7 +281,7 @@ export async function createComponentType(sql: Sql, params: { apiId: string; fie
       const f = fields[i]!;
       await tx`
         INSERT INTO component_type_fields (component_type_id, name, cms_type, params, nullable, sort)
-        VALUES (${cmp!.id}, ${f.name}, ${f.cmsType}, ${tx.json(f.params)}, ${f.nullable}, ${i})
+        VALUES (${cmp!.id}, ${f.name}, ${f.cmsType}, ${tx.json(f.params as JSONValue)}, ${f.nullable}, ${i})
       `;
     }
     return cmp!;
@@ -310,10 +310,11 @@ export async function addComponentField(sql: Sql, apiId: string, spec: Component
     await assertNoComponentCycle(tx, cmp.api_id, refs);
     const dup = await tx`SELECT 1 FROM component_type_fields WHERE component_type_id = ${cmp.id} AND lower(name) = lower(${field!.name})`;
     if (dup.length > 0) throw new FieldExistsError(field!.name);
-    const [{ next }] = await tx<{ next: number }[]>`SELECT COALESCE(MAX(sort) + 1, 0) AS next FROM component_type_fields WHERE component_type_id = ${cmp.id}`;
+    const [nextRow] = await tx<{ next: number }[]>`SELECT COALESCE(MAX(sort) + 1, 0) AS next FROM component_type_fields WHERE component_type_id = ${cmp.id}`;
+    const next = nextRow!.next;
     const [row] = await tx<ComponentFieldRow[]>`
       INSERT INTO component_type_fields (component_type_id, name, cms_type, params, nullable, sort)
-      VALUES (${cmp.id}, ${field!.name}, ${field!.cmsType}, ${tx.json(field!.params)}, ${field!.nullable}, ${next!})
+      VALUES (${cmp.id}, ${field!.name}, ${field!.cmsType}, ${tx.json(field!.params as JSONValue)}, ${field!.nullable}, ${next})
       RETURNING *
     `;
     return row!;

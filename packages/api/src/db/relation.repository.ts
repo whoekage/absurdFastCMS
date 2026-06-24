@@ -1,4 +1,4 @@
-import type { Sql } from 'postgres';
+import type { Sql, TransactionSql } from 'postgres';
 import type { ContentTypeDef, RelationMeta } from './registry.ts';
 import type { RelationOp } from './body.parser.ts';
 import { quoteIdent, validateIdentifier, inverseKind, type RelationKind } from './ddl.ts';
@@ -33,7 +33,7 @@ function owningKind(meta: RelationMeta): RelationKind {
 }
 
 /** Apply every relation op for `ownerId` (the body-owner's row) within the caller's tx `tx`. */
-export async function applyRelationOps(tx: Sql, def: ContentTypeDef, ownerId: number, ops: RelationOp[]): Promise<void> {
+export async function applyRelationOps(tx: Sql | TransactionSql, def: ContentTypeDef, ownerId: number, ops: RelationOp[]): Promise<void> {
   for (const op of ops) {
     const meta = def.relationsByField.get(op.field);
     if (meta === undefined) throw new EntryWriteError('write rejected: unknown relation field'); // unreachable past the validator.
@@ -90,7 +90,7 @@ function assertToOneCap(meta: RelationMeta, op: RelationOp): void {
  * names the PHYSICAL UNIQUE column(s) from ddl.ts via COLUMN INFERENCE (not the cap()-truncated
  * constraint name). `ord` is left NULL (the column is nullable; populate ordering is edge/PK order).
  */
-async function insertEdge(tx: Sql, meta: RelationMeta, tbl: string, ownerId: number, id: number): Promise<void> {
+async function insertEdge(tx: Sql | TransactionSql, meta: RelationMeta, tbl: string, ownerId: number, id: number): Promise<void> {
   // Physical column values: owning side -> (owner_id=ownerId, related_id=id); inverse side -> swapped.
   const o = meta.isOwner ? ownerId : id;
   const r = meta.isOwner ? id : ownerId;

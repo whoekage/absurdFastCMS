@@ -1,4 +1,4 @@
-import type { Sql } from 'postgres';
+import type { Sql, JSONValue, ParameterOrJSON } from 'postgres';
 import { resolveType, resolveComponentField, isComponentFieldKind, classifyTypeChange, ComponentFieldError, type CmsType, type ComponentFieldKind, type FieldOptions, type ResolvedType } from './type.catalog.ts';
 import { assertComponentRefsExist } from './component-type.repository.ts';
 import {
@@ -49,7 +49,7 @@ export interface FieldSpec {
   /** A scalar {@link CmsType} OR a be-05 {@link ComponentFieldKind} (component/component-repeatable/dynamiczone). */
   name: string;
   cmsType: CmsType | ComponentFieldKind;
-  options?: FieldOptions;
+  options?: FieldOptions | undefined;
   /** i18n: true => the field is localized (per-variant); false => shared across locale variants. Defaults true. */
   localized?: boolean;
 }
@@ -249,14 +249,14 @@ export async function createContentType(sql: Sql, params: { apiId: string; field
       const f = fields[i]!;
       await tx`
         INSERT INTO content_type_fields (content_type_id, name, cms_type, pg_type, engine_type, nullable, sort, default_value, params, localized)
-        VALUES (${ct!.id}, ${f.name}, ${f.resolved.cmsType}, ${f.resolved.pgType}, ${f.resolved.engineType}, ${f.nullable}, ${i}, ${defaultText(f.defaultValue)}, ${tx.json(paramsOf(f.resolved))}, ${f.localized ?? true})
+        VALUES (${ct!.id}, ${f.name}, ${f.resolved.cmsType}, ${f.resolved.pgType}, ${f.resolved.engineType}, ${f.nullable}, ${i}, ${defaultText(f.defaultValue)}, ${tx.json(paramsOf(f.resolved) as JSONValue)}, ${f.localized ?? true})
       `;
     }
     // The owner ct_ table must exist BEFORE any (possibly self-referential) link-table FK is created.
     // D&P opt-in injects a conditional `published_at` system column (NULL=draft); i18n opt-in injects a
     // conditional NOT NULL `locale` column + UNIQUE(document_id, locale) — see compileCreateTable.
     const ddl = compileCreateTable(tableName, fields, params.draftPublish ?? false, params.i18n ?? false);
-    await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
+    await tx.unsafe(ddl.sql, ddl.parameters as ParameterOrJSON<never>[]);
 
     for (const spec of relations) {
       const selfReferential = spec.target.toLowerCase() === params.apiId.toLowerCase();
@@ -297,14 +297,15 @@ export async function addField(sql: Sql, apiId: string, spec: FieldSpec): Promis
     await assertComponentRefsExist(tx, referencedComponents([field])); // be-05: refs must exist (400 else).
     const dup = await tx`SELECT 1 FROM content_type_fields WHERE content_type_id = ${ct.id} AND lower(name) = lower(${name})`;
     if (dup.length > 0) throw new FieldExistsError(name);
-    const [{ next }] = await tx<{ next: number }[]>`SELECT COALESCE(MAX(sort) + 1, 0) AS next FROM content_type_fields WHERE content_type_id = ${ct.id}`;
+    const [nextRow] = await tx<{ next: number }[]>`SELECT COALESCE(MAX(sort) + 1, 0) AS next FROM content_type_fields WHERE content_type_id = ${ct.id}`;
+    const next = nextRow!.next;
     const [row] = await tx<FieldRow[]>`
       INSERT INTO content_type_fields (content_type_id, name, cms_type, pg_type, engine_type, nullable, sort, default_value, params, localized)
-      VALUES (${ct.id}, ${name}, ${resolved.cmsType}, ${resolved.pgType}, ${resolved.engineType}, ${nullable}, ${next!}, ${defaultText(defaultValue)}, ${tx.json(paramsOf(resolved))}, ${field.localized ?? true})
+      VALUES (${ct.id}, ${name}, ${resolved.cmsType}, ${resolved.pgType}, ${resolved.engineType}, ${nullable}, ${next}, ${defaultText(defaultValue)}, ${tx.json(paramsOf(resolved) as JSONValue)}, ${field.localized ?? true})
       RETURNING *
     `;
     const ddl = compileAddColumn(ct.table_name, field);
-    await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
+    await tx.unsafe(ddl.sql, ddl.parameters as ParameterOrJSON<never>[]);
     return row!;
   });
 }
@@ -328,7 +329,7 @@ export async function renameField(sql: Sql, apiId: string, from: string, to: str
     }
     const [row] = await tx<FieldRow[]>`UPDATE content_type_fields SET name = ${newName} WHERE id = ${source.id} RETURNING *`;
     const ddl = compileRenameColumn(ct.table_name, source.name, newName);
-    await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
+    await tx.unsafe(ddl.sql, ddl.parameters as ParameterOrJSON<never>[]);
     return row!;
   });
 }
@@ -349,7 +350,7 @@ export async function dropField(sql: Sql, apiId: string, name: string): Promise<
     const field = rows[0]!;
     await tx`DELETE FROM content_type_fields WHERE id = ${field.id}`;
     const ddl = compileDropColumn(ct.table_name, field.name);
-    await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
+    await tx.unsafe(ddl.sql, ddl.parameters as ParameterOrJSON<never>[]);
   });
 }
 
@@ -379,11 +380,11 @@ export async function changeFieldType(sql: Sql, apiId: string, name: string, cms
     const klass = classifyTypeChange(fromResolved, toResolved);
     if (klass !== 'metadata-only') throw new TypeChangeForbiddenError(`type change ${field.pg_type} -> ${toResolved.pgType} is a ${klass} change, not allowed in this step`);
     const [row] = await tx<FieldRow[]>`
-      UPDATE content_type_fields SET cms_type = ${toResolved.cmsType}, pg_type = ${toResolved.pgType}, engine_type = ${toResolved.engineType}, params = ${tx.json(paramsOf(toResolved))}
+      UPDATE content_type_fields SET cms_type = ${toResolved.cmsType}, pg_type = ${toResolved.pgType}, engine_type = ${toResolved.engineType}, params = ${tx.json(paramsOf(toResolved) as JSONValue)}
       WHERE id = ${field.id} RETURNING *
     `;
     const ddl = compileAlterColumnType(ct.table_name, field.name, toResolved);
-    await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
+    await tx.unsafe(ddl.sql, ddl.parameters as ParameterOrJSON<never>[]);
     return row!;
   });
 }
@@ -400,8 +401,8 @@ async function assertFieldNameFree(tx: Sql, contentTypeId: number, field: string
 
 /** The next `sort` for a type's relations (its OWN sequence, never shared with content_type_fields). */
 async function nextRelationSort(tx: Sql, contentTypeId: number): Promise<number> {
-  const [{ next }] = await tx<{ next: number }[]>`SELECT COALESCE(MAX(sort) + 1, 0) AS next FROM content_type_relations WHERE content_type_id = ${contentTypeId}`;
-  return next!;
+  const [nextRow] = await tx<{ next: number }[]>`SELECT COALESCE(MAX(sort) + 1, 0) AS next FROM content_type_relations WHERE content_type_id = ${contentTypeId}`;
+  return nextRow!.next;
 }
 
 /**
@@ -439,7 +440,7 @@ async function declareRelationInTx(tx: Sql, owner: ContentTypeRow, target: Conte
   }
 
   const ddl = compileCreateLinkTable(linkTable, owner.table_name, target.table_name, spec.kind);
-  await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
+  await tx.unsafe(ddl.sql, ddl.parameters as ParameterOrJSON<never>[]);
   return ownerRow!;
 }
 
@@ -536,7 +537,7 @@ export async function dropContentType(sql: Sql, apiId: string): Promise<void> {
     // never the link TABLE) — must precede DROP TABLE ct_<owner>.
     for (const link of linkNames) {
       const ddl = compileDropTable(link);
-      await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
+      await tx.unsafe(ddl.sql, ddl.parameters as ParameterOrJSON<never>[]);
     }
 
     // DELETE meta rows by link_table — removes BOTH the owner row AND its two-way inverse row.
@@ -547,6 +548,6 @@ export async function dropContentType(sql: Sql, apiId: string): Promise<void> {
     await tx`DELETE FROM content_type_fields WHERE content_type_id = ${ct.id}`;
     await tx`DELETE FROM content_types WHERE id = ${ct.id}`;
     const ddl = compileDropTable(ct.table_name);
-    await tx.unsafe(ddl.sql, ddl.parameters as unknown[]);
+    await tx.unsafe(ddl.sql, ddl.parameters as ParameterOrJSON<never>[]);
   });
 }

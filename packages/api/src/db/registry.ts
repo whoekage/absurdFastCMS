@@ -141,8 +141,8 @@ export interface RegistryField {
 export interface ColumnDescriptor {
   name: string;
   kind: 'id' | 'i64' | 'decimal' | 'date' | 'json' | 'passthrough';
-  scale?: number;
-  precision?: number;
+  scale?: number | undefined;
+  precision?: number | undefined;
 }
 
 /** The index plan: eq-indexed fields and sorted-indexed fields (a pure function of the schema). */

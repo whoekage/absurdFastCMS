@@ -55,11 +55,11 @@ export interface ComponentTypeContext {
 export interface ComponentTypeRequest {
   method: string;
   /** getParameter(0) for `/component-types/:apiId*`; undefined for the collection. */
-  apiId?: string;
+  apiId?: string | undefined;
   /** getParameter(1) for `.../fields/:name`; undefined for the `.../fields` collection. */
-  fieldName?: string;
+  fieldName?: string | undefined;
   /** The literal segment after `:apiId` (`'fields'`), or undefined for the item route. */
-  sub?: string;
+  sub?: string | undefined;
   body: unknown;
 }
 

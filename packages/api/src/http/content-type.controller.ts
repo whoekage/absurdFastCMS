@@ -70,11 +70,11 @@ export interface ContentTypeRequest {
   /** Upper- or lower-case HTTP method; compared case-insensitively. */
   method: string;
   /** getParameter(0) for `/content-types/:apiId*`; `undefined` for the `/content-types` collection. */
-  apiId?: string;
+  apiId?: string | undefined;
   /** getParameter(1) for `.../fields/:name`; `undefined` for the `.../fields` collection. */
-  fieldName?: string;
+  fieldName?: string | undefined;
   /** The literal segment after `:apiId` (`'fields'`), or `undefined` for the item route. */
-  sub?: string;
+  sub?: string | undefined;
   /** Parsed JSON body (`undefined` when the request carried no body). */
   body: unknown;
 }

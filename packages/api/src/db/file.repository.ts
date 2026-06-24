@@ -1,4 +1,4 @@
-import type { Sql } from 'postgres';
+import type { Sql, TransactionSql } from 'postgres';
 
 /**
  * be-04 MEDIA — the asset registry repository over the system `files` table (NOT a ct_ engine type). All
@@ -106,7 +106,7 @@ export async function deleteFile(sql: Sql, id: number): Promise<FileAsset | null
  * storing an id pointing at no asset. Empty input -> empty result (no query). Ids bound; IN via `= ANY`.
  * Runs INSIDE the caller's tx so the check + the insert commit atomically.
  */
-export async function missingFileIds(sql: Sql, ids: number[]): Promise<number[]> {
+export async function missingFileIds(sql: Sql | TransactionSql, ids: number[]): Promise<number[]> {
   if (ids.length === 0) return [];
   const unique = [...new Set(ids)];
   const rows = await sql<{ id: number }[]>`SELECT id FROM files WHERE id = ANY(${unique}::int[])`;

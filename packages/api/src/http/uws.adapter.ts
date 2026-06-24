@@ -731,7 +731,7 @@ export function createServer(
       const params = new URLSearchParams(req.getQuery() ?? '');
       const offset = toInt(params.get('offset'));
       const limit = toInt(params.get('limit'));
-      const result = inspectType(current, type, { offset, limit });
+      const result = inspectType(current, type, { offset, limit } as { offset?: number; limit?: number });
       if (result === null) writeJson(res, 404, { error: `unknown content-type "${type}"` });
       else writeJson(res, 200, result);
     });

@@ -1,4 +1,4 @@
-import type { Sql } from 'postgres';
+import type { Sql, TransactionSql } from 'postgres';
 import { RawJson } from '../store/column.ts';
 import type { ContentTypeDef, RegistryField } from './registry.ts';
 import { quoteIdent } from './ddl.ts';
@@ -103,7 +103,7 @@ function fromDb(def: ContentTypeDef, dbRow: Record<string, unknown>): Record<str
  * names (the validator ran first). Returns the stored row (engine-named, with its serial id).
  */
 export async function insertEntry(
-  sql: Sql,
+  sql: Sql | TransactionSql,
   def: ContentTypeDef,
   data: Record<string, unknown>,
   // INTERNAL server-controlled seam — never reachable from the wire (body.parser rejects `document_id`
@@ -167,7 +167,7 @@ export async function insertEntry(
  *      addressed row's `document_id` and `id <> $id`, so the new shared value lands on every other variant.
  * For a NON-i18n type `def.i18n` is false => statement 2 never runs => this is BYTE-IDENTICAL to before.
  */
-export async function updateEntry(sql: Sql, def: ContentTypeDef, id: number, data: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+export async function updateEntry(sql: Sql | TransactionSql, def: ContentTypeDef, id: number, data: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   assertTableName(def.tableName);
   const keys = Object.keys(data);
   const assignments: string[] = [];
@@ -238,7 +238,7 @@ export interface SiblingSnapshot {
  * (json as `::text`, wrapped in {@link RawJson} so it re-binds verbatim). Returns `null` when no row has
  * that id. Caller must have verified `def.i18n`.
  */
-export async function readSiblingForVariant(sql: Sql, def: ContentTypeDef, id: number): Promise<SiblingSnapshot | null> {
+export async function readSiblingForVariant(sql: Sql | TransactionSql, def: ContentTypeDef, id: number): Promise<SiblingSnapshot | null> {
   assertTableName(def.tableName);
   const sharedFields = def.writable.filter((f) => !f.localized);
   const cols = ['document_id', ...sharedFields.map((f) => f.column)];
@@ -267,7 +267,7 @@ export async function readSiblingForVariant(sql: Sql, def: ContentTypeDef, id: n
  * Returns the stored row (engine-named, incl. `published_at`); `null` when no row has that id. The
  * caller must have verified `def.draftPublish` (the column only exists on a D&P type).
  */
-export async function publishEntry(sql: Sql, def: ContentTypeDef, id: number, at: Date): Promise<Record<string, unknown> | null> {
+export async function publishEntry(sql: Sql | TransactionSql, def: ContentTypeDef, id: number, at: Date): Promise<Record<string, unknown> | null> {
   assertTableName(def.tableName);
   const text = `UPDATE ${quoteIdent(def.tableName)} SET ${quoteIdent('published_at')} = $1, ${quoteIdent('updated_at')} = now() WHERE ${quoteIdent('id')} = $2 RETURNING ${returningList(def)}`;
   try {
@@ -282,7 +282,7 @@ export async function publishEntry(sql: Sql, def: ContentTypeDef, id: number, at
  * UNPUBLISH entry `id`: clear `published_at` to NULL (back to draft) + bump `updated_at`. Returns the
  * stored row; `null` when no row has that id. Caller must have verified `def.draftPublish`.
  */
-export async function unpublishEntry(sql: Sql, def: ContentTypeDef, id: number): Promise<Record<string, unknown> | null> {
+export async function unpublishEntry(sql: Sql | TransactionSql, def: ContentTypeDef, id: number): Promise<Record<string, unknown> | null> {
   assertTableName(def.tableName);
   const text = `UPDATE ${quoteIdent(def.tableName)} SET ${quoteIdent('published_at')} = NULL, ${quoteIdent('updated_at')} = now() WHERE ${quoteIdent('id')} = $1 RETURNING ${returningList(def)}`;
   try {
@@ -294,7 +294,7 @@ export async function unpublishEntry(sql: Sql, def: ContentTypeDef, id: number):
 }
 
 /** DELETE entry `id`, returning the deleted row (engine-named); `null` when no row had that id. */
-export async function deleteEntry(sql: Sql, def: ContentTypeDef, id: number): Promise<Record<string, unknown> | null> {
+export async function deleteEntry(sql: Sql | TransactionSql, def: ContentTypeDef, id: number): Promise<Record<string, unknown> | null> {
   assertTableName(def.tableName);
   const text = `DELETE FROM ${quoteIdent(def.tableName)} WHERE ${quoteIdent('id')} = $1 RETURNING ${returningList(def)}`;
   try {
@@ -313,13 +313,13 @@ export async function deleteEntry(sql: Sql, def: ContentTypeDef, id: number): Pr
  * identifier comes ONLY from the registry-built `def.tableName` (NEVER client input), the ids are bound.
  * Runs INSIDE the caller's tx so the check + the row insert/update commit atomically. Empty input -> [].
  */
-export async function missingEntryIds(sql: Sql, def: ContentTypeDef, ids: number[]): Promise<number[]> {
+export async function missingEntryIds(sql: Sql | TransactionSql, def: ContentTypeDef, ids: number[]): Promise<number[]> {
   if (ids.length === 0) return [];
   assertTableName(def.tableName);
   const unique = [...new Set(ids)];
   const text = `SELECT ${quoteIdent('id')} FROM ${quoteIdent(def.tableName)} WHERE ${quoteIdent('id')} = ANY($1::int[])`;
   const rows = await sql.unsafe(text, [unique] as never[]);
-  const present = new Set((rows as { id: number }[]).map((r) => r.id));
+  const present = new Set((rows as unknown as { id: number }[]).map((r) => r.id));
   return unique.filter((id) => !present.has(id));
 }
 
