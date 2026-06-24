@@ -14,5 +14,5 @@
     "exactOptionalPropertyTypes": true,
     "skipLibCheck": true
   },
-  "include": ["src", "test", "bench"]
+  "include": ["src", "test", "bench", "conti.config.ts", "bootstrap.ts"]
 }

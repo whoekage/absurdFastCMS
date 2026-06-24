@@ -8,7 +8,7 @@ import { setAuthSql } from '../auth/auth.dialect.ts';
 import { SessionCache } from '../auth/session.cache.ts';
 import { RbacRegistry } from '../auth/rbac.registry.ts';
 import { TeamView } from '../auth/team.view.ts';
-import { loadConfigFromEnv, type ContiConfig } from './config.ts';
+import type { ContiConfig } from './config.ts';
 
 /**
  * The composition root: turn the single-process boot into a LIBRARY entry. `createConti(config)` wires the
@@ -164,9 +164,17 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
   return { start, stop };
 }
 
-/** The entrypoint. Run directly: `node --env-file=.env src/compose/conti.ts [port]`. */
-export function main(): void {
-  const app = createConti(loadConfigFromEnv(process.argv[2]));
+/**
+ * The entrypoint. Run directly: `node --env-file=.env src/compose/conti.ts`. Loads the project's two
+ * files — conti.config.ts (server config) + bootstrap.ts (server lifecycle) — and boots from them. The
+ * fixed `../../` path is the monolith's project root; the future CLI resolves the project dir instead.
+ */
+export async function main(): Promise<void> {
+  const [{ default: config }, { default: lifecycle }] = await Promise.all([
+    import('../../conti.config.ts'),
+    import('../../bootstrap.ts'),
+  ]);
+  const app = createConti(config, lifecycle);
   app.start().catch((e) => {
     console.error('boot failed', e);
     process.exit(1);
@@ -194,5 +202,5 @@ export function main(): void {
 
 // Run only when invoked as the entrypoint (not when imported by a test/bench).
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main();
+  void main();
 }
