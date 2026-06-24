@@ -129,8 +129,17 @@ prod:  deploy → conti migrate (from committed schema/) → data-preserving ALT
   `conti gen:types --check` exists ONLY as a CI freshness gate (catches a hand-edit to schema.json that
   bypassed the Builder) + a manual regen escape valve. Test: generated output matches the schema; `--check`
   fails on drift.
-- **S3 — diff engine.** Pure `diff(prev, next)` by id → change-set (§4). Exhaustive unit tests (add/drop/
-  rename/retype/reorder, incl. id-matched rename, nested components). No DB.
+- **S3 — diff engine.** SHIPPED (`db/schema/diff.ts`). Pure `diff(prev, next)` by stable id → an ordered
+  `ChangeSet`. Ops: addType / dropType / renameType (apiId→table rename) / setTypeOption (D&P/i18n toggle) /
+  addField / dropField / renameField / retypeField / setFieldNullable / reorderFields. EACH op carries a
+  `risk` (`safe` | `data-dependent` | `destructive` | `forbidden`) — the seam the S4 lint gates on per-op
+  (not one global `--force`). Cross-ecosystem lessons baked in (see the diff-engine survey): id-matching
+  makes rename-vs-recreate decidable (kills the Strapi #12626/#19141, Prisma #4694, Alembic, TypeORM-sync,
+  Directus rename-data-loss class); a field that renames AND retypes in one step emits BOTH ops (impossible
+  for Django/Drizzle name-pairing); REORDER is wire-only (`sort`, never physical column position);
+  presentation (`info`, derived `collectionName`) emits no DDL (Directus #10755); type changes reuse
+  `classifyTypeChange`; `diff(x,x)` is empty (anti-churn idempotency invariant). Relations + component-type
+  schemas DEFERRED (fail loud, consistent with S1). Exhaustive pure unit tests; no DB.
 - **S4 — migrate + lint.** Apply the change-set to PG (data-preserving DDL via the existing `ddl.ts` +
   `migration.runner.ts`); `_schema_applied` tracking; `conti migrate lint` destructive gate. Real-PG tests:
   rename preserves data, drop blocked-without-ack, retype, add-with-default.
