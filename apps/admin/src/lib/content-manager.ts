@@ -1,4 +1,4 @@
-import type { ContentTypeDefinition, FieldDefinition } from '@absurd/sdk';
+import type { ContentTypeDefinition, FieldDefinition } from '@conti/sdk';
 
 // Re-export the shared error-message extractor so the content-manager feature has one import surface.
 export { errorMessage } from '@/lib/errors';

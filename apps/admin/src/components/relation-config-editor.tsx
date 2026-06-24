@@ -6,7 +6,7 @@ import type {
   DeclareRelationInput,
   RelationDefinition,
   RelationKind,
-} from '@absurd/sdk';
+} from '@conti/sdk';
 import { api } from '@/lib/api';
 import { contentTypeKeys, errorMessage } from '@/lib/content-types';
 import { Button } from '@/components/ui/button';

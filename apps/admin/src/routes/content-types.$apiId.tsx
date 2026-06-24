@@ -7,7 +7,7 @@ import type {
   FieldDefinition,
   FieldSpec,
   UpdateFieldInput,
-} from '@absurd/sdk';
+} from '@conti/sdk';
 import { api } from '@/lib/api';
 import {
   contentTypeKeys,

@@ -1,7 +1,7 @@
-// @absurd/sdk — Slice 8.2/8.3/8.4 DX: bound collection, retries/timeout, request/response hooks.
+// @conti/sdk — Slice 8.2/8.3/8.4 DX: bound collection, retries/timeout, request/response hooks.
 //
 // NO MOCKS:
-//   • The bound COLLECTION is verified against the REAL @absurd/api uWS server (startTestServer) — a
+//   • The bound COLLECTION is verified against the REAL @conti/api uWS server (startTestServer) — a
 //     full create → read-back → list/count → update → delete lifecycle through client.collection<T>().
 //   • The HOOKS (onRequest/onResponse) are verified against that same real server (they fire on a real
 //     GET and a real POST, see the real Response/status).

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, Plus } from 'lucide-react';
-import type { CreateContentTypeInput } from '@absurd/sdk';
+import type { CreateContentTypeInput } from '@conti/sdk';
 import { api } from '@/lib/api';
 import {
   contentTypeKeys,

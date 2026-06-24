@@ -1,4 +1,4 @@
-// @absurd/sdk — QUICKSTART example.
+// @conti/sdk — QUICKSTART example.
 //
 // Defines a content-type at runtime, writes a couple of rows (incl. wire-fidelity values), then
 // queries them back — exercising the Builder, write, and read paths end to end.
@@ -7,10 +7,10 @@
 //
 //   node packages/sdk/examples/quickstart.ts
 //
-// Point it at a live @absurd/api server started WITH a store + registry (the Builder routes are only
+// Point it at a live @conti/api server started WITH a store + registry (the Builder routes are only
 // mounted then). Override the URL with BASE_URL; defaults to http://127.0.0.1:3000.
 
-import { createClient, ConflictError, type Entry } from '@absurd/sdk';
+import { createClient, ConflictError, type Entry } from '@conti/sdk';
 
 const baseUrl = process.env.BASE_URL ?? 'http://127.0.0.1:3000';
 const client = createClient({ baseUrl });

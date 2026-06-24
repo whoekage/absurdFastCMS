@@ -15,14 +15,14 @@ type NodeEnv = 'development' | 'test' | 'production';
  * The DEV-ONLY default HMAC secret for the keyset cursor codec.
  * Production MUST set CURSOR_SECRET; this constant only keeps dev/test working without extra config.
  */
-const DEV_CURSOR_SECRET = 'absurdFastCMS-dev-only-cursor-secret-do-not-use-in-prod';
+const DEV_CURSOR_SECRET = 'conti-dev-only-cursor-secret-do-not-use-in-prod';
 
 /**
  * The DEV-ONLY default secret for the better-auth provider (signs session cookies + hashes at rest).
  * Production MUST set AUTH_SECRET (or BETTER_AUTH_SECRET); this constant only keeps dev/test working
  * without extra config. NEVER logged — only the absence (in production) is warned about.
  */
-const DEV_AUTH_SECRET = 'absurdFastCMS-dev-only-auth-secret-do-not-use-in-prod';
+const DEV_AUTH_SECRET = 'conti-dev-only-auth-secret-do-not-use-in-prod';
 
 /**
  * Cached values to ensure consistent validation across multiple calls

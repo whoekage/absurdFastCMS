@@ -106,7 +106,7 @@ const port = config.port(process.argv[2]);  // CLI arg wins
 The cursor secret has a documented dev default for convenience:
 
 ```
-'absurdFastCMS-dev-only-cursor-secret-do-not-use-in-prod'
+'conti-dev-only-cursor-secret-do-not-use-in-prod'
 ```
 
 In production (when NODE_ENV ≠ development/test), a warning is logged if CURSOR_SECRET is not set:

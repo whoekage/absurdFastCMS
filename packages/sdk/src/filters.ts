@@ -1,4 +1,4 @@
-// @absurd/sdk — QUERY-STRING BUILDER (Slice 2).
+// @conti/sdk — QUERY-STRING BUILDER (Slice 2).
 //
 // Build a Strapi v5 bracket-syntax query string from a typed {@link QueryParams} object — the exact
 // `key[..]=value` wire shape the api's `parseQuery` (packages/api/src/store/query.parser.ts) decodes.

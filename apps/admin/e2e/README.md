@@ -1,6 +1,6 @@
 # Admin E2E tests (Playwright)
 
-Mock-free, end-to-end tests for `@absurd/admin`. Playwright drives a **real Chromium** against the
+Mock-free, end-to-end tests for `@conti/admin`. Playwright drives a **real Chromium** against the
 **real admin** (Vite dev server on `:5173`), which proxies `/api` to the **real API** (`:3000`)
 backed by **real Postgres**. Nothing is stubbed — each spec creates a throwaway content type, seeds
 rows, exercises the UI, and tears everything down so reruns are idempotent.
@@ -26,13 +26,13 @@ npm run dev
 npm run dev:admin
 
 # 3. Run the E2E suite — from the repo root
-npm run e2e --workspace @absurd/admin
+npm run e2e --workspace @conti/admin
 ```
 
 Interactive / debugging UI mode:
 
 ```sh
-npm run e2e:ui --workspace @absurd/admin
+npm run e2e:ui --workspace @conti/admin
 ```
 
 ### Notes

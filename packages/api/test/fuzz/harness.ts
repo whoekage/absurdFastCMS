@@ -1,5 +1,5 @@
 /**
- * Shared fuzz harness for the absurdFastCMS filter engine (PHASE 1).
+ * Shared fuzz harness for the conti filter engine (PHASE 1).
  *
  * Three pillars, all deterministic and engine-INDEPENDENT:
  *

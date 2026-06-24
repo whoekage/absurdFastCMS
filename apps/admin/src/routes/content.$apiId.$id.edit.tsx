@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft } from 'lucide-react';
-import { NotFoundError, type WriteBody } from '@absurd/sdk';
+import { NotFoundError, type WriteBody } from '@conti/sdk';
 import { api } from '@/lib/api';
 import { contentKeys, errorMessage } from '@/lib/content-manager';
 import { populateFromDef, relationFieldsFromDef } from '@/lib/relations';

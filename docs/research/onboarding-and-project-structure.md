@@ -1,7 +1,7 @@
 # Project onboarding & structure — design proposal
 
 > Research + design. **No code is changed by this document.** It proposes how a developer onboards an
-> absurdFastCMS project (`npx absurd init`), what is scaffolded vs hidden in the core, where the schema
+> conti project (`npx absurd init`), what is scaffolded vs hidden in the core, where the schema
 > lives long-term, and the bootstrap/dev→prod flow. Authored directly (the research workflow kept dying on
 > transient API 529s; same research + design, by one author). Companion to `plugin-system-design.md`.
 
@@ -18,7 +18,7 @@ The decision lives on two orthogonal axes:
 - **Axis A — distribution / who owns the server code.**
 - **Axis B — the source of truth for the content SCHEMA.**
 
-Today (`packages/api` = `@absurd/api`) is a single runnable monolith: `server.ts start()` →
+Today (`packages/api` = `@conti/api`) is a single runnable monolith: `server.ts start()` →
 `runMigrations` → `loadWithRegistry` (engine+Registry from PG) → `listen`. No CLI/bin, no library exports.
 To support `npx absurd init` + "hide the guts", the core must be packaged as a library + a CLI, with a thin
 scaffolded user project on top.
@@ -71,7 +71,7 @@ resolution complexity. Avoid.
 
 ```
 my-cms/
-  package.json          # deps: @absurd/core ; scripts: dev / start / gen:types / schema:pull / schema:push
+  package.json          # deps: @conti/core ; scripts: dev / start / gen:types / schema:pull / schema:push
   absurd.config.ts      # TYPED server config: db, auth, plugins[], server opts — config-as-code for the SERVER, NOT content
   bootstrap.ts          # the register()/bootstrap() lifecycle entry: register hooks / routes / field-types (+ onStart/onShutdown)
   .env / .env.test      # secrets: DATABASE_URL, AUTH_SECRET, CURSOR_SECRET, ... (commit .env.example, gitignore .env)
@@ -80,14 +80,14 @@ my-cms/
   generated/            # gen:types output: content-types.d.ts (committed, for the editor + tsc --noEmit)
   .gitignore            # node_modules, .env, (decide: generated/)
 ```
-The "guts" — the columnar engine, uWS HTTP, postgres.js, auth — live in **`@absurd/core`** (node_modules),
+The "guts" — the columnar engine, uWS HTTP, postgres.js, auth — live in **`@conti/core`** (node_modules),
 never in the user's repo. The user owns only the thin project above.
 
-**Packaging change required:** split the runnable `@absurd/api` monolith into:
-- **`@absurd/core`** — a LIBRARY exporting `createAbsurd(config): AbsurdApp` (+ `app.start()/stop()`),
+**Packaging change required:** split the runnable `@conti/api` monolith into:
+- **`@conti/core`** — a LIBRARY exporting `createAbsurd(config): AbsurdApp` (+ `app.start()/stop()`),
   wrapping today's `server.ts start()` (migrate → load engine → mount → listen) behind a config object.
-- **`@absurd/cli`** — `bin: { absurd }` — the `npx absurd` commands.
-- (`@absurd/sdk` client, `@absurd/admin` Studio — unchanged.)
+- **`@conti/cli`** — `bin: { absurd }` — the `npx absurd` commands.
+- (`@conti/sdk` client, `@conti/admin` Studio — unchanged.)
 
 ## 5. Config vs content (the separation that must NOT be conflated)
 
@@ -98,7 +98,7 @@ never in the user's repo. The user owns only the thin project above.
   UI / the be-02 API write PG). They are versioned via `schema/` (snapshot), not by hand-editing config.
   This separation is the crux: server wiring is code; content modeling is data (with a file projection).
 
-## 6. CLI commands (`@absurd/cli`)
+## 6. CLI commands (`@conti/cli`)
 
 - `absurd init [dir]` — scaffold §4 (config, bootstrap, extensions/, schema/, generated/, .env.example, scripts).
 - `absurd dev` — watch + run (the dev server); in dev, optionally `schema push` from the snapshot on boot.
@@ -132,7 +132,7 @@ machinery (the user writes intent, not the migrate/load/mount plumbing).
 
 - **Dev:** `absurd init` → `absurd dev`. Model content in the Builder UI (writes PG). `schema pull` to
   capture into `schema/`, `gen:types` for editor types, commit both.
-- **Prod:** deploy the thin project (+ `@absurd/core` dep). `absurd start` migrates, **`schema push`** applies
+- **Prod:** deploy the thin project (+ `@conti/core` dep). `absurd start` migrates, **`schema push`** applies
   the committed snapshot (so prod schema is reproducible from git, NOT from clicking the Builder in prod),
   loads the engine, listens. A deploy = a brief cold-start (engine rebuild from PG — see the engine-ops
   baseline; seconds–minutes by data size, single-instance).
@@ -154,7 +154,7 @@ hand-wave it.
   per-type files for reviewable diffs, like Strapi's per-type schema.json, but generated from PG.)
 - **`generated/` committed or gitignored?** Commit it (reproducible typechecks; Strapi commits its gen'd
   types) + a CI check that it is up to date with `schema/`.
-- **Packaging:** how `@absurd/core` exposes `createAbsurd(config)` cleanly (the monolith → library refactor)
+- **Packaging:** how `@conti/core` exposes `createAbsurd(config)` cleanly (the monolith → library refactor)
   and keeps native TS type-stripping working for a consumer project (no build step for the user).
 - **`absurd.config.ts` typing:** ship a `defineConfig()` helper (Payload/Vite-style) for autocomplete.
 - **Extension discovery:** explicit list in config vs auto-scan `extensions/` (lean: auto-scan + config
@@ -162,7 +162,7 @@ hand-wave it.
 - **First-run / seeding:** `init` could seed a demo content-type + a first-admin bootstrap (be-09b) prompt.
 
 ## 11. One-line summary
-Ship absurd as a **hidden runnable `@absurd/core` + a thin scaffolded project + an `absurd` CLI**; keep **PG
+Ship absurd as a **hidden runnable `@conti/core` + a thin scaffolded project + an `absurd` CLI**; keep **PG
 as the schema source of truth with a committed snapshot** (`schema pull/push`) for versioning + dev→prod +
 review (Directus-proven, keeps our Builder + engine-from-PG); **codegen types from the snapshot**;
 `bootstrap.ts` is the single extension/lifecycle entry. The make-or-break long-term piece is a real

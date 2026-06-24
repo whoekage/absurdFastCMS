@@ -1,6 +1,6 @@
-# `@absurd/sdk`
+# `@conti/sdk`
 
-A typed, isomorphic, zero-dependency client for [`@absurd/api`](../api/README.md) — the
+A typed, isomorphic, zero-dependency client for [`@conti/api`](../api/README.md) — the
 *absurdly fast* headless CMS. It covers everything the api exposes over HTTP: the Strapi-v5
 query surface (filters / sort / pagination / populate), writes (create / update / delete +
 relation ops), and the runtime content-type Builder (DDL at runtime).
@@ -20,11 +20,11 @@ relation ops), and the runtime content-type Builder (DDL at runtime).
 
 ## Install
 
-This package ships as part of the absurdFastCMS monorepo (npm workspaces). Inside the repo it is
-resolved as `@absurd/sdk` with no build step (Node ≥ 24 type-stripping serves `src/*.ts` directly):
+This package ships as part of the conti monorepo (npm workspaces). Inside the repo it is
+resolved as `@conti/sdk` with no build step (Node ≥ 24 type-stripping serves `src/*.ts` directly):
 
 ```ts
-import { createClient } from '@absurd/sdk';
+import { createClient } from '@conti/sdk';
 ```
 
 When published it builds to `dist/` (ESM `.js` + `.d.ts`); consumers import it the same way.
@@ -32,7 +32,7 @@ When published it builds to `dist/` (ESM `.js` + `.d.ts`); consumers import it t
 ## Quickstart
 
 ```ts
-import { createClient } from '@absurd/sdk';
+import { createClient } from '@conti/sdk';
 
 const client = createClient({ baseUrl: 'http://127.0.0.1:3000' });
 
@@ -731,7 +731,7 @@ client.list('article', { filters: { author: { org: { name: { $eq: 'Acme' } } } }
 exact same plain `FilterObject` — call `.build()` to hand it to `filters`.
 
 ```ts
-import { f, and, or, not } from '@absurd/sdk';
+import { f, and, or, not } from '@conti/sdk';
 
 // f('views').gte(100).and(f('status').eq('published'))
 client.list('article', {
@@ -782,7 +782,7 @@ Forward with an opaque `cursor` (empty string bootstraps the first page); backwa
 `total` / `pageCount` are present only when `withCount: true`.
 
 ```ts
-import { isKeysetPagination } from '@absurd/sdk';
+import { isKeysetPagination } from '@conti/sdk';
 
 const first = await client.list('article', {
   pagination: { cursor: '', pageSize: 20, withCount: true },
@@ -853,7 +853,7 @@ client.list('book', { fields: ['title'], populate: ['author'] });
 shares the client's transport (retries / timeout / hooks all apply).
 
 ```ts
-import { type Entry } from '@absurd/sdk';
+import { type Entry } from '@conti/sdk';
 
 // `extends Entry` (an open record) satisfies the `T extends Entry` method constraint.
 interface Article extends Entry {
@@ -887,7 +887,7 @@ By default the SDK keeps these lossless representations. The schema-aware (de)se
 opt into richer JS types:
 
 ```ts
-import { decodeEntry, encodeEntry, decodeValue, encodeValue, isLosslessBigDecode } from '@absurd/sdk';
+import { decodeEntry, encodeEntry, decodeValue, encodeValue, isLosslessBigDecode } from '@conti/sdk';
 
 const def = await client.contentTypes.get('product');
 
@@ -939,7 +939,7 @@ Every non-2xx response throws an `ApiError` (or a status-specific subclass) carr
 `message` (the api's `{ error }` field), and the raw parsed `body`.
 
 ```ts
-import { NotFoundError, BadRequestError, ConflictError, ApiError } from '@absurd/sdk';
+import { NotFoundError, BadRequestError, ConflictError, ApiError } from '@conti/sdk';
 
 try {
   await client.findOne('article', 999);

@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
-// Playwright E2E config for @absurd/admin.
+// Playwright E2E config for @conti/admin.
 //
 // These tests are MOCK-FREE end-to-end: Playwright drives a REAL Chromium against the REAL admin
 // (Vite dev server on :5173), which proxies `/api` to the REAL API (:3000) backed by REAL Postgres.

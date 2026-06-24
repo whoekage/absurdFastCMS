@@ -1,6 +1,6 @@
 // Slice 3 — HTTP client core (mock-free).
 //
-// NO MOCKS: every assertion drives the REAL @absurd/api uWS server booted by startTestServer() over a
+// NO MOCKS: every assertion drives the REAL @conti/api uWS server booted by startTestServer() over a
 // fresh per-file Postgres. We subclass AbsurdClient ONLY to expose its `protected request()` to the test
 // (production method slices 4/5/6 call it internally) — the transport under test is unchanged.
 

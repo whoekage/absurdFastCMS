@@ -1,6 +1,6 @@
 // Slice 7 — wire fidelity: schema-aware (de)serialization, verified against the REAL server.
 //
-// NO MOCKS: every value under test is written to (and read back from) the real @absurd/api uWS server
+// NO MOCKS: every value under test is written to (and read back from) the real @conti/api uWS server
 // over a fresh per-file Postgres. We pin the documented wire facts with REAL values:
 //   • biginteger > 2^53 arrives as a QUOTED STRING and survives lossless (string default; BigInt opt-in);
 //   • decimal keeps its fixed scale as a string (never widened, never Number()-coerced);

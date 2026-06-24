@@ -1,4 +1,4 @@
-// @absurd/sdk — WIRE FIDELITY: schema-aware value (de)serialization (Slice 7).
+// @conti/sdk — WIRE FIDELITY: schema-aware value (de)serialization (Slice 7).
 //
 // PURE module — NO client dependency. These functions map between the wire JSON shapes the api emits
 // and richer JS values, driven by a {@link ContentTypeDefinition} (the `projectDef` shape from Slice 1).
@@ -74,7 +74,7 @@ export function isLosslessBigDecode(wire: string, decoded: unknown): boolean {
 export function assertNoNumberCoercion(field: string, value: unknown): void {
   if (typeof value === 'number') {
     throw new RangeError(
-      `@absurd/sdk: field "${field}" is a biginteger/decimal and must not be a JS number ` +
+      `@conti/sdk: field "${field}" is a biginteger/decimal and must not be a JS number ` +
         `(IEEE-754 loses precision above 2^53 and drops fixed scale). Pass a string${''} or bigint instead.`,
     );
   }

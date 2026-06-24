@@ -1,5 +1,5 @@
 {
-  "name": "absurdfastcms",
+  "name": "conti",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,12 +11,12 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace @absurd/api",
-    "dev:admin": "npm run dev --workspace @absurd/admin",
-    "test": "npm test --workspace @absurd/api",
-    "bench": "npm run bench --workspace @absurd/api",
-    "db:up": "npm run db:up --workspace @absurd/api",
-    "db:down": "npm run db:down --workspace @absurd/api",
-    "db:migrate": "npm run db:migrate --workspace @absurd/api"
+    "dev": "npm run dev --workspace @conti/api",
+    "dev:admin": "npm run dev --workspace @conti/admin",
+    "test": "npm test --workspace @conti/api",
+    "bench": "npm run bench --workspace @conti/api",
+    "db:up": "npm run db:up --workspace @conti/api",
+    "db:down": "npm run db:down --workspace @conti/api",
+    "db:migrate": "npm run db:migrate --workspace @conti/api"
   }
 }

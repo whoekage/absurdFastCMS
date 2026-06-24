@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Upload, Trash2, UploadCloud } from 'lucide-react';
-import type { FileAsset } from '@absurd/sdk';
+import type { FileAsset } from '@conti/sdk';
 import { api } from '@/lib/api';
 import { mediaKeys, isImageAsset, formatBytes } from '@/lib/media';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ export const Route = createFileRoute('/media/')({
 
 /**
  * be-04 — the MEDIA LIBRARY screen: a Lua dropzone over a grid of every uploaded asset (image thumbnail
- * or mime chip), with upload (multiple, click OR drag-drop) and per-asset delete. All via @absurd/sdk
+ * or mime chip), with upload (multiple, click OR drag-drop) and per-asset delete. All via @conti/sdk
  * (client.assets.list / client.upload / client.assets.delete). Deleting an asset that a media field
  * still references is allowed — the reference dangles and a populate read resolves it to null/drops it.
  */

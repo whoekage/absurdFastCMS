@@ -18,15 +18,15 @@ import type { Engine } from '../../api/src/store/engine.ts';
 import type { Registry } from '../../api/src/store/registry.ts';
 
 /**
- * Slice 3.5 — the mock-free integration harness for @absurd/sdk.
+ * Slice 3.5 — the mock-free integration harness for @conti/sdk.
  *
  * NO MOCKS: startTestServer() clones a fresh per-file Postgres from the golden template (the api suite's
- * Testcontainers machinery, set up by test/global-setup.ts), boots a REAL @absurd/api uWS server over it
+ * Testcontainers machinery, set up by test/global-setup.ts), boots a REAL @conti/api uWS server over it
  * (createServer(engine, store, registry) — store+registry enable writes AND the content-type builder),
  * listens on an ephemeral port, and returns { baseUrl, close }. SDK tests point an AbsurdClient at
  * baseUrl and exercise the real wire. close() stops the socket and drops the per-file DB.
  *
- * @absurd/api exposes no public `exports`, so internals are imported by relative path — permitted for the
+ * @conti/api exposes no public `exports`, so internals are imported by relative path — permitted for the
  * test harness only (ROADMAP Slice 3.5).
  */
 

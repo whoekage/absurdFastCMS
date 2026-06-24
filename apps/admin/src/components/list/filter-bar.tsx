@@ -1,5 +1,5 @@
 import { Plus, X } from 'lucide-react';
-import type { ContentTypeDefinition, FieldDefinition, FilterOperator } from '@absurd/sdk';
+import type { ContentTypeDefinition, FieldDefinition, FilterOperator } from '@conti/sdk';
 import { Button } from '@/components/ui/button';
 import {
   Select,

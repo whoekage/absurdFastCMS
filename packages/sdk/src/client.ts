@@ -1,4 +1,4 @@
-// @absurd/sdk — Slice 3: HTTP client core.
+// @conti/sdk — Slice 3: HTTP client core.
 //
 // Isomorphic + zero-dependency: the only runtime dependency is a `fetch` implementation. By default we
 // resolve `globalThis.fetch` (Node 24, browsers, Deno, Bun all ship it), but it stays injectable via
@@ -39,7 +39,7 @@ import { decodeEntry, type DecodeOptions } from './serde.ts';
  * For the common static-token case, prefer {@link ClientOptions.token} (which is sugar that populates
  * exactly this header); reach for `getHeaders` only when the header is dynamic / async.
  *
- * be-09b: the @absurd/api server now GATES the Builder + every write + media upload behind session-resolved
+ * be-09b: the @conti/api server now GATES the Builder + every write + media upload behind session-resolved
  * RBAC (reads stay public). The primary credential is the better-auth session COOKIE (sent automatically via
  * `credentials: 'include'`); this header slot remains the seam for a future Bearer/API-token scheme.
  */
@@ -105,7 +105,7 @@ export interface RetryOptions {
 
 /** Construction options for {@link AbsurdClient} / {@link createClient}. */
 export interface ClientOptions {
-  /** Base URL of the @absurd/api server, e.g. `http://127.0.0.1:3000`. A trailing `/` is stripped. */
+  /** Base URL of the @conti/api server, e.g. `http://127.0.0.1:3000`. A trailing `/` is stripped. */
   baseUrl: string;
   /**
    * The `fetch` implementation to use. Defaults to `globalThis.fetch`. Injecting it keeps the client
@@ -123,7 +123,7 @@ export interface ClientOptions {
   token?: string | undefined;
   /**
    * be-09c — a STATIC API KEY. When set, the client sends it in the `x-api-key` header on every request
-   * (the EXACT header the @absurd/api server's api-key auth reads — `Authorization: Bearer` is NOT read by
+   * (the EXACT header the @conti/api server's api-key auth reads — `Authorization: Bearer` is NOT read by
    * the api-key plugin). Mutable at runtime via {@link AbsurdClient.setApiKey}. An API key authenticates
    * as the KEY OWNER with the key's scope (owner RBAC ∩ token scope). Orthogonal to {@link token}: the
    * server resolves a session cookie OR an api key, never both — set whichever credential you hold.
@@ -612,7 +612,7 @@ export class AbsurdClient {
 
   /**
    * be-09c — set (or clear) the static API key AFTER construction. Subsequent requests carry it in the
-   * `x-api-key` header (the exact header @absurd/api reads), authenticating as the key OWNER with the key's
+   * `x-api-key` header (the exact header @conti/api reads), authenticating as the key OWNER with the key's
    * scope. Pass `undefined` to drop the credential. Orthogonal to {@link setToken} (session bearer).
    */
   setApiKey(apiKey: string | undefined): void {
@@ -650,7 +650,7 @@ export class AbsurdClient {
       // Slice 9.1 — the static-token slot: `Authorization: Bearer <token>`. getHeaders (below) merges
       // last so a dynamic provider can still override `authorization` for the rotating-token case.
       if (this.token !== undefined) headers['authorization'] = `Bearer ${this.token}`;
-      // be-09c — the static API-key slot: `x-api-key` (the exact header @absurd/api reads). getHeaders
+      // be-09c — the static API-key slot: `x-api-key` (the exact header @conti/api reads). getHeaders
       // (below) merges last so a dynamic provider can still override it.
       if (this.apiKey !== undefined) headers['x-api-key'] = this.apiKey;
       if (this.getHeaders) {

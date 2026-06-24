@@ -1,5 +1,5 @@
 import { Trash2, X, Plus } from 'lucide-react';
-import type { CmsType } from '@absurd/sdk';
+import type { CmsType } from '@conti/sdk';
 import { BUILDER_CMS_TYPES, optionMetaFor } from '@/lib/field-types';
 import type { FieldDraft } from '@/lib/content-types';
 import { Button } from '@/components/ui/button';

@@ -7,7 +7,7 @@ import type {
   FilterObject,
   FilterOperator,
   QueryParams,
-} from '@absurd/sdk';
+} from '@conti/sdk';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // List state: filtering / search / sort / pagination, all driven from the route's TYPED SEARCH

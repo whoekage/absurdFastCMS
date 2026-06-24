@@ -1,8 +1,8 @@
-// @absurd/sdk — CONTRACT TYPES (Slice 1).
+// @conti/sdk — CONTRACT TYPES (Slice 1).
 //
-// These are the shared vocabulary mirroring what `@absurd/api` exposes over HTTP.
+// These are the shared vocabulary mirroring what `@conti/api` exposes over HTTP.
 //
-// ⚠️ HAND-WRITTEN ON PURPOSE — never `import ... from '@absurd/api'`. The api package pulls
+// ⚠️ HAND-WRITTEN ON PURPOSE — never `import ... from '@conti/api'`. The api package pulls
 // postgres.js / uWebSockets.js into the module graph; importing its types would drag those into a
 // browser bundle. These declarations are kept byte-faithful to the api shapes by READING the api
 // source (type.catalog.ts, content-type.controller.ts#projectDef, engine.ts pagination meta), not by
@@ -12,7 +12,7 @@
 
 /**
  * The closed set of CMS field types a user may define on a content-type field. Mirror of
- * `CmsType` in `@absurd/api` (packages/api/src/db/type.catalog.ts). `media` (be-04) IS here — a
+ * `CmsType` in `@conti/api` (packages/api/src/db/type.catalog.ts). `media` (be-04) IS here — a
  * reference to an uploaded asset in the `files` library (single int4 id / multiple jsonb id array; see
  * {@link FileAsset} + `client.upload`). Relation / component / dynamiczone are NOT here.
  */
@@ -37,7 +37,7 @@ export type CmsType =
 
 /**
  * be-05 — the three STRUCTURED-CONTENT field kinds (reusable components + dynamic zones). Mirror of
- * `ComponentFieldKind` in `@absurd/api` (packages/api/src/db/type.catalog.ts). Like {@link RelationKind}
+ * `ComponentFieldKind` in `@conti/api` (packages/api/src/db/type.catalog.ts). Like {@link RelationKind}
  * these are a SEPARATE closed union, NOT a {@link CmsType}: each is physically a jsonb column whose value
  * is the inline component instance tree, with params carrying the referenced component api_id(s).
  *
@@ -166,7 +166,7 @@ export interface FieldDefinition {
 
 /**
  * The closed set of relation cardinalities a relation may declare. Mirror of `RelationKind` in
- * `@absurd/api` (packages/api/src/db/ddl.ts) — a SEPARATE closed union, NOT a {@link CmsType} (relations
+ * `@conti/api` (packages/api/src/db/ddl.ts) — a SEPARATE closed union, NOT a {@link CmsType} (relations
  * never touch the scalar type catalog). The owning side's kind drives the physical link-table UNIQUEs;
  * the inverse side stores the inverse cardinality (oneToMany↔manyToOne; oneToOne/manyToMany self-inverse).
  */
@@ -344,7 +344,7 @@ export type WriteBody<T = Entry> = { [K in keyof T]?: T[K] | RelationInput } & {
 /**
  * One asset record from the media library (`files` registry), as returned by the asset endpoints
  * (`POST/GET/DELETE /_files...`) AND inlined into an entry by a media-field POPULATE. Mirror of
- * `FileAsset` in `@absurd/api` (packages/api/src/db/file.repository.ts). `width`/`height` are `null`
+ * `FileAsset` in `@conti/api` (packages/api/src/db/file.repository.ts). `width`/`height` are `null`
  * for a non-image upload; `url` is the public URL for the bytes (provider-derived; may be null).
  */
 export interface FileAsset {

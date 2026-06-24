@@ -21,8 +21,8 @@ import type {
   KeysetPaginationMeta,
   PaginationMeta,
   FilterOperator,
-} from '@absurd/sdk';
-import { isKeysetPagination } from '@absurd/sdk';
+} from '@conti/sdk';
+import { isKeysetPagination } from '@conti/sdk';
 
 test('ContentTypeDefinition constructs (cmsType + field options + projected fields)', () => {
   const cmsType: CmsType = 'enumeration';

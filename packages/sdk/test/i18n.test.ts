@@ -1,5 +1,5 @@
 // i18n — the SDK localization surface (locale read param + createVariant + shared/localized fields)
-// end-to-end against the REAL @absurd/api uWS server over a fresh per-file Postgres. NO MOCKS.
+// end-to-end against the REAL @conti/api uWS server over a fresh per-file Postgres. NO MOCKS.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

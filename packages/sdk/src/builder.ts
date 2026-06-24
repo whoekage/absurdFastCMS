@@ -1,4 +1,4 @@
-// @absurd/sdk — Slice 8.1: FLUENT FILTER BUILDER.
+// @conti/sdk — Slice 8.1: FLUENT FILTER BUILDER.
 //
 // A thin, chainable façade over the Slice 2 {@link FilterObject} / {@link FilterCondition} types. It
 // produces NOTHING new on the wire — every method just assembles the exact plain-object shape that

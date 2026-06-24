@@ -1,6 +1,6 @@
 // Slice 5 — write methods (create / update / delete) + relation ops (connect / disconnect / set).
 //
-// NO MOCKS: every assertion drives the REAL @absurd/api uWS server booted by startTestServer() over a
+// NO MOCKS: every assertion drives the REAL @conti/api uWS server booted by startTestServer() over a
 // fresh per-file Postgres. create/update/delete go through the SDK's typed methods; read-backs use the
 // SDK's findOne/list so the persisted rows under test are the genuine wire shape.
 

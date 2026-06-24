@@ -1,4 +1,4 @@
-// @absurd/sdk — public barrel. Populated by later slices (query builder, client).
+// @conti/sdk — public barrel. Populated by later slices (query builder, client).
 
 // --- Slice 1: contract types (shared vocabulary) ---
 export type {

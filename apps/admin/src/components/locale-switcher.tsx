@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Languages } from 'lucide-react';
-import type { Entry } from '@absurd/sdk';
+import type { Entry } from '@conti/sdk';
 import { api } from '@/lib/api';
 import { contentKeys, errorMessage } from '@/lib/content-manager';
 import { Badge } from '@/components/ui/badge';

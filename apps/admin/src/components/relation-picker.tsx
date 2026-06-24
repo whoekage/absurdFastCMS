@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { X, Search, Check } from 'lucide-react';
-import type { Entry, QueryParams, RelationId } from '@absurd/sdk';
+import type { Entry, QueryParams, RelationId } from '@conti/sdk';
 import { api } from '@/lib/api';
 import {
   relatedRowLabel,

@@ -1,4 +1,4 @@
-import { ApiError } from '@absurd/sdk';
+import { ApiError } from '@conti/sdk';
 
 /** Pull a human-readable message out of any thrown value (API errors carry a server message). */
 export function errorMessage(err: unknown): string {

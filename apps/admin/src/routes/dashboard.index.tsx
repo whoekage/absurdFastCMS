@@ -8,7 +8,7 @@ import {
   ArrowUpRight,
   type LucideIcon,
 } from 'lucide-react';
-import type { ContentTypeDefinition } from '@absurd/sdk';
+import type { ContentTypeDefinition } from '@conti/sdk';
 import { api } from '@/lib/api';
 import {
   dashboardKeys,

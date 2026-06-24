@@ -1,4 +1,4 @@
-# absurdFastCMS
+# conti
 
 An *absurdly fast* headless CMS. Postgres is the source of truth, but reads never touch it — they are served from an in-process, columnar, in-memory read layer with pre-serialized response bytes. The query API speaks Strapi v5's bracket-filter syntax, so existing clients work unchanged.
 

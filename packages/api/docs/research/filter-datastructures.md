@@ -1,4 +1,4 @@
-# absurdFastCMS — Read-Layer Filter Engine: Per-Operator Data-Structure Routing
+# conti — Read-Layer Filter Engine: Per-Operator Data-Structure Routing
 
 > An in-process, columnar, in-RAM read layer for a Strapi-5-style filter API (~24 operators).
 > Postgres is the write source of truth; this layer is **read-mostly** (publish rarely, read constantly).

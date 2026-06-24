@@ -1,4 +1,4 @@
-import { createClient } from '@absurd/sdk';
+import { createClient } from '@conti/sdk';
 
 // Single shared SDK client instance.
 // In dev, the relative '/api' base is handled by the Vite proxy (-> http://localhost:3000,

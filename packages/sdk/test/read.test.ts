@@ -1,6 +1,6 @@
 // Slice 4 — read methods (list / findOne / findOneOrNull / count + offset & keyset iterators).
 //
-// NO MOCKS: every assertion drives the REAL @absurd/api uWS server booted by startTestServer() over a
+// NO MOCKS: every assertion drives the REAL @conti/api uWS server booted by startTestServer() over a
 // fresh per-file Postgres. Rows are seeded over the REAL write path (raw POST /:type via fetch — the
 // SDK's typed create() lands in Slice 5), so the reads under test see genuine persisted rows.
 

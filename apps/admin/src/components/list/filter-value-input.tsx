@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import type { FieldDefinition, FilterOperator } from '@absurd/sdk';
+import type { FieldDefinition, FilterOperator } from '@conti/sdk';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {

@@ -1,4 +1,4 @@
-# absurdFastCMS
+# conti
 
 An *absurdly fast* headless CMS. Postgres is the source of truth, but reads never touch it — they
 are served from an in-process, columnar, in-memory read layer with pre-serialized response bytes.
@@ -16,9 +16,9 @@ deployable sites.
 
 ```
 packages/
-  api/        # @absurd/api — the columnar read engine + Strapi-v5 query API + runtime content-type builder
+  api/        # @conti/api — the columnar read engine + Strapi-v5 query API + runtime content-type builder
   admin/      # (planned) the content manager / content-type builder GUI
-  sdk/        # @absurd/sdk — typed, isomorphic, zero-dependency JS client for the query + write + Builder API
+  sdk/        # @conti/sdk — typed, isomorphic, zero-dependency JS client for the query + write + Builder API
 apps/
   landing/    # (planned) marketing site
   docs/       # (planned) documentation site
@@ -31,7 +31,7 @@ is a swappable implementation behind an interface — a separate concern, not co
 
 - **[`packages/api`](packages/api/README.md)** — the backend: architecture, query API, content-type
   builder, performance notes, and getting started. **Start here.**
-- **[`packages/sdk`](packages/sdk/README.md)** — `@absurd/sdk`, a typed, isomorphic, zero-dependency
+- **[`packages/sdk`](packages/sdk/README.md)** — `@conti/sdk`, a typed, isomorphic, zero-dependency
   JS client covering the full HTTP surface: Strapi-v5 filters/sort/pagination/populate, writes +
   relation ops, the runtime content-type Builder, and lossless bigint/decimal/json/date wire fidelity.
 
@@ -41,7 +41,7 @@ Requires **Node.js ≥ 24** (native TypeScript type-stripping — no build step)
 
 ```bash
 npm install              # installs all workspaces (deps hoist to the root)
-npm run db:up            # start Postgres 18 for DEV (delegates to @absurd/api)
+npm run db:up            # start Postgres 18 for DEV (delegates to @conti/api)
 npm run db:migrate       # apply migrations to the dev database
 npm test                 # run the api test suite (mock-free, Testcontainers-backed)
 ```

@@ -1,15 +1,15 @@
-// @absurd/sdk — Slice 8.1 fluent filter builder, MOCK-FREE round-trip verification.
+// @conti/sdk — Slice 8.1 fluent filter builder, MOCK-FREE round-trip verification.
 //
 // The builder is sugar over the Slice 2 FilterObject shape and produces NOTHING new on the wire. We
 // prove that by building filters with f()/and()/or()/not(), feeding `.build()` straight through
-// buildQueryString, and parsing the result with the REAL parseQuery from @absurd/api (no network, no
+// buildQueryString, and parsing the result with the REAL parseQuery from @conti/api (no network, no
 // mocks). Each builder expression must equal the hand-written FilterObject it sugars AND round-trip to
 // the engine's where-tree the equivalent literal produces.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildQueryString, f, and, or, not, type QueryParams, type FilterObject } from '@absurd/sdk';
+import { buildQueryString, f, and, or, not, type QueryParams, type FilterObject } from '@conti/sdk';
 
 import {
   parseQuery,

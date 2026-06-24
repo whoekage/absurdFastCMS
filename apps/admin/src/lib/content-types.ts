@@ -1,4 +1,4 @@
-import type { CmsType, ComponentFieldKind, FieldSpec, FieldOptions } from '@absurd/sdk';
+import type { CmsType, ComponentFieldKind, FieldSpec, FieldOptions } from '@conti/sdk';
 import { optionMetaFor } from '@/lib/field-types';
 
 // Re-export the shared error-message extractor so the content-type feature has one import surface.

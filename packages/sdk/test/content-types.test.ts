@@ -1,6 +1,6 @@
 // Slice 6 — content-type builder (client.contentTypes: list / get / create / drop + add/update/drop field).
 //
-// NO MOCKS: every assertion drives the REAL @absurd/api uWS server booted by startTestServer(), which
+// NO MOCKS: every assertion drives the REAL @conti/api uWS server booted by startTestServer(), which
 // mounts the builder routes ONLY because it is started with store + registry (runtime DDL). The full DDL
 // lifecycle is exercised over the wire; error cases assert the Slice 3 typed-error mapping (400/404/409).
 

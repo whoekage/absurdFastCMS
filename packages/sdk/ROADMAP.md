@@ -1,18 +1,18 @@
-# `@absurd/sdk` — Roadmap to API parity
+# `@conti/sdk` — Roadmap to API parity
 
-Goal: a typed, isomorphic, zero-dependency client that covers **everything** `@absurd/api` exposes over
+Goal: a typed, isomorphic, zero-dependency client that covers **everything** `@conti/api` exposes over
 HTTP. Drafted 2026-06-18.
 
 ## Cross-cutting decisions
 
 - **No mocks (project rule).** Pure functions (the query-string builder) are tested by feeding their
-  output into the **real `parseQuery` from `@absurd/api`** (round-trip, no network). The client is tested
+  output into the **real `parseQuery` from `@conti/api`** (round-trip, no network). The client is tested
   against a **real server**: `createServer(engine, store, registry)` + a Testcontainers Postgres on an
   ephemeral port — same harness style as the api suite.
 - **No build (ship source).** The package ships `.ts` source via `exports → ./src/index.ts`, like
-  `@absurd/api`; consumers (Vite / Node 24 type-stripping) handle it. A build step is added only when
+  `@conti/api`; consumers (Vite / Node 24 type-stripping) handle it. A build step is added only when
   publishing to npm (Slice 10).
-- **Never bundle the server.** Contract types are hand-written here, NOT imported from `@absurd/api`
+- **Never bundle the server.** Contract types are hand-written here, NOT imported from `@conti/api`
   (which pulls postgres.js / uWebSockets.js into the browser bundle).
 - **Scope boundary.** The dev-only `/debug-inspect` route is intentionally OUT of scope (a dev tool, not
   product API). Everything else in the api is in scope.
@@ -20,10 +20,10 @@ HTTP. Drafted 2026-06-18.
 ---
 
 ## Slice 0 — Package skeleton & toolchain
-- [x] **0.1** `package.json` (`@absurd/sdk`, ESM, no-build, `exports → ./src/index.ts`)
+- [x] **0.1** `package.json` (`@conti/sdk`, ESM, no-build, `exports → ./src/index.ts`)
 - [x] **0.2** `tsconfig.json` — api conventions + `lib: ["ES2023","DOM"]` (fetch / URLSearchParams / AbortSignal)
 - [x] **0.3** `src/index.ts` — empty barrel placeholder
-- [x] **0.4** Workspace check: `npm pkg get name -w @absurd/sdk`; loads under type-stripping
+- [x] **0.4** Workspace check: `npm pkg get name -w @conti/sdk`; loads under type-stripping
 
 ## Slice 1 — Contract types (shared vocabulary)
 - [x] **1.1** `CmsType` (16 — incl. `time`, `array`, `uuid`) + `FieldOptions` + `FieldSpec`

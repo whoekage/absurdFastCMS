@@ -5,12 +5,12 @@ import type {
   ContentTypeDefinition,
   RelationDefinition,
   RelationKind,
-} from '@absurd/sdk';
+} from '@conti/sdk';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // Relation discovery (API-driven) + relation-op body builders.
 //
-// The @absurd/api server now EXPOSES relations on the content-type schema (`projectDef` folds a
+// The @conti/api server now EXPOSES relations on the content-type schema (`projectDef` folds a
 // `relations: RelationDefinition[]` array onto every definition) AND lets a client DECLARE a relation
 // over HTTP (`POST /content-types/:apiId/relations`, `client.contentTypes.addRelation`). So the admin
 // DISCOVERS relations straight from `def.relations` and the builder declares real ones — no more

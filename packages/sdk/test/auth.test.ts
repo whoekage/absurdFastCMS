@@ -1,6 +1,6 @@
-// @absurd/sdk — Slice 9: auth readiness (token/header seam + 401/403 handling), forward-compat.
+// @conti/sdk — Slice 9: auth readiness (token/header seam + 401/403 handling), forward-compat.
 //
-// NO MOCKS. The @absurd/api server has NO auth yet (README roadmap: "AuthN/authZ — gate the Builder
+// NO MOCKS. The @conti/api server has NO auth yet (README roadmap: "AuthN/authZ — gate the Builder
 // (and writes) behind an admin scope"), so this slice is a NO-OP against today's open API. We verify:
 //   • token / setToken / getHeaders SEND the right Authorization header — observed via a REAL fetch
 //     WRAPPER that records the outgoing init then delegates to the real platform fetch — AND that the

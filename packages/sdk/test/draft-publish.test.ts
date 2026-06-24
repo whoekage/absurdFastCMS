@@ -1,5 +1,5 @@
 // Draft & Publish — the SDK lifecycle surface (status read param + publish/unpublish actions) end-to-end
-// against the REAL @absurd/api uWS server over a fresh per-file Postgres. NO MOCKS.
+// against the REAL @conti/api uWS server over a fresh per-file Postgres. NO MOCKS.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

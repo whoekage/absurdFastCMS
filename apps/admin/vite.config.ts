@@ -13,7 +13,7 @@ export default defineConfig({
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
-    // Resolve @absurd/sdk to its TypeScript source (packages/sdk/src/index.ts) via its
+    // Resolve @conti/sdk to its TypeScript source (packages/sdk/src/index.ts) via its
     // "source" export condition — no SDK build step required for dev or prod build.
     conditions: ['source'],
   },

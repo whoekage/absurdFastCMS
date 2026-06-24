@@ -1,7 +1,7 @@
 # Plugin / extensibility system — design proposal
 
 > Research + design. **No code is changed by this document.** It proposes how a community developer
-> extends absurdFastCMS, grounded in how the competitors do it and fitted to our architecture.
+> extends conti, grounded in how the competitors do it and fitted to our architecture.
 > Authored directly (the multi-agent research workflow kept dying on transient API 529s; this is the
 > same research + design, by one author).
 

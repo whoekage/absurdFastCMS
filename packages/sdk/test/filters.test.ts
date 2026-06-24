@@ -1,4 +1,4 @@
-// @absurd/sdk — Slice 2 query-string builder, MOCK-FREE round-trip verification.
+// @conti/sdk — Slice 2 query-string builder, MOCK-FREE round-trip verification.
 //
 // The builder (buildQueryString) is the inverse of the api's parseParams over the supported surface.
 // We prove that by feeding the builder's OUTPUT straight into the REAL parseQuery from
@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildQueryString, type QueryParams } from '@absurd/sdk';
+import { buildQueryString, type QueryParams } from '@conti/sdk';
 
 // REAL parser + its types (relative import into the api package source — type-stripped at runtime).
 import {

@@ -1,4 +1,4 @@
-// be-04 — media library + media fields, end-to-end through the SDK against a REAL @absurd/api server.
+// be-04 — media library + media fields, end-to-end through the SDK against a REAL @conti/api server.
 //
 // NO MOCKS: a real uWS server over a fresh per-file Postgres + a real local-fs storage temp dir. Drives
 // client.upload (multipart), client.assets.{list,get,delete}, and media-field read/write/populate via the

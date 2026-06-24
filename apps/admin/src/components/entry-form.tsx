@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useForm } from '@tanstack/react-form';
 import { useBlocker } from '@tanstack/react-router';
-import type { ContentTypeDefinition, FieldDefinition, FileAsset, RelationId, WriteBody } from '@absurd/sdk';
+import type { ContentTypeDefinition, FieldDefinition, FileAsset, RelationId, WriteBody } from '@conti/sdk';
 import { getFieldHandler, type FormFieldValue } from '@/lib/field-types';
 import {
   asRelatedRows,

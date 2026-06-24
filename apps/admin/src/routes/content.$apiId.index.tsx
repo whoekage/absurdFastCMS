@@ -9,7 +9,7 @@ import {
   useReactTable,
 } from '@tanstack/react-table';
 import { Pencil, Plus, Trash2, Eye, SlidersHorizontal, Rows3, Rows4 } from 'lucide-react';
-import { NotFoundError, type Entry, type FieldDefinition } from '@absurd/sdk';
+import { NotFoundError, type Entry, type FieldDefinition } from '@conti/sdk';
 import { api } from '@/lib/api';
 import { contentKeys, errorMessage, fieldMap, listColumns } from '@/lib/content-manager';
 import { formatValue } from '@/lib/field-types';

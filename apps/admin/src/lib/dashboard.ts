@@ -1,4 +1,4 @@
-import type { ContentTypeDefinition, Entry } from '@absurd/sdk';
+import type { ContentTypeDefinition, Entry } from '@conti/sdk';
 
 // Re-export the shared error-message extractor so the dashboard feature has one import surface.
 export { errorMessage } from '@/lib/errors';

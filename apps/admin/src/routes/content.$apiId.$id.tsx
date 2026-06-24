@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, Pencil, Eye, EyeOff } from 'lucide-react';
-import { NotFoundError } from '@absurd/sdk';
+import { NotFoundError } from '@conti/sdk';
 import { api } from '@/lib/api';
 import { contentKeys, errorMessage } from '@/lib/content-manager';
 import { toast } from '@/components/ui/toast';

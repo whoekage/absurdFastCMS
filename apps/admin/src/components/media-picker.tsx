@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { X, Upload, ImagePlus, Check } from 'lucide-react';
-import type { FileAsset } from '@absurd/sdk';
+import type { FileAsset } from '@conti/sdk';
 import { api } from '@/lib/api';
 import { mediaKeys, isImageAsset, formatBytes, type MediaFieldConfig } from '@/lib/media';
 import { Button } from '@/components/ui/button';
@@ -21,7 +21,7 @@ import { toast } from '@/components/ui/toast';
 // A CONTROLLED widget over the SELECTED ASSET ID SET: the parent (entry form) owns `value` (ids) and
 // gets `onChange(ids)` back. Single fields keep at most one id; multiple keep an ordered set. Selected
 // assets render as thumbnails; a "Browse / Upload" dialog lists the media library (grid) and lets the
-// operator pick existing assets or upload a new one (which is added to the selection). All via @absurd/sdk
+// operator pick existing assets or upload a new one (which is added to the selection). All via @conti/sdk
 // (client.assets.list + client.upload). A small id->asset cache labels selected ids that aren't in the
 // current library page (e.g. seeded from a populated edit row).
 // ──────────────────────────────────────────────────────────────────────────────────────────────

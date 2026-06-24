@@ -1,4 +1,4 @@
-import type { ContentTypeDefinition, FieldDefinition, FileAsset, WriteBody } from '@absurd/sdk';
+import type { ContentTypeDefinition, FieldDefinition, FileAsset, WriteBody } from '@conti/sdk';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // be-04 MEDIA — media-field discovery (API-driven) + write-body helpers, mirroring lib/relations.ts.

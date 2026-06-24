@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ReactNode } from 'react';
-import type { CmsType, ComponentFieldKind, FieldDefinition } from '@absurd/sdk';
+import type { CmsType, ComponentFieldKind, FieldDefinition } from '@conti/sdk';
 import { Input } from '@/components/ui/input';
 import { AutoTextarea } from '@/components/ui/auto-textarea';
 import { Switch } from '@/components/ui/switch';

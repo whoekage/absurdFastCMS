@@ -1,4 +1,4 @@
-# absurdFastCMS — Roadmap
+# conti — Roadmap
 
 An *absurdly fast* headless CMS. Postgres is the source of truth; reads are served from an in-process
 columnar in-memory engine with pre-serialized bytes. The query API speaks Strapi v5's bracket-filter
@@ -20,8 +20,8 @@ specific constraints (columnar in-memory read layer, Strapi-v5 emulation, single
 | `populate` (nested, depth-capped) — **parsed and executed** end-to-end | ✅ |
 | Write path: create / partial-update / delete + relation ops (set/connect/disconnect) in one tx | ✅ |
 | Runtime content-type **Builder** over HTTP (create type, add/rename/change-type/drop field, drop type) | ✅ |
-| Typed, zero-dependency SDK (`@absurd/sdk`) at full HTTP parity | ✅ |
-| Admin (`@absurd/admin`): generic content manager, list filter/sort/search, bulk, app-shell, relation UX, Playwright E2E | ✅ |
+| Typed, zero-dependency SDK (`@conti/sdk`) at full HTTP parity | ✅ |
+| Admin (`@conti/admin`): generic content manager, list filter/sort/search, bulk, app-shell, relation UX, Playwright E2E | ✅ |
 | 16 scalar field types (string/text/email/uid/enumeration/integer/biginteger/float/decimal/boolean/date/datetime/json/array/uuid; `time` excluded — engine load path rejects it) | ✅ |
 
 ## Gap matrix vs competitor table-stakes
@@ -138,7 +138,7 @@ link tables, inverse rows); reads already execute `populate`. What's missing is 
   the `fe-0N-*` admin workflows (Implement → Verify → Review, with adversarial review). Run via the
   Workflow tool with `{ scriptPath }`.
 - **No mocks:** tests are native `node:test` against a real Postgres 18 via Testcontainers
-  (`npm test --workspace @absurd/api`, env from `.env.test`).
+  (`npm test --workspace @conti/api`, env from `.env.test`).
 - **Migrations (pre-launch policy):** hand-written SQL, **consolidated into ONE init file**, applied by
   `src/db/migration.runner.ts`, evolved **in place** — on a schema change, edit the init file and **drop &
   recreate** the dev DB. **No backfill** (there are no clients / no prod data to preserve). `ct_<apiId>`

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ApiError } from '@absurd/sdk';
+import { ApiError } from '@conti/sdk';
 import { api } from '@/lib/api';
 
 /**

@@ -1,4 +1,4 @@
-// @absurd/sdk — QUERY COOKBOOK example.
+// @conti/sdk — QUERY COOKBOOK example.
 //
 // Mirrors the query examples from packages/api/README.md, expressed through the typed SDK instead of
 // hand-written bracket-syntax URLs. Each call below serializes to the exact same wire query the api's
@@ -10,10 +10,10 @@
 // Runnable ESM TypeScript (type-strips under Node >= 24):
 //   node packages/sdk/examples/query-cookbook.ts
 //
-// Point it at a live @absurd/api server (defaults to http://127.0.0.1:3000; override with BASE_URL).
+// Point it at a live @conti/api server (defaults to http://127.0.0.1:3000; override with BASE_URL).
 // Assumes an `article` collection exists (the api's seed type). Reads only — it writes nothing.
 
-import { createClient, f, and, or, isKeysetPagination, type Entry, type ListResponse } from '@absurd/sdk';
+import { createClient, f, and, or, isKeysetPagination, type Entry, type ListResponse } from '@conti/sdk';
 
 const baseUrl = process.env.BASE_URL ?? 'http://127.0.0.1:3000';
 const client = createClient({ baseUrl });
