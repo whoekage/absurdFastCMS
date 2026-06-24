@@ -19,6 +19,8 @@ import {
   type ComponentFieldRow,
 } from './component-type.repository.ts';
 import { isComponentFieldKind, type CmsType, type ComponentFieldKind } from './type.catalog.ts';
+import { schemaToRows } from './schema/adapt.ts';
+import type { ContentTypeSchema } from './schema/model.ts';
 
 /**
  * THE RAM SOURCE OF TRUTH at runtime. Built at boot from `content_types` + `content_type_fields`, the
@@ -679,7 +681,35 @@ export class Registry {
     return [...this.components.values()];
   }
 
-  /** Build the WHOLE registry from meta. Empty catalog is valid (an empty registry). */
+  /**
+   * Build a registry from files-first schema OBJECTS — the PERMANENT entry. The filesystem read lives at
+   * the EDGE (`createConti`/the seed call `loadSchemaDir`); the Registry consumes schema as DATA, so
+   * per-file-DB tests can never cross-contaminate through a shared on-disk dir. Each schema → meta rows
+   * (`schemaToRows`) → the SAME `buildDef` the meta path uses, so a file-built def is byte-identical to a
+   * meta-built one (the S1 equivalence oracle). Component-type schemas are deferred to a later slice (the
+   * demo catalog has none); a relation-bearing schema fails LOUD in `schemaToRows`.
+   *
+   * Its sibling {@link Registry.build} (meta → def) is a TEMPORARY compat shim — see §7.1 "Cleanup ledger"
+   * in docs/research/schema-source-of-truth.md: `Registry.build(sql)` is deleted everywhere in S5 once the
+   * Builder writes files. New code MUST target `fromSchemas`, never `build`.
+   */
+  static fromSchemas(schemas: ContentTypeSchema[]): Registry {
+    const reg = new Registry();
+    for (const schema of schemas) {
+      const { ct, fieldRows, relationRows } = schemaToRows(schema);
+      reg.byApiId.set(ct.api_id, buildDef(ct, fieldRows, relationRows));
+    }
+    return reg;
+  }
+
+  /**
+   * Build the WHOLE registry from meta. Empty catalog is valid (an empty registry).
+   *
+   * TEMPORARY COMPAT SHIM (S1 expand-contract): reads the `content_types`/`content_type_fields` meta
+   * tables so the ~30 existing call sites + the full suite stay green byte-identical while files become the
+   * source. SCHEDULED FOR DELETION in S5 (§7.1 Cleanup ledger) — do not add new callers; use
+   * {@link Registry.fromSchemas} instead.
+   */
   static async build(sql: Sql): Promise<Registry> {
     const reg = new Registry();
     // be-05: build component defs FIRST so a content-type / component referencing one can resolve it.

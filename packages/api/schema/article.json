@@ -1,0 +1,16 @@
+{
+  "id": "ct_article",
+  "apiId": "article",
+  "collectionName": "ct_article",
+  "info": { "singularName": "article", "pluralName": "articles", "displayName": "Article" },
+  "options": { "draftAndPublish": false, "i18n": false },
+  "fields": [
+    { "id": "f_title", "name": "title", "type": "string", "options": { "length": 512, "nullable": true } },
+    { "id": "f_body", "name": "body", "type": "text", "options": { "nullable": false } },
+    { "id": "f_status", "name": "status", "type": "enumeration", "options": { "values": ["draft", "published", "archived"], "nullable": false } },
+    { "id": "f_views", "name": "views", "type": "integer", "options": { "nullable": true } },
+    { "id": "f_rating", "name": "rating", "type": "float", "options": { "nullable": true } },
+    { "id": "f_active", "name": "active", "type": "boolean", "options": { "nullable": false } },
+    { "id": "f_publishedAt", "name": "publishedAt", "type": "datetime", "options": { "nullable": false } }
+  ]
+}

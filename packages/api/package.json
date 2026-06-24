@@ -32,7 +32,8 @@
     "kysely-postgres-js": "3.0.0",
     "postgres": "^3.4.9",
     "set-cookie-parser": "3.1.0",
-    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0"
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@better-auth/cli": "1.4.21",
