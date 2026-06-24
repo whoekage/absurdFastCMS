@@ -1,0 +1,67 @@
+import type { S3Config } from '../config.ts';
+import { config } from '../config.ts';
+
+/**
+ * `ContiConfig` — the typed, config-as-code shape of the SERVER configuration a user authors in
+ * `conti.config.ts`. This describes how the server is WIRED (db connection, listen port, auth/cursor
+ * secrets, storage, i18n default, debug) — it is NOT the content SCHEMA (content-types are data in
+ * Postgres, managed by the Builder). Keep that boundary: server wiring = code here; content modelling
+ * = data in PG.
+ *
+ * Phase 2 (T1) introduces only the TYPE + the two helpers below. No runtime consumer yet — `createConti`
+ * (T2) will drive boot from a `ContiConfig` instead of reading env directly.
+ *
+ * Immutable by construction (`readonly`): a resolved config is a snapshot, never mutated after load.
+ */
+export interface ContiConfig {
+  readonly database: { readonly url: string };
+  readonly server: { readonly port: number };
+  /** better-auth provider secret (cookie signing + at-rest hashing). */
+  readonly auth: { readonly secret: string };
+  /** HMAC secret for the keyset cursor codec. */
+  readonly cursor: { readonly secret: string };
+  readonly storage: {
+    readonly uploadMaxBytes: number;
+    /** The local-fs provider settings; always resolved (used when `s3` is absent). */
+    readonly local: { readonly path: string; readonly publicBaseUrl: string };
+    /** When set, the S3 provider is selected instead of local. */
+    readonly s3?: S3Config | undefined;
+  };
+  readonly i18n: { readonly defaultLocale: string };
+  readonly debug: { readonly inspector: boolean };
+}
+
+/**
+ * The typed-authoring helper for `conti.config.ts` (Vite/Payload `defineConfig` pattern): an identity
+ * function whose only job is to give the user editor autocomplete + type-checking on the config literal.
+ */
+export function defineConfig(config: ContiConfig): ContiConfig {
+  return config;
+}
+
+/**
+ * Build a {@link ContiConfig} from the environment — the DEFAULT config source (`.env` in dev,
+ * `.env.test` in test). It DELEGATES to the existing env-reading `config` module rather than re-reading
+ * `process.env`, so every value (validation, defaults, dev-secret fallbacks, the `AUTH_SECRET` ↔
+ * `BETTER_AUTH_SECRET` and PORT-CLI fallbacks, the `publicBaseUrl`-from-port default) is produced by the
+ * SAME single source of truth — no duplicated logic, no drift. The resulting snapshot is byte-for-byte
+ * the values today's boot path reads from env.
+ *
+ * @param cliPort optional CLI port override (e.g. `conti start 8080` / `argv[2]`), threaded to
+ *   `config.port()` which applies the env-PORT-wins-then-CLI-then-default precedence.
+ */
+export function loadConfigFromEnv(cliPort?: string): ContiConfig {
+  return {
+    database: { url: config.databaseUrl },
+    server: { port: config.port(cliPort) },
+    auth: { secret: config.authSecret },
+    cursor: { secret: config.cursorSecret },
+    storage: {
+      uploadMaxBytes: config.uploadMaxBytes,
+      local: { path: config.localStoragePath, publicBaseUrl: config.publicBaseUrl },
+      s3: config.s3,
+    },
+    i18n: { defaultLocale: config.defaultLocale },
+    debug: { inspector: config.debugInspector },
+  };
+}
