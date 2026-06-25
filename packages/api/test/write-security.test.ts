@@ -2,10 +2,11 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres.store.ts';
-import { createContentType } from '../src/db/content-type.repository.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
+import type { ContentTypeSchema } from '../src/db/schema/model.ts';
 import type { ListenToken } from '../src/http/uws.adapter.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { tableExists, startTestServer } from './helpers.ts';
+import { tableExists, startTestServerFromSchemas, ct } from './helpers.ts';
 
 /**
  * WRITE-SECURITY SLICE — injection via field name, mass-assignment, jsonb byte-exact through load+
@@ -19,26 +20,29 @@ let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let token: ListenToken;
 let base: string;
 let close: (t: ListenToken) => void;
+let schemas: ContentTypeSchema[];
 
 before(async () => {
   db = await createFileDatabase('sec');
   sql = db.sql;
-  await createContentType(sql, {
-    apiId: 'article',
-    fields: [
-      { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
-      { name: 'body', cmsType: 'text', options: { nullable: false } },
-      { name: 'status', cmsType: 'string', options: { nullable: false } },
-      { name: 'views', cmsType: 'integer', options: { nullable: true } },
-      { name: 'rating', cmsType: 'decimal', options: { precision: 10, scale: 2, nullable: true } },
-      { name: 'active', cmsType: 'boolean', options: { nullable: false } },
-      { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
-    ],
+  schemas = [
+    ct({
+      apiId: 'article',
+      fields: [
+        { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
+        { name: 'body', cmsType: 'text', options: { nullable: false } },
+        { name: 'status', cmsType: 'string', options: { nullable: false } },
+        { name: 'views', cmsType: 'integer', options: { nullable: true } },
+        { name: 'rating', cmsType: 'decimal', options: { precision: 10, scale: 2, nullable: true } },
+        { name: 'active', cmsType: 'boolean', options: { nullable: false } },
+        { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
+      ],
+    }),
+    ct({ apiId: 'doc', fields: [{ name: 'blob', cmsType: 'json', options: { nullable: false } }] }),
+  ];
+  const server = await startTestServerFromSchemas(sql, schemas, {
+    seed: async () => { await sql`INSERT INTO ct_article (title, body, status, views, rating, active, "publishedAt") VALUES ('Seed', 'b1', 'published', 1, 1.0, true, '2021-01-01T00:00:00.000Z')`; },
   });
-  await createContentType(sql, { apiId: 'doc', fields: [{ name: 'blob', cmsType: 'json', options: { nullable: false } }] });
-  await sql`INSERT INTO ct_article (title, body, status, views, rating, active, "publishedAt")
-            VALUES ('Seed', 'b1', 'published', 1, 1.0, true, '2021-01-01T00:00:00.000Z')`;
-  const server = await startTestServer(sql);
   close = server.close;
   token = server.token;
   base = server.base;
@@ -80,7 +84,7 @@ test('jsonb nested big int + key order survive load+respond byte-exact (the ::te
   await sql.unsafe(`INSERT INTO ct_doc (blob) VALUES ('{"big": ${bigInt}, "z": 1, "a": 2}'::jsonb)`);
   // Reload the engine so the directly-inserted row is visible.
   const store = new PostgresStore(sql);
-  const { engine } = await store.loadWithRegistry();
+  const { engine } = await store.loadFromSchemas(schemas);
   const buf = engine.respondById('doc', 1)!.toString('utf8');
   // The verbatim jsonb text is spliced (jsonb canonicalizes key order); the nested integer > 2^53
   // SURVIVES exact via the `::text` path — postgres.js's JS parse would have corrupted it to a double.

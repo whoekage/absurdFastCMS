@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer, type ListenToken } from '../src/http/uws.adapter.ts';
-import { createContentType } from '../src/db/content-type.repository.ts';
-import { seedArticleIfAbsent } from '../src/http/server.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
+import type { ContentTypeSchema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { freePort, physicalColumns } from './helpers.ts';
+import { freePort, physicalColumns, ct, ARTICLE_SCHEMA } from './helpers.ts';
 
 /**
  * be-06 i18n — READ-SIDE + SCHEMA, end-to-end over a REAL uWS server + REAL Postgres (.env.test), no
@@ -25,6 +25,7 @@ let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let token: ListenToken;
 let base: string;
 let close: (t: ListenToken) => void;
+let baseSchemas: ContentTypeSchema[]; // the catalog seeded in before() — the mid-test type adds to this
 
 // DEFAULT_LOCALE is read from .env.test; the read router resolves a locale-less read of an i18n type to it.
 // We do NOT assume a specific value — we assert relative to whichever variant we tag as the default below.
@@ -33,14 +34,14 @@ const DEFAULT_LOCALE = process.env.DEFAULT_LOCALE?.trim() || 'en';
 before(async () => {
   db = await createFileDatabase('i18n');
   sql = db.sql;
-  // A NON-i18n type (the seed article) to assert byte-identity is unaffected.
-  await seedArticleIfAbsent(sql);
-  // An i18n-ENABLED type.
-  await createContentType(sql, {
+  // A NON-i18n type (the seed article) to assert byte-identity is unaffected + an i18n-ENABLED `page`.
+  const page = ct({
     apiId: 'page',
     fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }],
     i18n: true,
   });
+  baseSchemas = [ARTICLE_SCHEMA, page];
+  await migrate(sql, baseSchemas, { allowDestructive: true });
 
   // Seed locale variants DIRECTLY (write verb is the next slice). Two documents, each with 2 locales:
   //   document_id=100: { DEFAULT_LOCALE: "Home", "fr": "Accueil" }
@@ -54,7 +55,7 @@ before(async () => {
   );
 
   const store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadWithRegistry();
+  const { engine, registry } = await store.loadFromSchemas(baseSchemas);
   const server = createServer(engine, store, registry);
   const port = await freePort();
   token = await server.listen(port);
@@ -196,7 +197,7 @@ async function getJson(path: string): Promise<any> {
 
 test('write-side: plain create -> variant create (same document_id, distinct id+locale) -> locale reads', async () => {
   // A dedicated i18n type: localized `title`, SHARED `summary`, plus draft_publish (compose test below).
-  await createContentType(sql, {
+  const doc = ct({
     apiId: 'doc',
     fields: [
       { name: 'title', cmsType: 'string', options: { nullable: false }, localized: true },
@@ -205,9 +206,11 @@ test('write-side: plain create -> variant create (same document_id, distinct id+
     i18n: true,
     draftPublish: true,
   });
+  const schemas = [...baseSchemas, doc]; // the FULL desired catalog (migrate diffs against the applied snapshot)
+  await migrate(sql, schemas, { allowDestructive: true });
   // Reload the running server's engine+registry so the new type is live on THIS server instance.
   const store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadWithRegistry();
+  const { engine, registry } = await store.loadFromSchemas(schemas);
   if (token) close(token);
   const server = createServer(engine, store, registry, () => new Date('2026-01-01T00:00:00.000Z'));
   const port = await freePort();

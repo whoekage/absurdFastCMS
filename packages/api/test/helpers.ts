@@ -213,7 +213,7 @@ export async function startTestServerFromSchemas(
  */
 export interface CtSpec {
   apiId: string;
-  fields: { name: string; cmsType: FieldType; options?: FieldOptions }[];
+  fields: { name: string; cmsType: FieldType; options?: FieldOptions; localized?: boolean }[];
   relations?: { field: string; kind: RelationKind; target: string; inverseField?: string }[];
   draftPublish?: boolean;
   i18n?: boolean;
@@ -222,7 +222,13 @@ export function ct(spec: CtSpec): ContentTypeSchema {
   const out: ContentTypeSchema = {
     id: mintId('ct'),
     apiId: spec.apiId,
-    fields: spec.fields.map((f) => (f.options !== undefined ? { id: mintId('f'), name: f.name, type: f.cmsType, options: f.options } : { id: mintId('f'), name: f.name, type: f.cmsType })),
+    fields: spec.fields.map((f) => ({
+      id: mintId('f'),
+      name: f.name,
+      type: f.cmsType,
+      ...(f.options !== undefined ? { options: f.options } : {}),
+      ...(f.localized !== undefined ? { localized: f.localized } : {}),
+    })),
   };
   if (spec.draftPublish || spec.i18n) out.options = { ...(spec.draftPublish ? { draftAndPublish: true } : {}), ...(spec.i18n ? { i18n: true } : {}) };
   if (spec.relations !== undefined) out.relations = spec.relations.map((r) => (r.inverseField !== undefined ? { id: mintId('rel'), field: r.field, kind: r.kind, target: r.target, inverseField: r.inverseField } : { id: mintId('rel'), field: r.field, kind: r.kind, target: r.target }));

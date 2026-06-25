@@ -1,12 +1,12 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { createContentType } from '../src/db/content-type.repository.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer } from '../src/http/uws.adapter.ts';
 import { HookRegistry, HookError } from '../src/db/schema/hooks.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { freePort } from './helpers.ts';
+import { freePort, ct } from './helpers.ts';
 
 /**
  * Phase 4 — content lifecycle hooks over a REAL server + Postgres. Proves the two-class model:
@@ -27,13 +27,14 @@ const afterIds: number[] = [];
 before(async () => {
   db = await createFileDatabase('hooks');
   sql = db.sql;
-  await createContentType(sql, {
+  const widget = ct({
     apiId: 'widget',
     fields: [
       { name: 'title', cmsType: 'string', options: { nullable: true } },
       { name: 'slug', cmsType: 'string', options: { nullable: true } },
     ],
   });
+  await migrate(sql, [widget], { allowDestructive: true });
 
   const hooks = new HookRegistry(
     new Map([
@@ -58,7 +59,7 @@ before(async () => {
   );
 
   const store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadWithRegistry();
+  const { engine, registry } = await store.loadFromSchemas([widget]);
   const server = createServer(engine, store, registry, undefined, undefined, undefined, undefined, undefined, hooks);
   const port = await freePort();
   token = await server.listen(port);
