@@ -37,7 +37,7 @@ before(async () => {
   const auth = buildAuth({ baseURL: base });
 
   store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadWithRegistry();
+  const { engine, registry } = await store.loadFromSchemas([]); // files-first empty catalog (no content types here)
   const server = createServer(engine, store, registry, undefined, auth);
   token = await server.listen(port0);
   close = server.close;

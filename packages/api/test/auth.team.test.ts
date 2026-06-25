@@ -93,7 +93,7 @@ before(async () => {
   await rbac.rebuild();
   await teamView.rebuild();
 
-  const { engine, registry } = await store.loadWithRegistry();
+  const { engine, registry } = await store.loadFromSchemas([]); // files-first empty catalog (team E2E creates no content types)
   const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, teamView);
   token = await server.listen(port0);
   close = server.close;
@@ -330,7 +330,7 @@ test('checklist#7: the LAST active super-admin cannot be suspended, removed, or 
         rbacInvalidate: () => frbac.rebuild(), teamViewReload: () => ftv.rebuild(),
       });
       const fstore = new PostgresStore(fsql);
-      const { engine, registry } = await fstore.loadWithRegistry();
+      const { engine, registry } = await fstore.loadFromSchemas([]); // files-first empty catalog
       const fserver = createServer(engine, fstore, registry, undefined, fauth, fcache, frbac, ftv);
       const ftoken = await fserver.listen(fport);
       try {

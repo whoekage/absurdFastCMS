@@ -8,7 +8,8 @@ import { runMigrations } from '../src/db/migration.runner.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer } from '../src/http/uws.adapter.ts';
-import { freePort } from './helpers.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
+import { freePort, ct } from './helpers.ts';
 import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
 import { buildAuth } from '../src/auth/auth.ts';
 import { SessionCache } from '../src/auth/session.cache.ts';
@@ -39,6 +40,9 @@ let token: unknown;
 let close: (t: unknown) => void;
 
 const PW = 'correct-horse-battery-staple';
+
+/** The single incidental write surface the API-key scope tests gate against (content.create/delete). */
+const NOTE_SCHEMA = ct({ apiId: 'note', fields: [{ name: 'title', cmsType: 'string' }] });
 
 /** Sign up a fresh user; returns its session Cookie header. */
 async function signUp(email: string): Promise<string> {
@@ -125,17 +129,12 @@ async function createKey(cookie: string, body: Record<string, unknown>): Promise
   });
 }
 
-/** A trivial content-type so we have a write surface (content.create/delete) to gate the key against. */
-let typeReady = false;
-async function ensureWritableType(adminCookie: string): Promise<void> {
-  if (typeReady) return;
-  const res = await fetch(`${base}/content-types`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', cookie: adminCookie },
-    body: JSON.stringify({ apiId: 'note', fields: [{ name: 'title', cmsType: 'string' }] }),
-  });
-  assert.ok(res.status === 200 || res.status === 201, `mk type failed: ${res.status} ${await res.clone().text()}`);
-  typeReady = true;
+/**
+ * The `note` write surface (content.create/delete) is now pre-built files-first in before() via
+ * migrate([NOTE_SCHEMA]); this is a no-op kept so the 13 call sites don't need editing.
+ */
+async function ensureWritableType(_adminCookie: string): Promise<void> {
+  /* `note` is pre-migrated in before() — nothing to do. */
 }
 
 /** POST a `note` row through the key (the gated content.create surface). Body is the FLAT entry object. */
@@ -170,7 +169,8 @@ before(async () => {
   await rbac.rebuild();
   await teamView.rebuild();
 
-  const { engine, registry } = await store.loadWithRegistry();
+  await migrate(sql, [NOTE_SCHEMA], { allowDestructive: true }); // CREATE ct_note + write _schema_applied (zero meta)
+  const { engine, registry } = await store.loadFromSchemas([NOTE_SCHEMA]);
   const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, teamView);
   token = await server.listen(port0);
   close = server.close;
