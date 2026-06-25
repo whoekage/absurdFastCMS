@@ -2,6 +2,23 @@
 
 # Legacy Meta-Path Teardown — Staged Plan (files + `_schema_applied` as sole truth)
 
+> ## ▶ RESUME HERE (progress as of 2026-06-26)
+> **Stage 0 DONE** (commit `97eb60e`): `components` threaded through `loadFromSchemas`/`swapFromIR` (default `[]`).
+> **Stage 1 IN PROGRESS — 9 of ~24 files migrated, all green & committed:**
+> - Test helpers added to `test/helpers.ts`: `ct(spec)` (createContentType-spec → files-first `ContentTypeSchema`, mints ids, `cmsType`→`type`, carries `localized`), `startTestServerFromSchemas(sql, schemas, { components?, seed? })` (migrate→optional seed→loadFromSchemas→createServer), `ARTICLE_SCHEMA` fixture, `startTestServerFromFilesWithAuth` (real better-auth, from the S6 work).
+> - Migrated (commits `3a0f244`, `9127359`, `43ecdb1`): `write`, `load`, `entry-repo-backstop`, `postgres-store`, `entry-types`, `hooks.e2e`, `draft-publish`, `i18n`, `write-security`.
+> - PROVEN PATTERNS: `migrate(sql, schemas, {allowDestructive:true})` creates `ct_*`; `seed` callback inserts rows AFTER tables exist / BEFORE engine load; a mid-test type addition passes the FULL desired catalog to `migrate()`; `Registry.build`/`store.load()`/`loadWithRegistry` → `Registry.fromSchemas`/`store.loadFromSchemas`.
+>
+> **NEXT BATCH (resume here) — the heavy remainder of Stage 1:**
+> 1. `sparse-field-selection.e2e` — per-test types + `addRelation` (use `ct({..., relations:[...]})`).
+> 2. The 4 relation GIANTS: `relation-load`, `relation-filter`, `relation-populate`, `relation-write` (40–51 type defs each + `addRelation` → fold into `ct(...).relations`; collect ALL types into one `migrate()` since a relation target must already exist).
+> 3. media e2e (`media-field`, `media-upload`): create types at runtime via legacy `POST /content-types` → restructure to pre-build the media-field types up front + `startTestServerFromSchemas` (drop the POST-content-types setup).
+> 4. component e2e (`component-write`, `relation-in-component`, `i18n-media`): pass in-memory `ComponentSchema[]` via the `components` option (Stage 0 plumbing is ready; stop POSTing `/component-types`).
+> 5. auth (`auth.bridge`, `auth.tokens`, `auth.team`): `loadWithRegistry`→files-first; repoint the `/content-types` GET probe. REWRITE `auth.route-gating` re-expressing the gate matrix onto the Builder surface AND port the granular guards (relation-vs-scalar `FieldExistsError` etc.) onto `preflightValidate` (maintainer decision: no coverage loss).
+>
+> DO-NOT-MIGRATE (DELETE in Stage 2, they assert the legacy controllers/meta directly): `content-type-meta`, `content-type-builder`, `component-builder.e2e`, `relation-declaration-over-http`, `schema-registry-equiv`; trim `registry.test` build cases; PORT then delete `relation-declare` guards (Stage 2.7).
+> Then Stages 2 (boot re-root off `seedFromSchemas`→`migrate()` + delete legacy test files) → 3 (delete controllers/repos meta-writes/`Registry.build`/`loadWithRegistry`/`startTestServer`) → 4 (drop meta tables + flip `cleanCatalog`). Full suite must stay green at each stage end.
+
 Keyed to current code. Each stage ends GREEN (tsc + biome + full suite). Order is by dependency + risk: a prerequisite slice (components into the files boot path) MUST land first, then test migration, then the SRC delete, then the table drop LAST.
 
 ---
