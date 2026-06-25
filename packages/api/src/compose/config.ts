@@ -31,12 +31,12 @@ export interface ContiConfig {
   readonly i18n: { readonly defaultLocale: string };
   readonly debug: { readonly inspector: boolean };
   /**
-   * Files-first content SCHEMA location — the project's `schema/` dir holding one `schema/<apiId>.json` per
-   * content-type (the SOURCE OF TRUTH; see docs/research/schema-source-of-truth.md). Optional: when absent,
-   * {@link createConti} defaults to `<cwd>/schema`. Resolved to an absolute path by {@link loadConfigFromEnv}
-   * (relative to the project dir = cwd), so the CLI and direct callers agree.
+   * Files-first ENTITIES location — the project's `entities/` dir holding one FOLDER per content-type
+   * (`entities/<apiId>/schema.ts` + optional `hooks.ts`; the SOURCE OF TRUTH). Optional: when absent,
+   * {@link createConti} defaults to `<cwd>/entities`. Resolved to an absolute path by
+   * {@link loadConfigFromEnv} (relative to the project dir = cwd), so the CLI and direct callers agree.
    */
-  readonly schema?: { readonly dir: string };
+  readonly entities?: { readonly dir: string };
 }
 
 /**
@@ -71,7 +71,7 @@ export function loadConfigFromEnv(cliPort?: string): ContiConfig {
     },
     i18n: { defaultLocale: config.defaultLocale },
     debug: { inspector: config.debugInspector },
-    // The project dir is cwd (the CLI loads conti.config.ts from there); the schema files sit beside it.
-    schema: { dir: path.join(process.cwd(), 'schema') },
+    // The project dir is cwd (the CLI loads conti.config.ts from there); the entities/ dir sits beside it.
+    entities: { dir: path.join(process.cwd(), 'entities') },
   };
 }

@@ -1,18 +1,22 @@
 import { readdir } from 'node:fs/promises';
+import { existsSync, type Dirent } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { defToSchema, type TypeDef, type Hooks } from './define.ts';
 import type { ContentTypeSchema } from './model.ts';
 
 /**
- * The EDGE loader for the code-first source: import every `schema/<apiId>.ts` module and introspect its
- * default-exported {@link TypeDef} into the internal {@link ContentTypeSchema} IR. The apiId is the file
- * stem (renaming the file renames the type — the stable `id` keeps it lossless). Modules are loaded via
- * Node's native TS type-stripping (no build step); each resolves `@conti/core` exactly as `conti.config.ts`
- * does. A missing dir is an EMPTY catalog (a fresh project).
+ * The EDGE loader for the code-first source. The project's entity definitions live under `entities/`, ONE
+ * FOLDER PER content-type (Strapi-style): `entities/<apiId>/schema.ts` (the {@link TypeDef}, required) +
+ * `entities/<apiId>/hooks.ts` (the {@link Hooks}, optional). The apiId is the FOLDER NAME (renaming the
+ * folder renames the type — the stable `id` keeps it lossless). `services.ts`/`controller.ts` (custom
+ * logic) are reserved for a later release and not yet loaded.
  *
- * Module caching is intentional and harmless: boot loads once, the CLI is a fresh process per command, and
- * `migrate` consumes the IR directly (never re-imports), so a stale ESM cache never bites.
+ * The reserved `entities/components/` grouping dir (component definitions) is skipped here — a content-type
+ * folder is exactly a subdir that contains a `schema.ts`. Modules load via Node's native TS type-stripping
+ * (no build); each resolves `@conti/core` exactly as `conti.config.ts` does. A missing dir is an EMPTY
+ * catalog. Module caching is harmless: boot loads once, the CLI is a fresh process, and `migrate` takes the
+ * IR directly (never re-imports).
  */
 
 export class SchemaLoadError extends Error {
@@ -31,24 +35,33 @@ export interface LoadedTypes {
 }
 
 export async function loadTypes(dir: string): Promise<LoadedTypes> {
-  let entries: string[];
+  let dirents: Dirent[];
   try {
-    entries = await readdir(dir);
+    dirents = await readdir(dir, { withFileTypes: true });
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { schemas: [], hooks: new Map() };
     throw e;
   }
-  const files = entries.filter((f) => f.endsWith('.ts') && !f.endsWith('.d.ts') && !f.endsWith('.test.ts')).sort();
+  // An entity is a subdir holding a `schema.ts`. `components/` is the reserved component-definition group.
+  const entityNames = dirents
+    .filter((d) => d.isDirectory() && d.name !== 'components')
+    .map((d) => d.name)
+    .sort();
   const schemas: ContentTypeSchema[] = [];
   const hooks = new Map<string, Hooks>();
-  for (const f of files) {
-    const apiId = f.slice(0, -'.ts'.length);
-    const mod = (await import(pathToFileURL(path.join(dir, f)).href)) as { default?: TypeDef };
+  for (const apiId of entityNames) {
+    const schemaFile = path.join(dir, apiId, 'schema.ts');
+    if (!existsSync(schemaFile)) continue; // a grouping dir, not an entity
+    const mod = (await import(pathToFileURL(schemaFile).href)) as { default?: TypeDef };
     if (!mod.default || typeof mod.default !== 'object' || !('fields' in mod.default)) {
-      throw new SchemaLoadError(f, 'must `export default defineType({ ... })`');
+      throw new SchemaLoadError(`${apiId}/schema.ts`, 'must `export default defineType({ ... })`');
     }
     schemas.push(defToSchema(mod.default, apiId));
-    if (mod.default.hooks !== undefined) hooks.set(apiId, mod.default.hooks);
+    const hooksFile = path.join(dir, apiId, 'hooks.ts');
+    if (existsSync(hooksFile)) {
+      const hmod = (await import(pathToFileURL(hooksFile).href)) as { default?: Hooks };
+      if (hmod.default !== undefined) hooks.set(apiId, hmod.default);
+    }
   }
   return { schemas, hooks };
 }

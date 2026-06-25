@@ -13,8 +13,8 @@ import type { ContiConfig } from './config.ts';
  * unchanged. NOT yet wired into boot (that is S6's lifecycle slice).
  */
 
-function schemaDirOf(config: ContiConfig): string {
-  return config.schema?.dir ?? path.join(process.cwd(), 'schema');
+function entitiesDirOf(config: ContiConfig): string {
+  return config.entities?.dir ?? path.join(process.cwd(), 'entities');
 }
 
 /**
@@ -24,7 +24,7 @@ function schemaDirOf(config: ContiConfig): string {
  */
 export async function runMigrate(config: ContiConfig, opts: { allowDestructive?: boolean } = {}): Promise<MigrateResult> {
   await runMigrations(config.database.url);
-  const { schemas } = await loadTypes(schemaDirOf(config));
+  const { schemas } = await loadTypes(entitiesDirOf(config));
   const sql = createSql(config.database.url);
   try {
     return await migrate(sql, schemas, opts);
@@ -35,7 +35,7 @@ export async function runMigrate(config: ContiConfig, opts: { allowDestructive?:
 
 /** Compute the pending change-set + the blocked subset WITHOUT applying (the `migrate lint` command). */
 export async function runMigrateLint(config: ContiConfig): Promise<{ changes: readonly Change[]; blocked: readonly Change[] }> {
-  const { schemas } = await loadTypes(schemaDirOf(config));
+  const { schemas } = await loadTypes(entitiesDirOf(config));
   const sql = createSql(config.database.url);
   try {
     return await migrateLint(sql, schemas);

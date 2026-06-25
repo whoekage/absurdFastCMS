@@ -282,3 +282,55 @@ export type Article = InferType<typeof Article>;   // types for free, no codegen
   `hooks` untouched. Introspection (engine/migrate/types) just executes the module — no AST.
 - Phases: (1) DSL `defineType`+`c.*`; (2) `defToSchema` (DSL→IR) + equivalence vs the JSON-IR; (3) TS loader
   + `article.ts` + createConti/migrate switch; (4) hooks registry + write-path; (5 later) Builder AST-write.
+
+## 12. Content lifecycle hooks — domain responsibility (pivot phase 4, DONE)
+
+Researched across Strapi/Payload/Directus/Keystone/Sanity + ORMs (TypeORM/Sequelize/Mongoose/Prisma).
+Convergent model: TWO classes split on the COMMIT boundary, owned by the content-service seam (NOT the
+HTTP transport, NOT the per-row db repo — the Strapi-v5 lesson: row-level hooks multi-fire on D&P/i18n and
+lose the semantic event).
+
+- **`before*` — TRANSFORM + VETO.** Runs INSIDE the write transaction, pre-persist. RETURN-value mutation
+  contract (Payload/Directus, not mutate-in-place): receives `data`, returns the (possibly transformed)
+  data to persist. THROW vetoes → rollback → 400 (`HookError` for a clean message). No side-effects.
+- **`after*` — REACT.** Runs AFTER commit + the read-engine rebuild, with the committed row. Side-effects
+  only; ISOLATED so a throw is logged, never fatal (the TypeORM #2816 / Sequelize #8585 / Mongoose #8618
+  footgun, avoided by construction).
+
+Seam: `handleWrite` already had the ideal shape — `row = await sql.begin(tx => …write…)` then
+`await rebuild(type)`. `before*` slots at the top of the `sql.begin`; `after*` after `rebuild`. The
+columnar-engine rebuild is the FIRST post-commit step (infrastructure, not a user hook), so `afterCreate`
+observes the committed row already queryable. Wiring: hooks are `defineHooks({...})` in the entity's
+`hooks.ts` (§13); `loadTypes` returns `{ schemas, hooks: Map<apiId,Hooks> }`; `createConti` builds a
+`HookRegistry` → `createServer` → `WriteContext.hooks`; `handleWrite` dispatches create/update/delete
+(variant-create + publish deferred). Hookless servers are byte-identical (the dispatch is guarded).
+
+Footguns designed out: no side-effects in `before` · after-throw swallowed+logged · `HookError`→400 vs a
+generic throw→500. Deferred: a tx handle / auth principal in the hook ctx, a recursion guard, and a
+transactional OUTBOX for durable post-commit side-effects (email/webhooks — be-07).
+
+## 13. Project layout — `entities/<apiId>/` (one folder per content-type)
+
+Final source layout (Strapi-style, naming chosen deliberately — `entities` over `schema`/`api`, matching how
+we already speak of "entities"):
+
+```
+entities/
+  article/
+    schema.ts        export default defineType({ id, options, fields })   [required]
+    hooks.ts         export default defineHooks({ before*/after* })        [optional]
+    services.ts      custom reusable domain fns   [reserved — not loaded yet]
+    controller.ts    custom routes beyond CRUD    [reserved — not loaded yet]
+  components/
+    seo/schema.ts    component definitions (no hooks/services)             [loader: future]
+```
+
+- **apiId = the FOLDER name** (rename the folder → rename the type; the stable `id` keeps it lossless).
+- The loader (`loadTypes`) scans `entities/*/`: an entity is a subdir containing `schema.ts`; it pairs an
+  optional `hooks.ts`. The `components/` grouping dir is skipped by the content-type loader (it has no
+  top-level `schema.ts`) and reserved for the future component loader.
+- **Why two files, not one (`defineType({ hooks })`):** the visual Builder OWNS + regenerates `schema.ts`
+  wholesale (pure codegen from the edited schema — NO AST/ts-morph surgery), and NEVER touches the dev-owned
+  `hooks.ts`/`services.ts`/`controller.ts`. Clean machine/human split = no fragile in-place file rewriting.
+- Config: `ContiConfig.entities.dir` (default `<cwd>/entities`); `conti init` scaffolds `entities/article/`
+  with all four files (services/controller commented placeholders).

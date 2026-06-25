@@ -82,11 +82,11 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     if (lifecycle.onBeforeStart) await lifecycle.onBeforeStart(ctx);
     await runMigrations(config.database.url);
     store = new PostgresStore(config.database.url);
-    // CODE-FIRST source of truth: import the project's committed schema/<apiId>.ts modules at the EDGE
-    // (loadTypes → the IR), materialize any missing ct_ table from them (the bridge until `conti migrate`
-    // owns this), then build the registry FROM them (not the meta tables). Default the dir to <cwd>/schema.
-    const schemaDir = config.schema?.dir ?? path.join(process.cwd(), 'schema');
-    const { schemas, hooks } = await loadTypes(schemaDir);
+    // CODE-FIRST source of truth: import the project's committed entities/<apiId>/schema.ts modules at the
+    // EDGE (loadTypes → the IR), materialize any missing ct_ table from them (the bridge until `conti
+    // migrate` owns this), then build the registry FROM them (not the meta tables). Default to <cwd>/entities.
+    const entitiesDir = config.entities?.dir ?? path.join(process.cwd(), 'entities');
+    const { schemas, hooks } = await loadTypes(entitiesDir);
     const hookRegistry = new HookRegistry(hooks);
     await seedFromSchemas(store.sql, schemas);
     // Keyset cursor codec (HMAC over the configured secret) wired once at the composition root.

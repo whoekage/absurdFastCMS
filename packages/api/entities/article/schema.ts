@@ -1,9 +1,11 @@
 import { defineType, c } from '@conti/core';
 
 /**
- * The demo content-type — files-first, code-first. This `schema/<apiId>.ts` is the SOURCE OF TRUTH:
- * `conti migrate` applies it, the engine builds its registry from it, and `InferType<typeof Article>` gives
- * the entry type for free. The visual Builder rewrites only the `fields` literal; hooks stay hand-edited.
+ * The demo content-type — files-first, code-first. One FOLDER per entity: this `entities/<apiId>/schema.ts`
+ * is the SOURCE OF TRUTH (`conti migrate` applies it; the engine builds its registry from it;
+ * `InferType<typeof Article>` gives the entry type for free). The visual Builder OWNS + regenerates this
+ * file wholesale; lifecycle hooks go in a sibling `entities/article/hooks.ts` (`defineHooks({...})`) — and
+ * custom `services.ts`/`controller.ts` live in the same folder — none of which the Builder touches.
  */
 const Article = defineType({
   id: 'ct_article',

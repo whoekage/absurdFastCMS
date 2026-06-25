@@ -5,14 +5,15 @@ import { fileURLToPath } from 'node:url';
 import { loadTypes } from '../src/db/schema/load.ts';
 
 /**
- * Phase 3 — the code-first loader. Proves a real `schema/*.ts` module (which imports `@conti/core`) is
- * dynamically imported + introspected into the IR (no build step), and a missing dir is an empty catalog.
+ * The code-first loader. Proves a real `entities/<apiId>/schema.ts` module (which imports `@conti/core`) is
+ * dynamically imported + introspected into the IR (no build step), a missing dir is an empty catalog, and
+ * a `hooks.ts` in the entity folder is paired (while `schema.ts` is the only thing loaded as a type).
  */
 
-const schemaDir = fileURLToPath(new URL('../schema', import.meta.url));
+const entitiesDir = fileURLToPath(new URL('../entities', import.meta.url));
 
-test('loadTypes imports schema/*.ts modules into the IR', async () => {
-  const { schemas } = await loadTypes(schemaDir);
+test('loadTypes imports entities/<apiId>/schema.ts modules into the IR', async () => {
+  const { schemas } = await loadTypes(entitiesDir);
   const article = schemas.find((s) => s.apiId === 'article');
   assert.ok(article, 'article.ts was loaded + introspected');
   assert.equal(article!.id, 'ct_article');
@@ -21,7 +22,15 @@ test('loadTypes imports schema/*.ts modules into the IR', async () => {
 });
 
 test('loadTypes returns an empty catalog for a missing dir', async () => {
-  const { schemas, hooks } = await loadTypes(path.join(schemaDir, 'does-not-exist'));
+  const { schemas, hooks } = await loadTypes(path.join(entitiesDir, 'does-not-exist'));
   assert.deepEqual(schemas, []);
   assert.equal(hooks.size, 0);
+});
+
+test('loadTypes pairs entities/<apiId>/hooks.ts with its schema (apiId = folder name)', async () => {
+  const dir = fileURLToPath(new URL('./fixtures/hooked', import.meta.url));
+  const { schemas, hooks } = await loadTypes(dir);
+  assert.deepEqual(schemas.map((s) => s.apiId), ['widget']); // folder name = apiId
+  assert.ok(hooks.has('widget'));
+  assert.ok(hooks.get('widget')!.beforeCreate, 'the folder hooks.ts was paired');
 });

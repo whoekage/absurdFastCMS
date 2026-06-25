@@ -4,8 +4,10 @@ import type { ContentTypeSchema, FieldSchema, RelationSchema } from './model.ts'
 
 /**
  * THE CODE-FIRST AUTHORING DSL (pivot §11) — a `schema/<apiId>.ts` declares its content type via
- * {@link defineType} + the {@link c} field builders, with colocated lifecycle hooks. This is the Payload /
- * Drizzle shape: typed field builders, types inferred for free ({@link InferType}), no JSON, no codegen.
+ * {@link defineType} + the {@link c} field builders. Lifecycle hooks live in a SIBLING
+ * `schema/<apiId>.hooks.ts` ({@link defineHooks}) — a clean machine/human split: the visual Builder OWNS +
+ * regenerates `<apiId>.ts` wholesale (no AST surgery), and NEVER touches the dev-owned `.hooks.ts`. This is
+ * the Payload/Drizzle shape: typed field builders, types inferred for free ({@link InferType}), no JSON.
  *
  * The DSL is a thin AUTHORING layer over the kept engine: a builder just records `{ id?, cmsType, options }`
  * (+ a phantom TS type for inference). `defToSchema` introspects a def into the SAME internal
@@ -146,21 +148,29 @@ export interface TypeDef<F extends FieldsRecord = FieldsRecord, O extends TypeOp
   readonly id?: string;
   readonly options?: O;
   readonly fields: F;
-  readonly hooks?: Hooks;
 }
 
 /**
  * Author a content type. Identity helper (like `defineConfig`) — returns the def verbatim but captures the
  * field record + options as generics so {@link InferType} can derive the typed entry. The `apiId` is the
- * FILE NAME (the loader supplies it); `id`/field ids are optional (see the DSL header).
+ * FILE NAME (the loader supplies it); `id`/field ids are optional (see the DSL header). Lifecycle hooks go
+ * in a sibling `schema/<apiId>.hooks.ts` ({@link defineHooks}), NOT here.
  */
 export function defineType<const F extends FieldsRecord, const O extends TypeOptions = {}>(def: {
   id?: string;
   options?: O;
   fields: F;
-  hooks?: Hooks;
 }): TypeDef<F, O> {
   return def;
+}
+
+/**
+ * Author a content type's lifecycle hooks — the default export of `schema/<apiId>.hooks.ts`. Identity
+ * helper for type-checking. `before*` transform/veto inside the write tx; `after*` react post-commit
+ * (see the Hooks types). The loader pairs this file with `<apiId>.ts` by name.
+ */
+export function defineHooks(hooks: Hooks): Hooks {
+  return hooks;
 }
 
 // --- type inference (types for free) -----------------------------------------------------------

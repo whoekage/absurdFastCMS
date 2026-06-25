@@ -10,7 +10,7 @@ export { defineConfig, loadConfigFromEnv } from './compose/config.ts';
 export type { ContiConfig } from './compose/config.ts';
 export type { S3Config } from './config.ts';
 // Code-first schema authoring DSL (the `schema/<apiId>.ts` surface): defineType + the `c.*` builders.
-export { defineType, c } from './db/schema/define.ts';
+export { defineType, defineHooks, c } from './db/schema/define.ts';
 export type { InferType, TypeDef, BeforeHookFn, AfterHookFn, Hooks, HookContext } from './db/schema/define.ts';
 export { HookError } from './db/schema/hooks.ts';
 // Files-first schema migration (the `conti migrate` / `conti migrate lint` commands).
