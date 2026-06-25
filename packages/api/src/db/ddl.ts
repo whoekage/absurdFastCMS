@@ -468,6 +468,25 @@ export function compileDropConstraint(tableName: string, constraint: string): Co
   return stmt.compile(compiler);
 }
 
+/**
+ * COUNT the non-null rows whose char-length exceeds `maxLen` — i.e. the rows a shrink to `varchar(maxLen)`
+ * would SILENTLY TRUNCATE. The pre-flight guard runs this before the lossy `ALTER TYPE` so the migrate can
+ * fail LOUD on real data loss instead of mangling rows (PG's `::varchar(n)` truncates without a 22001).
+ */
+export function compileCountTooLong(tableName: string, name: string, maxLen: number): CompiledQuery {
+  const stmt = sql`select count(*)::int as n from ${sql.raw(quoteIdent(tableName))} where ${sql.ref(name)} is not null and length(${sql.ref(name)}) > ${sql.lit(maxLen)}`;
+  return stmt.compile(compiler);
+}
+
+/**
+ * COUNT the non-null rows whose value would CHANGE when rounded to `scale` fractional digits — i.e. the rows
+ * a numeric scale reduce would SILENTLY ROUND (lose precision). Same pre-flight role as {@link compileCountTooLong}.
+ */
+export function compileCountScaleLoss(tableName: string, name: string, scale: number): CompiledQuery {
+  const stmt = sql`select count(*)::int as n from ${sql.raw(quoteIdent(tableName))} where ${sql.ref(name)} is not null and ${sql.ref(name)} <> round(${sql.ref(name)}, ${sql.lit(scale)})`;
+  return stmt.compile(compiler);
+}
+
 /** DROP TABLE (RESTRICT by default). */
 export function compileDropTable(tableName: string): CompiledQuery {
   return compiler.schema.dropTable(tableName).compile();

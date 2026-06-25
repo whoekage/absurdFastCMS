@@ -347,7 +347,7 @@ ONE migrate (rename+add+retype atomic, data preserved, topological order), trans
 or failing op applies NOTHING — no partial), idempotency + the full lifecycle, relations (link tables +
 edges survive unrelated migrations; drop keeps endpoint rows).
 
-Four engine/harness fixes the sweep forced:
+Five engine/harness fixes the sweep forced:
 - **diff ordering:** `dropField` now precedes field renames/adds within a migrate, so dropping `legacy` +
   renaming `current`→`legacy` (or dropping `headline` + adding a new `headline`) in ONE migrate works
   (previously collided with the not-yet-dropped column). 
@@ -366,11 +366,16 @@ Four engine/harness fixes the sweep forced:
   REMOVE an unused member → enforced; REMOVE an in-use member → the new CHECK is validated against the live row,
   fails, and the whole migrate rolls back (old CHECK restored, data intact). Pinned by 3 tests in
   `migrate-edge-retype.test.ts`.
+- **lossy shrink on ack (FIXED):** `allowDestructive` permits *attempting* a varchar shorten / numeric scale
+  reduce, but the engine no longer SILENTLY truncates/rounds. A pre-flight (`assertNoTruncation` →
+  `compileCountTooLong` / `compileCountScaleLoss`) COUNTs the rows that would lose information *before* the
+  `ALTER TYPE`; if any exist it throws `MigrationDataLossError` and the whole migrate rolls back (widen the
+  target or clean the rows first). A shrink that fits EVERY row applies cleanly — so the op went from
+  blanket-blocked to safe + data-checked. Covers varchar(N)→shorter, text→varchar(N), numeric scale reduce,
+  and the enum↔non-enum category-change varchar shrink. Pinned by 4 tests in `migrate-edge-retype.test.ts`.
 - **test harness:** `cleanCatalog` now sweeps `*_lnk` link tables by name (the files-first migrate writes no
   meta, and `DROP ct_x CASCADE` only drops the FK, not the link table) — they lingered across tests.
 
-KNOWN LIMITATIONS found (data is SAFE in all — they reject/roll back, never corrupt — but the op is
-unsupported; each is pinned by a passing test asserting the current behaviour):
-1. **lossy shrink on ack** (varchar shorten / decimal scale reduce): once `allowDestructive` is given, PG
-   truncates/rounds silently rather than failing loud on rows that would lose information. A data-loss
-   surface distinct from the rollback path — arguably acceptable (it was acked) but worth a pre-flight check.
+KNOWN LIMITATIONS: none outstanding — the three the sweep originally found (rename swap, enum value-set,
+lossy shrink) are all fixed above. Every migrate op now either applies losslessly, rolls back atomically, or
+fails LOUD before touching data; nothing silently corrupts.

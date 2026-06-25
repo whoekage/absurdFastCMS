@@ -1,7 +1,7 @@
 import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { migrate, MigrationBlockedError } from '../src/db/schema/migrate.ts';
+import { migrate, MigrationBlockedError, MigrationDataLossError } from '../src/db/schema/migrate.ts';
 import type { ContentTypeSchema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
 import type { FieldOptions } from '../src/db/type.catalog.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
@@ -73,27 +73,36 @@ test('varchar GROW (512 -> 1024): metadata-only/safe, NO ack needed, data intact
   assert.deepEqual(rows.map((x) => x.title), ['hello', long]); // every char survived
 });
 
-test('varchar SHRINK (1024 -> 256): gated; acked cast TRUNCATES (lossy) but fitting rows survive', async () => {
+test('varchar SHRINK (1024 -> 256) with an OVER-LONG row: even acked, the pre-flight FAILS LOUD + rolls back (FIXED)', async () => {
   await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 1024, nullable: true })])]);
-  await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('short one')`);
+  await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('short one'), ('${'y'.repeat(1024)}')`);
 
   const shrunk = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 256, nullable: true })])];
   // Shrink truncates -> rewrite -> data-dependent -> blocked without ack.
   await assert.rejects(migrate(sql, shrunk), MigrationBlockedError);
-  assert.equal(
-    (await physicalColumns(sql, 'ct_thing')).find((c) => c.name === 'title')?.type,
-    'character varying',
-  );
-  // Still the old size: the blocked migration applied nothing (a 1024-char value still inserts).
-  await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('${'y'.repeat(1024)}')`);
 
-  // Acked: PG's `::varchar(256)` SILENTLY truncates to 256 (no 22001 on cast). The row that already fits
-  // is byte-identical; the over-long row is truncated to exactly 256 chars.
-  const r = await migrate(sql, shrunk, { allowDestructive: true });
-  assert.deepEqual(r.applied.map((c) => c.kind), ['retypeField']);
+  // ACKED no longer truncates silently: the pre-flight COUNT finds 1 over-long row and refuses, naming it.
+  await assert.rejects(
+    () => migrate(sql, shrunk, { allowDestructive: true }),
+    (e: unknown) => e instanceof MigrationDataLossError && e.affected === 1 && e.column === 'title',
+  );
+  // Nothing changed: still varchar(1024) and BOTH values intact at full length (the over-long row not cut).
+  assert.equal((await physicalColumns(sql, 'ct_thing')).find((c) => c.name === 'title')?.type, 'character varying');
   const rows = await sql<{ title: string }[]>`SELECT title FROM ct_thing ORDER BY length(title)`;
-  assert.equal(rows[0]?.title, 'short one'); // fitting row untouched
-  assert.equal(rows[1]?.title.length, 256); // over-long row truncated to the new ceiling
+  assert.deepEqual([rows[0]?.title, rows[1]?.title?.length], ['short one', 1024], 'over-long value survives uncut');
+});
+
+test('varchar SHRINK (1024 -> 256) where ALL rows FIT: acked shrink applies cleanly, data byte-identical', async () => {
+  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 1024, nullable: true })])]);
+  await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('short one'), (NULL), ('${'z'.repeat(200)}')`); // all <= 256
+
+  const shrunk = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 256, nullable: true })])];
+  const r = await migrate(sql, shrunk, { allowDestructive: true }); // pre-flight finds 0 over-long -> proceeds
+  assert.deepEqual(r.applied.map((c) => c.kind), ['retypeField']);
+  const rows = await sql<{ title: string | null }[]>`SELECT title FROM ct_thing ORDER BY length(title) NULLS FIRST`;
+  assert.deepEqual([rows[0]?.title, rows[1]?.title, rows[2]?.title?.length], [null, 'short one', 200], 'every value untouched');
+  // The new ceiling is real: a 257-char insert is now rejected.
+  await assert.rejects(sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('${'q'.repeat(257)}')`));
 });
 
 test('enumeration ADD a member: gated; acked rebuilds the CHECK so the NEW member is insertable (FIXED)', async () => {
@@ -158,18 +167,32 @@ test('decimal precision/scale CHANGE (10,2 -> 12,4): gated; acked cast re-scales
   assert.deepEqual(rows.map((x) => x.price), ['0.1000', '123.4500']);
 });
 
-test('decimal SCALE SHRINK (10,4 -> 10,2): gated; acked cast ROUNDS the fractional digits (lossy)', async () => {
+test('decimal SCALE SHRINK (10,4 -> 10,2) with a ROUNDING row: even acked, the pre-flight FAILS LOUD + rolls back (FIXED)', async () => {
   await migrate(sql, [ct('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 4, nullable: true })])]);
-  await sql.unsafe(`INSERT INTO ct_thing (price) VALUES (1.2345)`);
+  await sql.unsafe(`INSERT INTO ct_thing (price) VALUES (1.2345), (9.9900)`); // 1.2345 would round, 9.9900 fits
 
   const narrowed = [ct('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 2, nullable: true })])];
   await assert.rejects(migrate(sql, narrowed), MigrationBlockedError);
 
-  const r = await migrate(sql, narrowed, { allowDestructive: true });
+  // ACKED no longer rounds silently: the pre-flight finds the 1 row that would lose fractional digits.
+  await assert.rejects(
+    () => migrate(sql, narrowed, { allowDestructive: true }),
+    (e: unknown) => e instanceof MigrationDataLossError && e.affected === 1 && e.column === 'price',
+  );
+  // Untouched: still numeric(10,4), 1.2345 NOT rounded.
+  const rows = await sql<{ price: string }[]>`SELECT price FROM ct_thing ORDER BY price`;
+  assert.deepEqual(rows.map((x) => x.price), ['1.2345', '9.9900']);
+});
+
+test('decimal SCALE SHRINK (10,4 -> 10,2) where NO value rounds: acked shrink applies cleanly', async () => {
+  await migrate(sql, [ct('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 4, nullable: true })])]);
+  await sql.unsafe(`INSERT INTO ct_thing (price) VALUES (1.2300), (0.5000), (NULL)`); // all exact at scale 2
+
+  const narrowed = [ct('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 2, nullable: true })])];
+  const r = await migrate(sql, narrowed, { allowDestructive: true }); // 0 rounding rows -> proceeds
   assert.deepEqual(r.applied.map((c) => c.kind), ['retypeField']);
-  // PG rounds 1.2345 -> 1.23 on the ::numeric(10,2) cast (half-up): proves the cast is genuinely lossy.
-  const [row] = await sql<{ price: string }[]>`SELECT price FROM ct_thing`;
-  assert.equal(row?.price, '1.23');
+  const rows = await sql<{ price: string | null }[]>`SELECT price FROM ct_thing ORDER BY price NULLS FIRST`;
+  assert.deepEqual(rows.map((x) => x.price), [null, '0.50', '1.23'], 're-scaled to scale 2, no value changed');
 });
 
 test('UNCASTABLE string -> integer on NON-NUMERIC rows: gated, and on apply the WHOLE tx ROLLS BACK', async () => {

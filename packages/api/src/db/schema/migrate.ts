@@ -11,11 +11,14 @@ import {
   compileAlterColumnType,
   compileAddCheck,
   compileDropConstraint,
+  compileCountTooLong,
+  compileCountScaleLoss,
   compileDropColumn,
   compileDropTable,
   compileCreateLinkTable,
 } from '../ddl.ts';
 import { resolveFields } from '../content-type.repository.ts';
+import type { ResolvedType } from '../type.catalog.ts';
 import { contentTypeSchemaZ, type ContentTypeSchema } from './model.ts';
 import { fieldSchemaToSpec } from './adapt.ts';
 import { diff, type Change, type ChangeSet } from './diff.ts';
@@ -66,6 +69,26 @@ export class MigrationUnsupportedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'MigrationUnsupportedError';
+  }
+}
+
+/**
+ * Raised when a lossy SHRINK (varchar shorten / numeric scale reduce) WOULD truncate/round real rows. The
+ * `allowDestructive` ack permits *attempting* such a cast, but the engine still refuses to SILENTLY destroy
+ * data: a pre-flight COUNT runs before the `ALTER TYPE`, and if any row would lose information the whole
+ * migrate rolls back with this loud error (vs PG's silent `::varchar(n)` truncation / scale rounding). To
+ * proceed, widen the target or clean the offending rows first. A shrink that fits ALL rows applies cleanly.
+ */
+export class MigrationDataLossError extends Error {
+  readonly table: string;
+  readonly column: string;
+  readonly affected: number;
+  constructor(table: string, column: string, affected: number, detail: string) {
+    super(`migration would lose data: ${affected} row(s) in ${table}.${column} ${detail} — refusing to silently truncate/round (widen the target or clean the rows first)`);
+    this.name = 'MigrationDataLossError';
+    this.table = table;
+    this.column = column;
+    this.affected = affected;
   }
 }
 
@@ -123,6 +146,49 @@ async function dropColumnChecks(tx: Sql, tableName: string, col: string): Promis
   for (const { conname } of rows) await run(tx, compileDropConstraint(tableName, conname));
 }
 
+/**
+ * Classify a retype's data-loss risk PURELY from the resolved types: a SHRINK that PG would apply silently.
+ *   - `length` — varchar/text -> a SHORTER varchar(N): rows with `length(value) > N` truncate.
+ *   - `scale`  — numeric(p,s) -> a SMALLER scale s': rows with more fractional digits ROUND.
+ * Returns null for any non-shrink (grow / widen / int overflow / impossible cast) — PG either coerces it
+ * losslessly or raises its OWN loud error (int out-of-range, numeric overflow), so no pre-flight is needed.
+ */
+function truncationGuard(from: ResolvedType, to: ResolvedType): { kind: 'length' | 'scale'; value: number } | null {
+  if (to.pgType.startsWith('varchar')) {
+    const toLen = Number(to.params['length']);
+    if (!Number.isFinite(toLen)) return null;
+    if (from.pgType === 'text') return { kind: 'length', value: toLen }; // unbounded -> bounded
+    if (from.pgType.startsWith('varchar')) {
+      const fromLen = Number(from.params['length']);
+      if (Number.isFinite(fromLen) && toLen < fromLen) return { kind: 'length', value: toLen };
+    }
+    return null;
+  }
+  if (from.pgType.startsWith('numeric') && to.pgType.startsWith('numeric')) {
+    const fromScale = Number(from.params['scale']);
+    const toScale = Number(to.params['scale']);
+    if (Number.isFinite(fromScale) && Number.isFinite(toScale) && toScale < fromScale) return { kind: 'scale', value: toScale };
+  }
+  return null;
+}
+
+/**
+ * PRE-FLIGHT against silent data loss: before a (potentially) lossy `ALTER TYPE`, COUNT the rows the shrink
+ * would truncate/round. If any exist, throw {@link MigrationDataLossError} (rolls the whole tx back). A shrink
+ * that fits every row passes through — turning a blanket-blocked op into a safe, data-checked one.
+ */
+async function assertNoTruncation(tx: Sql, tbl: string, col: string, from: ResolvedType, to: ResolvedType): Promise<void> {
+  const guard = truncationGuard(from, to);
+  if (!guard) return;
+  const q = guard.kind === 'length' ? compileCountTooLong(tbl, col, guard.value) : compileCountScaleLoss(tbl, col, guard.value);
+  const rows = (await tx.unsafe(q.sql, q.parameters as ParameterOrJSON<never>[])) as unknown as { n: number }[];
+  const affected = Number(rows[0]?.n ?? 0);
+  if (affected > 0) {
+    const detail = guard.kind === 'length' ? `exceed varchar(${guard.value})` : `round at scale ${guard.value}`;
+    throw new MigrationDataLossError(tbl, col, affected, detail);
+  }
+}
+
 /** Apply ONE change via the compile-only ddl builders. Throws for a deferred op (rolls back the whole tx). */
 async function applyOne(tx: Sql, c: Change): Promise<void> {
   switch (c.kind) {
@@ -150,7 +216,9 @@ async function applyOne(tx: Sql, c: Change): Promise<void> {
       const fromEnum = Array.isArray(c.from.params['values']);
       const toEnum = Array.isArray(c.to.params['values']);
       if (!fromEnum && !toEnum) {
-        // Plain non-enum retype (int->bigint, varchar resize, decimal): the column-type cast.
+        // Plain non-enum retype (int->bigint, varchar resize, decimal): the column-type cast. Pre-flight a
+        // lossy SHRINK (varchar shorten / scale reduce) so real truncation/rounding fails LOUD, not silently.
+        await assertNoTruncation(tx, tbl, c.name, c.from, c.to);
         await run(tx, compileAlterColumnType(tbl, c.name, c.to));
         return;
       }
@@ -164,7 +232,11 @@ async function applyOne(tx: Sql, c: Change): Promise<void> {
       // varchar (a new longer member needs room). NEVER shrink an enum's varchar — the CHECK is the real
       // constraint, and a shrink would truncate an in-use value.
       const grows = fromEnum && toEnum && Number(c.to.params['length'] ?? 0) > Number(c.from.params['length'] ?? 0);
-      if ((fromEnum !== toEnum && c.from.pgType !== c.to.pgType) || grows) await run(tx, compileAlterColumnType(tbl, c.name, c.to));
+      if ((fromEnum !== toEnum && c.from.pgType !== c.to.pgType) || grows) {
+        // A category change (enum<->non-enum) can shrink the varchar — pre-flight it like the plain path.
+        await assertNoTruncation(tx, tbl, c.name, c.from, c.to);
+        await run(tx, compileAlterColumnType(tbl, c.name, c.to));
+      }
       if (toEnum) await run(tx, compileAddCheck(tbl, c.name, c.to.params['values'] as string[]));
       return;
     }
