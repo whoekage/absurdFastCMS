@@ -6,6 +6,7 @@ import type { PostgresStore } from '../db/postgres.store.ts';
 import { rebuildType } from '../db/engine.loader.ts';
 import { handleRequest, errorResponse, JSON_CT, type CoreResponse } from './read.router.ts';
 import { handleWrite, type WriteContext } from './write.handler.ts';
+import type { HookRegistry } from '../db/schema/hooks.ts';
 import { handleContentTypeRequest, type ContentTypeContext } from './content-type.controller.ts';
 import { handleComponentTypeRequest, type ComponentTypeContext } from './component-type.controller.ts';
 import { handleUpload, handleListFiles, handleGetFile, handleDeleteFile, type FileContext, type ParsedUpload } from './upload.handler.ts';
@@ -370,6 +371,7 @@ export function createServer(
   sessionCache?: SessionCache,
   rbac?: RbacRegistry,
   teamView?: TeamView,
+  hooks?: HookRegistry,
 ): UwsServer {
   const app = uWS.App();
   const current = engine;
@@ -801,6 +803,8 @@ export function createServer(
       },
       // Publish clock: real wall-clock by default; tests inject a fixed Date for deterministic fixtures.
       publishClock,
+      // Only set when present (exactOptionalPropertyTypes forbids an explicit `undefined` on an optional key).
+      ...(hooks !== undefined ? { hooks } : {}),
     };
     // CONTENT-TYPE BUILDER (runtime DDL over HTTP) — registered BEFORE the data `/:type` routes. The
     // `/content-types` prefix can never shadow a real type: '-' is not a legal api_id char, so no

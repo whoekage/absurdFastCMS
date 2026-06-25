@@ -3,6 +3,7 @@ import { runMigrations } from '../db/migration.runner.ts';
 import { PostgresStore } from '../db/postgres.store.ts';
 import { seedFromSchemas } from '../db/seed.ts';
 import { loadTypes } from '../db/schema/load.ts';
+import { HookRegistry } from '../db/schema/hooks.ts';
 import { createServer, type ListenToken } from '../http/uws.adapter.ts';
 import { CursorCodec } from '../store/cursor.codec.ts';
 import { buildAuth } from '../auth/auth.ts';
@@ -85,7 +86,8 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     // (loadTypes → the IR), materialize any missing ct_ table from them (the bridge until `conti migrate`
     // owns this), then build the registry FROM them (not the meta tables). Default the dir to <cwd>/schema.
     const schemaDir = config.schema?.dir ?? path.join(process.cwd(), 'schema');
-    const schemas = await loadTypes(schemaDir);
+    const { schemas, hooks } = await loadTypes(schemaDir);
+    const hookRegistry = new HookRegistry(hooks);
     await seedFromSchemas(store.sql, schemas);
     // Keyset cursor codec (HMAC over the configured secret) wired once at the composition root.
     const { engine, registry } = await store.loadFromSchemas(schemas, { cursorCodec: new CursorCodec(config.cursor.secret) });
@@ -107,7 +109,7 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     await rbac.rebuild();
     await teamView.rebuild();
 
-    const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, teamView);
+    const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, teamView, hookRegistry);
     close = server.close;
     listenToken = await server.listen(config.server.port);
     const rows = engine.has('article') ? engine.rowCount('article') : 0;

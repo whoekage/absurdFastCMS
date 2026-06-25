@@ -1,7 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { defToSchema, type TypeDef } from './define.ts';
+import { defToSchema, type TypeDef, type Hooks } from './define.ts';
 import type { ContentTypeSchema } from './model.ts';
 
 /**
@@ -24,23 +24,31 @@ export class SchemaLoadError extends Error {
   }
 }
 
-export async function loadTypes(dir: string): Promise<ContentTypeSchema[]> {
+/** The loaded catalog: the IR (for migrate/registry) + the lifecycle hooks keyed by apiId (for the write path). */
+export interface LoadedTypes {
+  schemas: ContentTypeSchema[];
+  hooks: Map<string, Hooks>;
+}
+
+export async function loadTypes(dir: string): Promise<LoadedTypes> {
   let entries: string[];
   try {
     entries = await readdir(dir);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { schemas: [], hooks: new Map() };
     throw e;
   }
   const files = entries.filter((f) => f.endsWith('.ts') && !f.endsWith('.d.ts') && !f.endsWith('.test.ts')).sort();
-  const out: ContentTypeSchema[] = [];
+  const schemas: ContentTypeSchema[] = [];
+  const hooks = new Map<string, Hooks>();
   for (const f of files) {
     const apiId = f.slice(0, -'.ts'.length);
     const mod = (await import(pathToFileURL(path.join(dir, f)).href)) as { default?: TypeDef };
     if (!mod.default || typeof mod.default !== 'object' || !('fields' in mod.default)) {
       throw new SchemaLoadError(f, 'must `export default defineType({ ... })`');
     }
-    out.push(defToSchema(mod.default, apiId));
+    schemas.push(defToSchema(mod.default, apiId));
+    if (mod.default.hooks !== undefined) hooks.set(apiId, mod.default.hooks);
   }
-  return out;
+  return { schemas, hooks };
 }

@@ -8,6 +8,7 @@ import { missingFileIds } from '../db/file.repository.ts';
 import { RawJson } from '../store/column.ts';
 import { validateLocale, QueryParseError } from '../store/query.parser.ts';
 import { config } from '../config.ts';
+import { HookError, type HookRegistry } from '../db/schema/hooks.ts';
 import { CANONICAL_INT, JSON_CT, errorResponse, type CoreResponse } from './read.router.ts';
 
 /**
@@ -55,6 +56,11 @@ export interface WriteContext {
    * fixture is byte-deterministic (the publish timestamp is caller-supplied, NOT a SQL `now()`).
    */
   publishClock(): Date;
+  /**
+   * Content lifecycle hooks. `before*` run INSIDE the write tx (transform/veto → rollback); `after*` run
+   * AFTER {@link rebuild} (post-commit side-effects). Absent on a read-only / hookless server.
+   */
+  hooks?: HookRegistry;
 }
 
 export interface WriteRequest {
@@ -352,13 +358,16 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
       // ONE tx: INSERT scalars RETURNING id, then apply the relation ops with that id. A FK 23503 on a
       // non-existent related id rolls the WHOLE tx back -> no orphan ct_ row, no partial link write.
       const row = await ctx.sql.begin(async (tx) => {
-        await assertMediaRefsExist(tx, def, data, ctx.registry()); // be-04/05: media id(s) must reference real assets (400 else).
-        await assertRelationRefsExist(tx, def, data, ctx.registry()); // be-05b: any inline relation-ref id must exist in its target.
-        const r = await insertEntry(tx, def, data, opts);
+        // before-hook (transform/veto) INSIDE the tx: a throw rolls the create back. It returns the data to persist.
+        const hooked = ctx.hooks ? await ctx.hooks.runBefore(type, 'create', data) : data;
+        await assertMediaRefsExist(tx, def, hooked, ctx.registry()); // be-04/05: media id(s) must reference real assets (400 else).
+        await assertRelationRefsExist(tx, def, hooked, ctx.registry()); // be-05b: any inline relation-ref id must exist in its target.
+        const r = await insertEntry(tx, def, hooked, opts);
         await applyRelationOps(tx, def, Number(r['id']), relationOps);
         return r;
       });
       await ctx.rebuild(type); // AFTER commit: re-derive the CSR so reads (both directions) reflect the edges.
+      if (ctx.hooks) await ctx.hooks.runAfter(type, 'create', row); // post-commit side-effects (isolated)
       return writeOk(201, def, row);
     }
 
@@ -368,15 +377,17 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
       const { data, relationOps } = validateBody(def, body, 'update', ctx.registry());
       // ONE tx: update scalars (also confirms the row exists), then apply relation ops on the URL id.
       const row = await ctx.sql.begin(async (tx) => {
-        const r = await updateEntry(tx, def, id, data);
+        const hooked = ctx.hooks ? await ctx.hooks.runBefore(type, 'update', data) : data;
+        const r = await updateEntry(tx, def, id, hooked);
         if (r === null) return null; // missing owner -> abort the tx, do NO link work.
-        await assertMediaRefsExist(tx, def, data, ctx.registry()); // be-04/05: any media id(s) in this update must exist (400 else).
-        await assertRelationRefsExist(tx, def, data, ctx.registry()); // be-05b: any inline relation-ref id must exist in its target.
+        await assertMediaRefsExist(tx, def, hooked, ctx.registry()); // be-04/05: any media id(s) in this update must exist (400 else).
+        await assertRelationRefsExist(tx, def, hooked, ctx.registry()); // be-05b: any inline relation-ref id must exist in its target.
         await applyRelationOps(tx, def, id, relationOps);
         return r;
       });
       if (row === null) return errorResponse(404, 'not found');
       await ctx.rebuild(type);
+      if (ctx.hooks) await ctx.hooks.runAfter(type, 'update', row);
       return writeOk(200, def, row);
     }
 
@@ -384,14 +395,20 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
       const id = parseId(idRaw);
       if (id === null) return errorResponse(404, 'not found');
       // Single statement; ON DELETE CASCADE prunes this owner's link rows. Wrap for symmetry.
-      const row = await ctx.sql.begin((tx) => deleteEntry(tx, def, id));
+      const row = await ctx.sql.begin(async (tx) => {
+        // before-delete is veto-only (no data to transform) — a throw rolls the delete back.
+        if (ctx.hooks) await ctx.hooks.runBefore(type, 'delete', { id });
+        return deleteEntry(tx, def, id);
+      });
       if (row === null) return errorResponse(404, 'not found');
       await ctx.rebuild(type);
+      if (ctx.hooks) await ctx.hooks.runAfter(type, 'delete', row);
       return writeOk(200, def, row);
     }
 
     return errorResponse(405, `method ${method} not allowed`);
   } catch (e) {
+    if (e instanceof HookError) return errorResponse(400, e.message); // a before-hook vetoed the write
     if (e instanceof BodyParseError) return errorResponse(400, e.message);
     if (e instanceof EntryWriteError) return errorResponse(400, e.message);
     if (e instanceof QueryParseError) return errorResponse(400, e.message); // malformed variant locale slug.

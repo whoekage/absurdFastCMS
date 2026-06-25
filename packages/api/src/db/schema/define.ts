@@ -114,19 +114,31 @@ export interface TypeOptions {
   draftAndPublish?: boolean;
   i18n?: boolean;
 }
-/** A content lifecycle hook — fires around a write (the registry/write-path invokes them; wired in a later phase). */
-export type HookFn = (entry: Record<string, unknown>, ctx: HookContext) => void | Promise<void>;
 export interface HookContext {
   readonly apiId: string;
   readonly op: 'create' | 'update' | 'delete';
 }
+/**
+ * A `before*` hook — TRANSFORM + VETO. Runs INSIDE the write transaction, pre-persist. Receives the
+ * validated write data and RETURNS the (possibly transformed) data to persist (return-value contract, like
+ * Payload/Directus — explicit + typed, not mutate-in-place). Returning nothing passes the input through.
+ * THROW to veto: it aborts the transaction (rollback) → 400 (throw a {@link HookError} for a clean message).
+ * Never do side-effects here (uncommitted/rollback would make them phantom).
+ */
+export type BeforeHookFn = (data: Record<string, unknown>, ctx: HookContext) => Record<string, unknown> | void | Promise<Record<string, unknown> | void>;
+/**
+ * An `after*` hook — REACT to a committed change. Runs AFTER commit + the read-engine rebuild, with the
+ * committed row. Side-effects only: it cannot mutate or veto, and a throw is LOGGED, never fatal (the write
+ * is already durable). For durable post-commit work (email/webhooks) prefer a transactional outbox.
+ */
+export type AfterHookFn = (entry: Record<string, unknown>, ctx: HookContext) => void | Promise<void>;
 export interface Hooks {
-  beforeCreate?: HookFn;
-  afterCreate?: HookFn;
-  beforeUpdate?: HookFn;
-  afterUpdate?: HookFn;
-  beforeDelete?: HookFn;
-  afterDelete?: HookFn;
+  beforeCreate?: BeforeHookFn;
+  afterCreate?: AfterHookFn;
+  beforeUpdate?: BeforeHookFn;
+  afterUpdate?: AfterHookFn;
+  beforeDelete?: BeforeHookFn;
+  afterDelete?: AfterHookFn;
 }
 
 /** The captured content-type definition (carries the field record + options as type params for inference). */
