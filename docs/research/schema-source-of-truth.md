@@ -227,3 +227,58 @@ packages/api/src` returns nothing but comments, and the suite is green serving F
 `_migrations` tracking), the columnar engine + zero-PG read path + byte-identical serialization (untouched —
 only the schema source moves), the Builder UI + HTTP (write target re-pointed), the CLI (`conti migrate`/
 `gen:types` as new commands).
+
+## 10. Build-vs-buy: the migrator stays ours (decided)
+
+Considered replacing our diff+migrate with Drizzle Kit / TypeORM / Atlas / Prisma / Stripe pg-schema-diff.
+Verdict after a 3-angle source-level review: **keep our engine.** Adopting any of them is a DOWNGRADE.
+
+- **Drizzle Kit** — `drizzle-kit/api` (`generateMigration`) is undocumented + version-unstable + **ESM-broken**
+  (#2853 "Dynamic require of 'fs' is not supported") → collides with our no-build type-stripping; rename
+  detection lives in **interactive TTY prompts** (hanji) that can't run headless; can't do rename+retype
+  together (#3826); models DB columns only.
+- **TypeORM** — migration generation is **CLI-only** (#4494 closed not-planned), needs decorators/build step,
+  **no rename detection** (always drop+add). Worst fit.
+- **Atlas / Prisma / Stripe pg-schema-diff** — Go/Rust binaries (shell-out, breaks `npm i`); and **none do
+  id-based rename** — even Stripe's pg-schema-diff is name-based (rename = drop+add), i.e. worse than ours.
+- **No rich-field-model CMS hands a static schema to an ORM.** The two that reuse an ORM migrator
+  (Payload→drizzle-kit, Keystone→Prisma) **generate the ORM schema from their own field config at runtime** —
+  they still own the bridge (the larger half). Strapi + Directus wrote their OWN diff on a query builder —
+  exactly our ~300 lines on Kysely. All of them lose data on rename; our stable-id rename-safety is unique.
+
+We already buy the dangerous parts (Kysely compile-only DDL + postgres.js apply); the only custom part is the
+stable-id diff — which no commodity tool offers. **Steal ideas, not tools:** (1) Atlas's analyzer taxonomy
+(DS101/MF103/BC101…) → named lint codes; (2) Stripe's temp-DB plan validation → dry-run DDL on an ephemeral
+schema before the live apply. Expand-contract (pgroll/reshape) is YAGNI for single-instance — documented
+escape hatch only.
+
+## 11. Authoring PIVOT: TS DSL (code-first) feeding the kept migrator
+
+Schema source moves from `schema/*.json` to `schema/<apiId>.ts` — a conti DSL (Payload/Drizzle-style),
+typed, with colocated lifecycle hooks. The migrator/IR/engine are UNCHANGED; only the authoring→IR layer
+swaps (parse JSON → import module + introspect the DSL → the same `ContentTypeSchema` IR).
+
+```ts
+import { defineType, c, type InferType } from '@conti/core';
+const Article = defineType({
+  id: 'ct_article',
+  options: { draftAndPublish: false, i18n: false },
+  fields: {                                   // Builder rewrites ONLY this literal (AST), hooks preserved
+    title:  c.string(['', { id: 'f_title', max: 512 }][1]),
+    status: c.enum(['draft','published','archived'], { id: 'f_status', nullable: false }),
+    author: c.relation('writer', { id: 'f_author', kind: 'manyToOne', inverse: 'posts' }),
+  },
+  hooks: { beforeCreate: (entry, ctx) => {/* ... */} },
+});
+export default Article;
+export type Article = InferType<typeof Article>;   // types for free, no codegen
+```
+
+- Field/type **`id` is optional**; absent ⇒ id = the key/apiId (name-based); pin an explicit id to make a
+  rename lossless (id-match → RENAME). Keeps our rename-safety as an opt-in.
+- Types come from the builder generics (phantom `T`), not a separate codegen; runtime validation stays
+  registry-driven (no redundant zod object). `c.*` can later also expose a zod validator for the SDK.
+- Visual Builder REMAINS: it AST-rewrites only the `fields` literal (dev-only, off the hot path), leaving
+  `hooks` untouched. Introspection (engine/migrate/types) just executes the module — no AST.
+- Phases: (1) DSL `defineType`+`c.*`; (2) `defToSchema` (DSL→IR) + equivalence vs the JSON-IR; (3) TS loader
+  + `article.ts` + createConti/migrate switch; (4) hooks registry + write-path; (5 later) Builder AST-write.
