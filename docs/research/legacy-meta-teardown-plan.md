@@ -4,6 +4,7 @@
 
 > ## ▶ RESUME HERE (progress as of 2026-06-26)
 > **Stage 0 DONE** (commit `97eb60e`): `components` threaded through `loadFromSchemas`/`swapFromIR` (default `[]`).
+> **Stage 2 DONE** (commit `ef99955`) — full suite green 1043 pass / 0 fail. boot baseline re-rooted off `seedFromSchemas`→`migrate()`; `seed.ts` slimmed to `STATUSES`-only; 5 legacy meta-route test files deleted; `registry.test` ported to `Registry.fromSchemas`; `relation-declare` guards ported to the files-first `migrate()`/`Registry.fromSchemas` path (relation-vs-scalar `FieldExistsError` + `ct_`-target `ReservedTableNameError` retired as documented; `migrate()` lets a dangling target fail at FK time as a raw `PostgresError` while `Registry.fromSchemas` throws the typed `SchemaAdaptError`). `writeAppliedSnapshot` KEPT (still used by `boot-reconcile.test.ts` test H — plan step 2.3 was wrong).
 > **Stage 1 DONE (migratable set) — full suite green at 1105 pass / 0 fail.**
 > - Test helpers in `test/helpers.ts`: `ct(spec)`, `startTestServerFromSchemas(sql, schemas, { components?, seed? })`, `ARTICLE_SCHEMA`, `startTestServerFromFilesWithAuth`. `cleanCatalog` now ALSO `DROP TABLE IF EXISTS _schema_applied` + `ALTER SEQUENCE IF EXISTS document_id_seq RESTART` (plan step 1.2) so per-test re-`migrate()` diffs from an empty snapshot.
 > - Migrated (earlier commits `3a0f244`/`9127359`/`43ecdb1`): `write`, `load`, `entry-repo-backstop`, `postgres-store`, `entry-types`, `hooks.e2e`, `draft-publish`, `i18n`, `write-security`.
