@@ -4,7 +4,7 @@ import type { Sql } from 'postgres';
 import { Registry } from '../src/db/registry.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
 import { deriveLinkTableName } from '../src/db/ddl.ts';
-import type { ContentTypeSchema } from '../src/db/schema/model.ts';
+import type { Schema } from '../src/db/schema/model.ts';
 import { buildEngine } from '../src/db/engine.loader.ts';
 import { Engine } from '../src/store/engine.ts';
 import { CursorCodec } from '../src/store/cursor.codec.ts';
@@ -51,11 +51,11 @@ async function insertEdge(link: string, ownerPk: number, relatedPk: number): Pro
 }
 
 /** Materialize the ct_ + link tables from in-code IR (files-first, zero meta). */
-async function applySchemas(schemas: ContentTypeSchema[]): Promise<void> {
+async function applySchemas(schemas: Schema[]): Promise<void> {
   await migrate(sql, schemas, { allowDestructive: true });
 }
 
-async function boot(schemas: ContentTypeSchema[]): Promise<Engine> {
+async function boot(schemas: Schema[]): Promise<Engine> {
   return buildEngine(sql, Registry.fromSchemas(schemas), { cursorCodec: new CursorCodec('relpop-secret') });
 }
 

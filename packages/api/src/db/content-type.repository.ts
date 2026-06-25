@@ -21,7 +21,7 @@ export interface FieldSpec {
 }
 
 /** A `content_types` row shape (snake_case as stored) — the unit `schema/adapt.ts` builds for the registry. */
-export interface ContentTypeRow {
+export interface ModuleRow {
   id: number;
   api_id: string;
   table_name: string;

@@ -1,17 +1,17 @@
 import type { CmsType, ComponentFieldKind, FieldOptions } from '../type.catalog.ts';
 import type { RelationKind } from '../ddl.ts';
-import type { ContentTypeSchema, FieldSchema, RelationSchema } from './model.ts';
+import type { Schema, FieldSchema, RelationSchema } from './model.ts';
 
 /**
  * THE CODE-FIRST AUTHORING DSL (pivot §11) — a `schema/<apiId>.ts` declares its content type via
- * {@link defineType} + the {@link c} field builders. Lifecycle hooks live in a SIBLING
+ * {@link defineSchema} + the {@link c} field builders. Lifecycle hooks live in a SIBLING
  * `schema/<apiId>.hooks.ts` ({@link defineHooks}) — a clean machine/human split: the visual Builder OWNS +
  * regenerates `<apiId>.ts` wholesale (no AST surgery), and NEVER touches the dev-owned `.hooks.ts`. This is
  * the Payload/Drizzle shape: typed field builders, types inferred for free ({@link InferType}), no JSON.
  *
  * The DSL is a thin AUTHORING layer over the kept engine: a builder just records `{ id?, cmsType, options }`
  * (+ a phantom TS type for inference). `defToSchema` introspects a def into the SAME internal
- * `ContentTypeSchema` IR the diff/migrate/registry already consume — so the whole engine is UNCHANGED; only
+ * `Schema` IR the diff/migrate/registry already consume — so the whole engine is UNCHANGED; only
  * the source format moved. Runtime validation stays registry-driven (no redundant zod object is built here).
  *
  * IDs are OPTIONAL: absent ⇒ the field's id is its key / the type's id is its apiId (name-based). Pin an
@@ -109,7 +109,7 @@ export const c = {
   },
 };
 
-// --- defineType + the lifecycle hook surface ---------------------------------------------------
+// --- defineSchema + the lifecycle hook surface ---------------------------------------------------
 
 type FieldsRecord = Record<string, AnyBuilder>;
 export interface TypeOptions {
@@ -156,7 +156,7 @@ export interface TypeDef<F extends FieldsRecord = FieldsRecord, O extends TypeOp
  * FILE NAME (the loader supplies it); `id`/field ids are optional (see the DSL header). Lifecycle hooks go
  * in a sibling `schema/<apiId>.hooks.ts` ({@link defineHooks}), NOT here.
  */
-export function defineType<const F extends FieldsRecord, const O extends TypeOptions = {}>(def: {
+export function defineSchema<const F extends FieldsRecord, const O extends TypeOptions = {}>(def: {
   id?: string;
   options?: O;
   fields: F;
@@ -186,15 +186,15 @@ export type InferType<D> = D extends TypeDef<infer F, infer O>
   ? SystemFields<O> & { -readonly [K in keyof F]: InferBuilder<F[K]> }
   : never;
 
-// --- introspection: DSL def → the internal ContentTypeSchema IR --------------------------------
+// --- introspection: DSL def → the internal Schema IR --------------------------------
 
 /**
- * Introspect a {@link TypeDef} into the engine's internal {@link ContentTypeSchema} IR (the SAME shape the
+ * Introspect a {@link TypeDef} into the engine's internal {@link Schema} IR (the SAME shape the
  * JSON path produced) — so diff/migrate/registry are unchanged. The field KEY is the name; a relation
  * builder becomes a {@link RelationSchema} (split out of `fields`), everything else a {@link FieldSchema}.
  * `apiId` comes from the file name; ids fall back to the key/apiId when not pinned.
  */
-export function defToSchema(def: TypeDef, apiId: string): ContentTypeSchema {
+export function defToSchema(def: TypeDef, apiId: string): Schema {
   const fields: FieldSchema[] = [];
   const relations: RelationSchema[] = [];
   for (const [name, b] of Object.entries(def.fields)) {
@@ -208,7 +208,7 @@ export function defToSchema(def: TypeDef, apiId: string): ContentTypeSchema {
       fields.push({ id: b.id ?? name, name, type: b.cmsType, options: b.options });
     }
   }
-  const schema: ContentTypeSchema = { id: def.id ?? apiId, apiId, fields };
+  const schema: Schema = { id: def.id ?? apiId, apiId, fields };
   if (def.options !== undefined) schema.options = def.options;
   if (relations.length > 0) schema.relations = relations;
   return schema;

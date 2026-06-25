@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { Sql } from 'postgres';
-import type { ComponentSchema, ContentTypeSchema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
+import type { ComponentSchema, Schema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
 import type { FieldOptions } from '../src/db/type.catalog.ts';
 
 // Point local storage at a fresh temp dir BEFORE any config access (config caches on first read).
@@ -43,8 +43,8 @@ let base: string;
 let close: (token: unknown) => void;
 let token: unknown;
 
-/** Per-test files-first server: each test owns its host content-types + in-memory components. */
-async function boot(schemas: ContentTypeSchema[], components: ComponentSchema[] = []): Promise<void> {
+/** Per-test files-first server: each test owns its host modules + in-memory components. */
+async function boot(schemas: Schema[], components: ComponentSchema[] = []): Promise<void> {
   const srv = await startTestServerFromSchemas(sql, schemas, { components });
   base = srv.base;
   close = srv.close;

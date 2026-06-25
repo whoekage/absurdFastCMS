@@ -1,7 +1,7 @@
 import { writeFile, mkdir, rename, unlink, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { Sql } from 'postgres';
-import { mintId, type ContentTypeSchema, type FieldSchema, type RelationSchema } from '../db/schema/model.ts';
+import { mintId, type Schema, type FieldSchema, type RelationSchema } from '../db/schema/model.ts';
 import { generateSchemaSource } from '../db/schema/codegen.ts';
 import { validateFieldName, validateRelationKind, deriveTableName, SchemaChangeConflictError } from '../db/ddl.ts';
 import { migrate, migrateLint, readAppliedSchemas, ensureAppliedTable } from '../db/schema/migrate.ts';
@@ -25,10 +25,10 @@ import type { Change } from '../db/schema/diff.ts';
 type Draft<T> = Omit<T, 'id'> & { id?: string };
 
 /** A content-type edit from the SPA: ids are OPTIONAL (present = existing, kept; absent = new, minted). */
-export interface ContentTypeDraft {
+export interface ModuleDraft {
   id?: string;
   apiId: string;
-  options?: ContentTypeSchema['options'];
+  options?: Schema['options'];
   fields: Draft<FieldSchema>[];
   relations?: Draft<RelationSchema>[];
 }
@@ -40,9 +40,9 @@ export interface SchemaEditResult {
   /** ok=true: the changes applied to the DB. */
   applied?: readonly Change[];
   /** ok=true: the resolved schema (with minted ids) that was written. Absent for a DELETE. */
-  schema?: ContentTypeSchema;
+  schema?: Schema;
   /** ok=true: the FULL desired catalog (applied with this type upserted/removed) the S4 swap rebuilds from. */
-  next?: ContentTypeSchema[];
+  next?: Schema[];
 }
 
 /** A pre-flight validation failure (bad identifier, reserved name, dangling relation target, id-ownership). → 422. */
@@ -79,7 +79,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  *      a new field carrying a foreign id), (b) a duplicate id within the draft, (c) `draft.id` addressing a
  *      type id that is not the resolved entry. An absent id is minted (collision-checked).
  */
-function resolveSchema(draft: ContentTypeDraft, appliedEntry: ContentTypeSchema | undefined): ContentTypeSchema {
+function resolveSchema(draft: ModuleDraft, appliedEntry: Schema | undefined): Schema {
   if (draft.id !== undefined && (appliedEntry === undefined || appliedEntry.id !== draft.id)) {
     throw new BuilderValidationError(`unknown content-type id "${draft.id}"`);
   }
@@ -103,7 +103,7 @@ function resolveSchema(draft: ContentTypeDraft, appliedEntry: ContentTypeSchema 
   };
 
   const typeId = appliedEntry?.id ?? draft.id ?? mintId('ct');
-  const schema: ContentTypeSchema = {
+  const schema: Schema = {
     id: typeId,
     apiId: draft.apiId,
     fields: draft.fields.map((f) => ({ ...f, id: claimId(f.id, existingFieldIds, 'f', `field "${f.name}"`) })),
@@ -121,7 +121,7 @@ function resolveSchema(draft: ContentTypeDraft, appliedEntry: ContentTypeSchema 
  * `next`); component-ref existence is left to the registry build. Reuses the same throwing identifier
  * validators the meta path uses, so an injection payload in a name can never reach codegen.
  */
-function preflightValidate(schema: ContentTypeSchema, next: ContentTypeSchema[]): void {
+function preflightValidate(schema: Schema, next: Schema[]): void {
   try {
     deriveTableName(schema.apiId); // identifier + reserved + ct_/_-leading + 63-byte assembly
     const names = new Set<string>();
@@ -155,13 +155,13 @@ function preflightValidate(schema: ContentTypeSchema, next: ContentTypeSchema[])
 }
 
 interface ResolvedPlan {
-  next: ContentTypeSchema[];
+  next: Schema[];
   /** PUT: write `source` to the absolute `target` (`entities/<apiId>/schema.ts`) — temp → rename on commit. */
   write?: { target: string; source: string };
   /** DELETE: remove this source dir AFTER the migrate commits (mirror the temp-file discipline). */
   removeDir?: string;
   /** PUT: the addressed schema (with ids), echoed back. DELETE: undefined. */
-  schema?: ContentTypeSchema;
+  schema?: Schema;
 }
 
 /**
@@ -218,13 +218,13 @@ async function applyResolvedPlan(
 }
 
 /** Read the applied catalog (ensuring the on-demand snapshot table exists) — the `prev` every plan diffs against. */
-async function readApplied(sql: Sql): Promise<ContentTypeSchema[]> {
+async function readApplied(sql: Sql): Promise<Schema[]> {
   await ensureAppliedTable(sql);
   return readAppliedSchemas(sql);
 }
 
 /** Resolve a draft → (schema with ids, id-keyed next), shared by apply + preview. */
-function resolveEdit(draft: ContentTypeDraft, applied: ContentTypeSchema[]): { schema: ContentTypeSchema; next: ContentTypeSchema[] } {
+function resolveEdit(draft: ModuleDraft, applied: Schema[]): { schema: Schema; next: Schema[] } {
   const appliedEntry = (draft.id !== undefined ? applied.find((s) => s.id === draft.id) : undefined) ?? applied.find((s) => s.apiId === draft.apiId);
   const schema = resolveSchema(draft, appliedEntry);
   const next = [...applied.filter((s) => s.id !== schema.id), schema];
@@ -240,7 +240,7 @@ function resolveEdit(draft: ContentTypeDraft, applied: ContentTypeSchema[]): { s
 export async function applySchemaEdit(
   sql: Sql,
   entitiesDir: string,
-  draft: ContentTypeDraft,
+  draft: ModuleDraft,
   opts: { allowDestructive?: boolean } = {},
 ): Promise<SchemaEditResult> {
   const applied = await readApplied(sql);
@@ -269,9 +269,9 @@ export async function applySchemaDelete(sql: Sql, entitiesDir: string, apiId: st
 /** Dry-run a CREATE/UPDATE: resolve + pre-flight + lint + codegen, writing NOTHING and migrating NOTHING. */
 export async function previewSchemaEdit(
   sql: Sql,
-  draft: ContentTypeDraft,
+  draft: ModuleDraft,
   opts: { allowDestructive?: boolean } = {},
-): Promise<{ ok: boolean; blocked: readonly Change[]; changes: readonly Change[]; schema: ContentTypeSchema; generatedSource: string }> {
+): Promise<{ ok: boolean; blocked: readonly Change[]; changes: readonly Change[]; schema: Schema; generatedSource: string }> {
   const applied = await readApplied(sql);
   const { schema, next } = resolveEdit(draft, applied);
   const { changes, blocked } = await migrateLint(sql, next, opts);

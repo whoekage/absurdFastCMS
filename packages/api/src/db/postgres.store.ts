@@ -1,7 +1,7 @@
 import type { Sql } from 'postgres';
 import type { Engine, EngineOptions } from '../store/engine.ts';
 import { Registry } from './registry.ts';
-import type { ContentTypeSchema, ComponentSchema } from './schema/model.ts';
+import type { Schema, ComponentSchema } from './schema/model.ts';
 import { buildEngine } from './engine.loader.ts';
 import { createSql } from './database.client.ts';
 
@@ -38,7 +38,7 @@ export class PostgresStore {
    * boot snapshot. The `ct_` tables are materialized by `migrate()` before this runs, so the schema source
    * and the physical tables agree.
    */
-  async loadFromSchemas(schemas: ContentTypeSchema[], components: ComponentSchema[] = [], opts?: EngineOptions): Promise<{ engine: Engine; registry: Registry }> {
+  async loadFromSchemas(schemas: Schema[], components: ComponentSchema[] = [], opts?: EngineOptions): Promise<{ engine: Engine; registry: Registry }> {
     const registry = Registry.fromSchemas(schemas, components);
     const engine = await buildEngine(this.sql, registry, opts);
     return { engine, registry };

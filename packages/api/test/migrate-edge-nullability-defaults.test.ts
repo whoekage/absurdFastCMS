@@ -2,7 +2,7 @@ import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { migrate, MigrationBlockedError } from '../src/db/schema/migrate.ts';
-import type { ContentTypeSchema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
+import type { Schema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
 import type { FieldOptions } from '../src/db/type.catalog.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
@@ -30,7 +30,7 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[]): ContentTypeSchema => ({ id, apiId, fields });
+const ct = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;

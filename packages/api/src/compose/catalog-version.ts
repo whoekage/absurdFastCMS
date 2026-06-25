@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { loadTypesCacheBusted } from '../db/schema/load.ts';
-import type { ContentTypeSchema } from '../db/schema/model.ts';
+import type { Schema } from '../db/schema/model.ts';
 
 /**
  * S6 — the Builder catalog VERSION (optimistic-concurrency token). It hashes the catalog ON DISK (the source
@@ -23,7 +23,7 @@ function canon(v: unknown): string {
 }
 
 /** Canonicalize the catalog IR: types by id, fields/relations by id, then stable-key stringify. */
-function canonicalIR(schemas: ContentTypeSchema[]): string {
+function canonicalIR(schemas: Schema[]): string {
   const byId = <T extends { id: string }>(a: T, b: T): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const sorted = [...schemas].sort(byId).map((s) => ({
     ...s,

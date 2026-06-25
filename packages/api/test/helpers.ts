@@ -5,7 +5,7 @@ import { createServer } from '../src/http/uws.adapter.ts';
 import { loadTypes } from '../src/db/schema/load.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
 import { HookRegistry } from '../src/db/schema/hooks.ts';
-import { mintId, type ContentTypeSchema, type ComponentSchema, type FieldType } from '../src/db/schema/model.ts';
+import { mintId, type Schema, type ComponentSchema, type FieldType } from '../src/db/schema/model.ts';
 import type { FieldOptions } from '../src/db/type.catalog.ts';
 import type { RelationKind } from '../src/db/ddl.ts';
 import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
@@ -181,7 +181,7 @@ export async function startTestServerFromFilesWithAuth(
  */
 export async function startTestServerFromSchemas(
   sql: Sql,
-  schemas: ContentTypeSchema[],
+  schemas: Schema[],
   opts: { components?: ComponentSchema[]; seed?: () => Promise<void> } = {},
 ): Promise<{ base: string; close: (token: unknown) => void; token: unknown; engine: Engine; registry: Registry }> {
   await migrate(sql, schemas, { allowDestructive: true }); // CREATE TABLE ct_* + reconcile the snapshot
@@ -196,7 +196,7 @@ export async function startTestServerFromSchemas(
 
 /**
  * Convert the old `createContentType` spec shape (`{ apiId, fields:[{name, cmsType, options}], relations,
- * draftPublish, i18n }`) into a files-first {@link ContentTypeSchema} (stable ids minted, `cmsType`→`type`).
+ * draftPublish, i18n }`) into a files-first {@link Schema} (stable ids minted, `cmsType`→`type`).
  * Lets a meta-path test migrate by wrapping its specs in `ct(...)` + `startTestServerFromSchemas` instead of
  * imperative `createContentType` + `addRelation` calls.
  */
@@ -207,8 +207,8 @@ export interface CtSpec {
   draftPublish?: boolean;
   i18n?: boolean;
 }
-export function ct(spec: CtSpec): ContentTypeSchema {
-  const out: ContentTypeSchema = {
+export function ct(spec: CtSpec): Schema {
+  const out: Schema = {
     id: mintId('ct'),
     apiId: spec.apiId,
     fields: spec.fields.map((f) => ({
@@ -225,7 +225,7 @@ export function ct(spec: CtSpec): ContentTypeSchema {
 }
 
 /** The `article` demo type as a files-first IR (mirrors the old `ARTICLE_SEED_FIELDS`) — a shared test fixture. */
-export const ARTICLE_SCHEMA: ContentTypeSchema = {
+export const ARTICLE_SCHEMA: Schema = {
   id: 'ct_article',
   apiId: 'article',
   fields: [

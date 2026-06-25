@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { diff, riskyChanges, forbiddenChanges, SchemaDiffError, type Change } from '../src/db/schema/diff.ts';
-import type { ContentTypeSchema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
+import type { Schema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
 import type { FieldOptions } from '../src/db/type.catalog.ts';
 
 /**
@@ -13,7 +13,7 @@ import type { FieldOptions } from '../src/db/type.catalog.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[], options?: ContentTypeSchema['options']): ContentTypeSchema =>
+const ct = (id: string, apiId: string, fields: FieldSchema[], options?: Schema['options']): Schema =>
   options ? { id, apiId, fields, options } : { id, apiId, fields };
 
 const only = (cs: { changes: readonly Change[] }): Change => {
@@ -53,7 +53,7 @@ test('renameType (apiId change, same id) → table rename, lossless; info/collec
   assert.equal((c as Extract<Change, { kind: 'renameType' }>).toApiId, 'post');
 
   // presentation-only deltas → empty diff
-  const labelled: ContentTypeSchema = { ...base, collectionName: 'whatever', info: { displayName: 'Articles!' } };
+  const labelled: Schema = { ...base, collectionName: 'whatever', info: { displayName: 'Articles!' } };
   assert.deepEqual(diff([base], [labelled]).changes, []);
 });
 
@@ -169,7 +169,7 @@ test('riskyChanges + forbiddenChanges select the right subset', () => {
 });
 
 test('relations add/drop by stable id (add safe, drop destructive)', () => {
-  const withRel: ContentTypeSchema = { ...base, relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' }] };
+  const withRel: Schema = { ...base, relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' }] };
   const add = diff([base], [withRel]);
   assert.deepEqual(add.changes.map((c) => c.kind), ['addRelation']);
   const ar = add.changes[0] as Extract<Change, { kind: 'addRelation' }>;
@@ -184,10 +184,10 @@ test('relations add/drop by stable id (add safe, drop destructive)', () => {
 });
 
 test('a relation CHANGE and a rename-of-a-relation-owner are deferred (loud)', () => {
-  const r1: ContentTypeSchema = { ...base, relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer' }] };
-  const renamedField: ContentTypeSchema = { ...base, relations: [{ id: 'rel_au', field: 'editor', kind: 'manyToOne', target: 'writer' }] }; // same id, field changed
+  const r1: Schema = { ...base, relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer' }] };
+  const renamedField: Schema = { ...base, relations: [{ id: 'rel_au', field: 'editor', kind: 'manyToOne', target: 'writer' }] }; // same id, field changed
   assert.throws(() => diff([r1], [renamedField]), SchemaDiffError);
-  const renamedType: ContentTypeSchema = { ...base, apiId: 'gazette', relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer' }] };
+  const renamedType: Schema = { ...base, apiId: 'gazette', relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer' }] };
   assert.throws(() => diff([r1], [renamedType]), SchemaDiffError);
 });
 

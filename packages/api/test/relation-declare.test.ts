@@ -4,7 +4,7 @@ import type { Sql } from 'postgres';
 import { Registry } from '../src/db/registry.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
 import { SchemaAdaptError } from '../src/db/schema/adapt.ts';
-import type { ContentTypeSchema } from '../src/db/schema/model.ts';
+import type { Schema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog, tableExists, physicalColumns, ct } from './helpers.ts';
 
@@ -83,7 +83,7 @@ const UNIQUE_FOR: Record<string, string[][]> = {
 };
 
 /** author + book schemas, book optionally owning a relation `authors` of `kind` to author. */
-function pair(rel?: { kind: (typeof KINDS)[number]; inverseField?: string }): ContentTypeSchema[] {
+function pair(rel?: { kind: (typeof KINDS)[number]; inverseField?: string }): Schema[] {
   const author = ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
   const book = ct({
     apiId: 'book',

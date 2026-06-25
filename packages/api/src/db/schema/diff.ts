@@ -6,11 +6,11 @@ import {
   type ResolvedType,
 } from '../type.catalog.ts';
 import { deriveLinkTableName, type RelationKind } from '../ddl.ts';
-import type { ContentTypeSchema, FieldSchema, RelationSchema } from './model.ts';
+import type { Schema, FieldSchema, RelationSchema } from './model.ts';
 
 /**
  * THE PURE DIFF ENGINE (§S3) — `diff(prev, next)` over two sets of files-first schemas, matching
- * content-types AND fields by their STABLE `id`, never by name. This is the design that removes the
+ * modules AND fields by their STABLE `id`, never by name. This is the design that removes the
  * rename-data-loss class that defines every name-pairing differ in the wild (Strapi #12626/#19141 wiped
  * 68k rows; Prisma #4694; Alembic; TypeORM synchronize; Directus): a field with the SAME id and a changed
  * name is a `renameField` → `ALTER ... RENAME COLUMN` (lossless), NOT a drop+add.
@@ -59,7 +59,7 @@ interface BaseChange {
 }
 
 /** A whole new content-type (a fresh empty `ct_` table — its NOT NULL fields are safe: no rows yet). */
-export interface AddType extends BaseChange { readonly kind: 'addType'; readonly schema: ContentTypeSchema; }
+export interface AddType extends BaseChange { readonly kind: 'addType'; readonly schema: Schema; }
 /** Drop a content-type entirely (DESTRUCTIVE). */
 export interface DropType extends BaseChange { readonly kind: 'dropType'; }
 /** Same id, changed apiId → `ALTER TABLE ct_<from> RENAME TO ct_<to>` (lossless). */
@@ -95,8 +95,8 @@ export interface ChangeSet {
 // --- helpers -----------------------------------------------------------------------------------
 
 /** Index schemas by stable id; throws on a duplicate id (corrupt catalog — fail LOUD, never silently merge). */
-function indexTypes(schemas: ContentTypeSchema[]): Map<string, ContentTypeSchema> {
-  const m = new Map<string, ContentTypeSchema>();
+function indexTypes(schemas: Schema[]): Map<string, Schema> {
+  const m = new Map<string, Schema>();
   for (const s of schemas) {
     if (m.has(s.id)) throw new SchemaDiffError(`duplicate content-type id "${s.id}" (ids are the identity and must be unique)`);
     indexFields(s); // validate field-id uniqueness for EVERY schema (added or matched), not just matched ones.
@@ -106,7 +106,7 @@ function indexTypes(schemas: ContentTypeSchema[]): Map<string, ContentTypeSchema
   return m;
 }
 
-function indexFields(schema: ContentTypeSchema): Map<string, FieldSchema> {
+function indexFields(schema: Schema): Map<string, FieldSchema> {
   const m = new Map<string, FieldSchema>();
   for (const f of schema.fields) {
     if (m.has(f.id)) throw new SchemaDiffError(`content-type "${schema.apiId}" field "${f.name}": duplicate field id "${f.id}"`);
@@ -115,7 +115,7 @@ function indexFields(schema: ContentTypeSchema): Map<string, FieldSchema> {
   return m;
 }
 
-function indexRelations(schema: ContentTypeSchema): Map<string, RelationSchema> {
+function indexRelations(schema: Schema): Map<string, RelationSchema> {
   const m = new Map<string, RelationSchema>();
   for (const r of schema.relations ?? []) {
     if (m.has(r.id)) throw new SchemaDiffError(`content-type "${schema.apiId}" relation "${r.field}": duplicate relation id "${r.id}"`);
@@ -124,7 +124,7 @@ function indexRelations(schema: ContentTypeSchema): Map<string, RelationSchema> 
   return m;
 }
 
-function addRelationChange(owner: ContentTypeSchema, rel: RelationSchema): AddRelation {
+function addRelationChange(owner: Schema, rel: RelationSchema): AddRelation {
   const base: AddRelation = {
     kind: 'addRelation', typeId: owner.id, apiId: owner.apiId, risk: 'safe',
     relationId: rel.id, field: rel.field, relKind: rel.kind, target: rel.target, linkTable: deriveLinkTableName(owner.apiId, rel.field),
@@ -132,7 +132,7 @@ function addRelationChange(owner: ContentTypeSchema, rel: RelationSchema): AddRe
   return rel.inverseField !== undefined ? { ...base, inverseField: rel.inverseField } : base;
 }
 
-function dropRelationChange(owner: ContentTypeSchema, rel: RelationSchema): DropRelation {
+function dropRelationChange(owner: Schema, rel: RelationSchema): DropRelation {
   return { kind: 'dropRelation', typeId: owner.id, apiId: owner.apiId, risk: 'destructive', relationId: rel.id, field: rel.field, linkTable: deriveLinkTableName(owner.apiId, rel.field) };
 }
 
@@ -169,7 +169,7 @@ const retypeRisk = (c: 'metadata-only' | 'rewrite' | 'forbidden'): ChangeRisk =>
  * toggles-on) → destructive (drop field, flag toggles-off, drop type) — a sensible default; S4 owns the
  * final transactional/topological apply order.
  */
-export function diff(prev: ContentTypeSchema[], next: ContentTypeSchema[]): ChangeSet {
+export function diff(prev: Schema[], next: Schema[]): ChangeSet {
   const prevTypes = indexTypes(prev);
   const nextTypes = indexTypes(next);
   const creates: Change[] = []; // CREATE TABLE (all tables first)
@@ -178,19 +178,19 @@ export function diff(prev: ContentTypeSchema[], next: ContentTypeSchema[]): Chan
   const relDrops: Change[] = []; // DROP link table (before any endpoint table is dropped)
   const drops: Change[] = []; // DROP column / DROP TABLE (last)
 
-  // New content-types (id only in next) — a fresh empty table; its relations become link tables in relAdds.
+  // New modules (id only in next) — a fresh empty table; its relations become link tables in relAdds.
   for (const [id, n] of nextTypes) {
     if (prevTypes.has(id)) continue;
     creates.push({ kind: 'addType', typeId: id, apiId: n.apiId, risk: 'safe', schema: n });
     for (const rel of n.relations ?? []) relAdds.push(addRelationChange(n, rel));
   }
-  // Dropped content-types (id only in prev) — DROP its link tables first, then the table.
+  // Dropped modules (id only in prev) — DROP its link tables first, then the table.
   for (const [id, p] of prevTypes) {
     if (nextTypes.has(id)) continue;
     for (const rel of p.relations ?? []) relDrops.push(dropRelationChange(p, rel));
     drops.push({ kind: 'dropType', typeId: id, apiId: p.apiId, risk: 'destructive' });
   }
-  // Matched content-types (same id) — diff labels, flags, fields, and relations.
+  // Matched modules (same id) — diff labels, flags, fields, and relations.
   for (const [id, n] of nextTypes) {
     const p = prevTypes.get(id);
     if (!p) continue;
@@ -201,7 +201,7 @@ export function diff(prev: ContentTypeSchema[], next: ContentTypeSchema[]): Chan
   return { changes: [...creates, ...relAdds, ...alters, ...relDrops, ...drops] };
 }
 
-function diffMatchedType(typeId: string, p: ContentTypeSchema, n: ContentTypeSchema, alters: Change[], drops: Change[], relAdds: Change[], relDrops: Change[]): void {
+function diffMatchedType(typeId: string, p: Schema, n: Schema, alters: Change[], drops: Change[], relAdds: Change[], relDrops: Change[]): void {
   const apiId = n.apiId;
   // apiId rename → table rename (lossless). collectionName/info are presentation-only → no DDL.
   if (p.apiId !== n.apiId) {

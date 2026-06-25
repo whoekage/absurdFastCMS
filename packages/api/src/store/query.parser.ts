@@ -175,7 +175,7 @@ export interface SchemaEntry {
   scale?: number | undefined;
   precision?: number | undefined;
 }
-export type Schema = Map<string, SchemaEntry>;
+export type QuerySchema = Map<string, SchemaEntry>;
 
 /** Relations Slice 4: max RELATION HOPS in a single filter chain (`a.b.c`). A deeper chain -> 400.
  * Counts relation hops ONLY, NOT `$and`/`$or`/`$not` nesting. The sole terminator for a self-
@@ -206,9 +206,9 @@ export interface RelationParseContext {
   resolveTarget(apiId: string): RelationParseContext | undefined;
 }
 
-/** Build the scalar {@link Schema} (lookup map) from a context's field list. */
-function schemaFromFields(fields: FieldDef[]): Schema {
-  const schema: Schema = new Map<string, SchemaEntry>();
+/** Build the scalar {@link QuerySchema} (lookup map) from a context's field list. */
+function schemaFromFields(fields: FieldDef[]): QuerySchema {
+  const schema: QuerySchema = new Map<string, SchemaEntry>();
   for (const f of fields) schema.set(f.name, { type: f.type, scale: f.scale, precision: f.precision });
   return schema;
 }
@@ -414,7 +414,7 @@ function coerceNullFlag(field: string, op: ScanOp, raw: ParamNode): void {
  * type-compatible, and the value coerces. Returns the engine {@link FilterNode} leaf.
  */
 function parseLeafOp(
-  schema: Schema,
+  schema: QuerySchema,
   field: string,
   opToken: string,
   raw: ParamNode,
@@ -457,7 +457,7 @@ function parseLeafOp(
  */
 function parseFieldFilters(
   ctx: RelationParseContext,
-  schema: Schema,
+  schema: QuerySchema,
   field: string,
   node: ParamNode,
   depth: number,
@@ -516,7 +516,7 @@ function parseFieldFilters(
  */
 function parseFilterObject(
   ctx: RelationParseContext,
-  schema: Schema,
+  schema: QuerySchema,
   node: ParamNode,
   depth: number,
   path: string,
@@ -566,7 +566,7 @@ function parseSort(node: ParamNode): SortKey[] {
 }
 
 /** Validate that every sort field exists in the schema (a misspelling is rejected, not ignored). */
-function validateSortFields(schema: Schema, sort: SortKey[]): void {
+function validateSortFields(schema: QuerySchema, sort: SortKey[]): void {
   for (const s of sort) {
     if (!schema.has(s.field)) throw new QueryParseError(`unknown sort field "${s.field}"`);
   }
@@ -675,7 +675,7 @@ function parsePagination(node: ParamNode): ParsedPagination {
 }
 
 /** `fields=a,b,c` (or `fields[0]=a&fields[1]=b`) -> validated field-name list. */
-function parseFields(schema: Schema, node: ParamNode): string[] {
+function parseFields(schema: QuerySchema, node: ParamNode): string[] {
   const tokens = typeof node === 'string' ? node.split(',') : asOrderedList(node);
   const out: string[] = [];
   for (const tok of tokens) {
@@ -754,7 +754,7 @@ export function parseQuery(
   const ctx: RelationParseContext = Array.isArray(ctxOrFields)
     ? { fields: ctxOrFields, relations: new Map(), resolveTarget: () => undefined }
     : ctxOrFields;
-  const schema: Schema = schemaFromFields(ctx.fields);
+  const schema: QuerySchema = schemaFromFields(ctx.fields);
 
   const params = typeof input === 'string' ? parseParams(input) : input;
 

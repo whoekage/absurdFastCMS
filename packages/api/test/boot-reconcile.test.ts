@@ -8,7 +8,7 @@ import { applySchemaEdit } from '../src/compose/builder.ts';
 import { reconcileBoot, SchemaReconcileHaltError } from '../src/compose/boot-reconcile.ts';
 import { readAppliedSchemas, ensureAppliedTable, writeAppliedSnapshot } from '../src/db/schema/migrate.ts';
 import { generateSchemaSource } from '../src/db/schema/codegen.ts';
-import type { ContentTypeSchema } from '../src/db/schema/model.ts';
+import type { Schema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog, physicalColumns } from './helpers.ts';
 
@@ -26,8 +26,8 @@ import { cleanCatalog, physicalColumns } from './helpers.ts';
 
 const genDir = fileURLToPath(new URL(`./fixtures/.gen-${process.pid}-s3/`, import.meta.url));
 const schemaPath = (apiId: string): string => path.join(genDir, apiId, 'schema.ts');
-const applied = async (apiId: string): Promise<ContentTypeSchema> => (await readAppliedSchemas(sql)).find((s) => s.apiId === apiId)!;
-async function writeSchemaFile(s: ContentTypeSchema): Promise<void> {
+const applied = async (apiId: string): Promise<Schema> => (await readAppliedSchemas(sql)).find((s) => s.apiId === apiId)!;
+async function writeSchemaFile(s: Schema): Promise<void> {
   await mkdir(path.join(genDir, s.apiId), { recursive: true });
   await writeFile(schemaPath(s.apiId), generateSchemaSource(s));
 }
@@ -58,7 +58,7 @@ test('A — files BEHIND (crash window): recover-forward regenerates the file, t
   await sql.unsafe(`INSERT INTO ct_gbehind (title, b) VALUES ('t', 'keep')`);
   const full = await applied('gbehind');
   // Simulate the crash window: the on-disk file LAGS (missing 'b'), and the files-IR boot sees is that lag.
-  const lagging: ContentTypeSchema = { ...full, fields: full.fields.filter((f) => f.name !== 'b') };
+  const lagging: Schema = { ...full, fields: full.fields.filter((f) => f.name !== 'b') };
   await writeSchemaFile(lagging);
 
   const r = await reconcileBoot(sql, genDir, [lagging], new Map());
@@ -75,7 +75,7 @@ test('A — files BEHIND (crash window): recover-forward regenerates the file, t
 test('B — files AHEAD (forward SAFE add): migrate forward, snapshot + column updated', async () => {
   await applySchemaEdit(sql, genDir, { apiId: 'gahead', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   const base = await applied('gahead');
-  const ahead: ContentTypeSchema = { ...base, fields: [...base.fields, { id: 'f_added', name: 'c', type: 'string', options: { nullable: true } }] };
+  const ahead: Schema = { ...base, fields: [...base.fields, { id: 'f_added', name: 'c', type: 'string', options: { nullable: true } }] };
 
   const r = await reconcileBoot(sql, genDir, [ahead], new Map());
   assert.equal(r.outcome, 'migrated');
@@ -89,7 +89,7 @@ test('G — files AHEAD by an already-acked DATA-DEPENDENT change: migrate forwa
   const base = await applied('gdd');
   // NOT-NULL add WITH default — the data-dependent class that lint() blocks WITHOUT allowDestructive; the
   // forward branch passes allowDestructive:true, so this must migrate (not throw MigrationBlockedError).
-  const ahead: ContentTypeSchema = { ...base, fields: [...base.fields, { id: 'f_d', name: 'd', type: 'integer', options: { nullable: false, default: 0 } }] };
+  const ahead: Schema = { ...base, fields: [...base.fields, { id: 'f_d', name: 'd', type: 'integer', options: { nullable: false, default: 0 } }] };
 
   const r = await reconcileBoot(sql, genDir, [ahead], new Map());
   assert.equal(r.outcome, 'migrated');
@@ -106,7 +106,7 @@ test('C — clean (file == snapshot): no-op, nothing migrated', async () => {
 });
 
 test('D — baseline (no _schema_applied, empty DB): migrate() creates the table + backfills snapshot, idempotent on re-run', async () => {
-  const ir: ContentTypeSchema = { id: 'ct_gb', apiId: 'gbase', fields: [{ id: 'f_a', name: 'a', type: 'string', options: { nullable: true } }] };
+  const ir: Schema = { id: 'ct_gb', apiId: 'gbase', fields: [{ id: 'f_a', name: 'a', type: 'string', options: { nullable: true } }] };
   // Baseline precondition: NO snapshot AND the table not yet present. The new migrate()-based baseline path
   // CREATEs the ct_ table itself (DDL + snapshot in one tx) — unlike the old seedFromSchemas create-if-absent,
   // a pre-existing ct_ table would now 42P07 (compileCreateTable has no IF NOT EXISTS), but that state is
@@ -124,13 +124,13 @@ test('D — baseline (no _schema_applied, empty DB): migrate() creates the table
 });
 
 test('H — recover-forward of a snapshot with a localized field HALTs LOUD (never writes a lossy file)', async () => {
-  const localizedIR: ContentTypeSchema = { id: 'ct_gh', apiId: 'ghalt', fields: [
+  const localizedIR: Schema = { id: 'ct_gh', apiId: 'ghalt', fields: [
     { id: 'f_a', name: 'a', type: 'string', options: { nullable: true } },
     { id: 'f_b', name: 'b', type: 'string', options: { nullable: true }, localized: true },
   ] };
   await ensureAppliedTable(sql);
   await writeAppliedSnapshot(sql, [localizedIR]); // snapshot carries the non-round-trippable property
-  const lagging: ContentTypeSchema = { ...localizedIR, fields: [localizedIR.fields[0]!] }; // drops 'b' (reverse)
+  const lagging: Schema = { ...localizedIR, fields: [localizedIR.fields[0]!] }; // drops 'b' (reverse)
   // Write a NON-localized lagging file (codegen can't emit localized), then capture its exact bytes.
   await mkdir(path.join(genDir, 'ghalt'), { recursive: true });
   const laggingSrc = generateSchemaSource(lagging);

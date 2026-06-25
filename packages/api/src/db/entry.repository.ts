@@ -1,6 +1,6 @@
 import type { Sql, TransactionSql } from 'postgres';
 import { RawJson } from '../store/column.ts';
-import type { ContentTypeDef, RegistryField } from './registry.ts';
+import type { ModuleDef, RegistryField } from './registry.ts';
 import { quoteIdent } from './ddl.ts';
 import { assertTableName } from './engine.loader.ts';
 
@@ -9,7 +9,7 @@ import { assertTableName } from './engine.loader.ts';
  * here FIRST (single statement, registry-built RETURNING), and the caller rebuilds ONLY this type.
  *
  * SECURITY DOCTRINE (all enforced here, defense-in-depth behind the validator):
- *   - Every SQL identifier (table + columns) comes ONLY from the validated {@link ContentTypeDef}: the
+ *   - Every SQL identifier (table + columns) comes ONLY from the validated {@link ModuleDef}: the
  *     table via the registry's `tableName`, each column via `def.writableByName.get(key).column`. A body
  *     key is NEVER used as an identifier directly.
  *   - Every value is a BOUND parameter (never interpolated): i64 as a digit STRING, decimal as a
@@ -78,7 +78,7 @@ function bindValue(field: RegistryField, value: unknown): unknown {
 }
 
 /** The RETURNING fragment: every field in `def.fields` order, json columns cast to ::text. */
-function returningList(def: ContentTypeDef): string {
+function returningList(def: ModuleDef): string {
   return def.fields
     .map((f) => (f.json ? `${quoteIdent(f.column)}::text AS ${quoteIdent(f.column)}` : quoteIdent(f.column)))
     .join(', ');
@@ -89,7 +89,7 @@ function returningList(def: ContentTypeDef): string {
  * expects. Column name === field name, so this is a positional pass that wraps a json column's verbatim
  * `::text` string in {@link RawJson} (so {@link serializeEntry} splices it byte-exact, never re-parsed).
  */
-function fromDb(def: ContentTypeDef, dbRow: Record<string, unknown>): Record<string, unknown> {
+function fromDb(def: ModuleDef, dbRow: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const f of def.fields) {
     const v = dbRow[f.column];
@@ -104,7 +104,7 @@ function fromDb(def: ContentTypeDef, dbRow: Record<string, unknown>): Record<str
  */
 export async function insertEntry(
   sql: Sql | TransactionSql,
-  def: ContentTypeDef,
+  def: ModuleDef,
   data: Record<string, unknown>,
   // INTERNAL server-controlled seam — never reachable from the wire (body.parser rejects `document_id`
   // and `locale` keys via SYSTEM_COLUMN_NAMES). be-03 (draft/publish) + be-06 (i18n) pass an existing
@@ -167,7 +167,7 @@ export async function insertEntry(
  *      addressed row's `document_id` and `id <> $id`, so the new shared value lands on every other variant.
  * For a NON-i18n type `def.i18n` is false => statement 2 never runs => this is BYTE-IDENTICAL to before.
  */
-export async function updateEntry(sql: Sql | TransactionSql, def: ContentTypeDef, id: number, data: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+export async function updateEntry(sql: Sql | TransactionSql, def: ModuleDef, id: number, data: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   assertTableName(def.tableName);
   const keys = Object.keys(data);
   const assignments: string[] = [];
@@ -238,7 +238,7 @@ export interface SiblingSnapshot {
  * (json as `::text`, wrapped in {@link RawJson} so it re-binds verbatim). Returns `null` when no row has
  * that id. Caller must have verified `def.i18n`.
  */
-export async function readSiblingForVariant(sql: Sql | TransactionSql, def: ContentTypeDef, id: number): Promise<SiblingSnapshot | null> {
+export async function readSiblingForVariant(sql: Sql | TransactionSql, def: ModuleDef, id: number): Promise<SiblingSnapshot | null> {
   assertTableName(def.tableName);
   const sharedFields = def.writable.filter((f) => !f.localized);
   const cols = ['document_id', ...sharedFields.map((f) => f.column)];
@@ -267,7 +267,7 @@ export async function readSiblingForVariant(sql: Sql | TransactionSql, def: Cont
  * Returns the stored row (engine-named, incl. `published_at`); `null` when no row has that id. The
  * caller must have verified `def.draftPublish` (the column only exists on a D&P type).
  */
-export async function publishEntry(sql: Sql | TransactionSql, def: ContentTypeDef, id: number, at: Date): Promise<Record<string, unknown> | null> {
+export async function publishEntry(sql: Sql | TransactionSql, def: ModuleDef, id: number, at: Date): Promise<Record<string, unknown> | null> {
   assertTableName(def.tableName);
   const text = `UPDATE ${quoteIdent(def.tableName)} SET ${quoteIdent('published_at')} = $1, ${quoteIdent('updated_at')} = now() WHERE ${quoteIdent('id')} = $2 RETURNING ${returningList(def)}`;
   try {
@@ -282,7 +282,7 @@ export async function publishEntry(sql: Sql | TransactionSql, def: ContentTypeDe
  * UNPUBLISH entry `id`: clear `published_at` to NULL (back to draft) + bump `updated_at`. Returns the
  * stored row; `null` when no row has that id. Caller must have verified `def.draftPublish`.
  */
-export async function unpublishEntry(sql: Sql | TransactionSql, def: ContentTypeDef, id: number): Promise<Record<string, unknown> | null> {
+export async function unpublishEntry(sql: Sql | TransactionSql, def: ModuleDef, id: number): Promise<Record<string, unknown> | null> {
   assertTableName(def.tableName);
   const text = `UPDATE ${quoteIdent(def.tableName)} SET ${quoteIdent('published_at')} = NULL, ${quoteIdent('updated_at')} = now() WHERE ${quoteIdent('id')} = $1 RETURNING ${returningList(def)}`;
   try {
@@ -294,7 +294,7 @@ export async function unpublishEntry(sql: Sql | TransactionSql, def: ContentType
 }
 
 /** DELETE entry `id`, returning the deleted row (engine-named); `null` when no row had that id. */
-export async function deleteEntry(sql: Sql | TransactionSql, def: ContentTypeDef, id: number): Promise<Record<string, unknown> | null> {
+export async function deleteEntry(sql: Sql | TransactionSql, def: ModuleDef, id: number): Promise<Record<string, unknown> | null> {
   assertTableName(def.tableName);
   const text = `DELETE FROM ${quoteIdent(def.tableName)} WHERE ${quoteIdent('id')} = $1 RETURNING ${returningList(def)}`;
   try {
@@ -313,7 +313,7 @@ export async function deleteEntry(sql: Sql | TransactionSql, def: ContentTypeDef
  * identifier comes ONLY from the registry-built `def.tableName` (NEVER client input), the ids are bound.
  * Runs INSIDE the caller's tx so the check + the row insert/update commit atomically. Empty input -> [].
  */
-export async function missingEntryIds(sql: Sql | TransactionSql, def: ContentTypeDef, ids: number[]): Promise<number[]> {
+export async function missingEntryIds(sql: Sql | TransactionSql, def: ModuleDef, ids: number[]): Promise<number[]> {
   if (ids.length === 0) return [];
   assertTableName(def.tableName);
   const unique = [...new Set(ids)];
@@ -330,7 +330,7 @@ export async function missingEntryIds(sql: Sql | TransactionSql, def: ContentTyp
  * Used for ALL write responses (incl. DELETE, whose row no longer exists in the engine) so they are
  * byte-consistent with GET.
  */
-export function serializeEntry(def: ContentTypeDef, row: Record<string, unknown>): string {
+export function serializeEntry(def: ModuleDef, row: Record<string, unknown>): string {
   let out = '{';
   let first = true;
   for (const f of def.fields) {

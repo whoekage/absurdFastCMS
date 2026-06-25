@@ -3,7 +3,7 @@ import type { Engine } from '../store/engine.ts';
 import type { HookRegistry } from './schema/hooks.ts';
 import { Registry } from './registry.ts';
 import { buildDetached, loadAllRelations } from './engine.loader.ts';
-import type { ContentTypeSchema, ComponentSchema } from './schema/model.ts';
+import type { Schema, ComponentSchema } from './schema/model.ts';
 import type { Change } from './schema/diff.ts';
 
 /**
@@ -39,7 +39,7 @@ export interface LiveCell {
 export async function swapFromIR(
   sql: Sql,
   live: LiveCell,
-  next: ContentTypeSchema[],
+  next: Schema[],
   applied: readonly Change[],
   nextHooks: HookRegistry,
   nextComponents: ComponentSchema[] = [],

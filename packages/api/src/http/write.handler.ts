@@ -1,6 +1,6 @@
 import type { Sql, TransactionSql } from 'postgres';
 import type { Engine } from '../store/engine.ts';
-import type { Registry, ContentTypeDef, ComponentDef } from '../db/registry.ts';
+import type { Registry, ModuleDef, ComponentDef } from '../db/registry.ts';
 import { validateBody, BodyParseError } from '../db/body.parser.ts';
 import { insertEntry, updateEntry, deleteEntry, publishEntry, unpublishEntry, readSiblingForVariant, serializeEntry, missingEntryIds, EntryWriteError } from '../db/entry.repository.ts';
 import { applyRelationOps } from '../db/relation.repository.ts';
@@ -97,7 +97,7 @@ export interface WriteRequest {
  * text (e.g. `[1,2,3]`). That class is NOT iterable, so we unwrap+parse it back to a `number[]` here
  * (those ids were already validated at the sibling's own create; re-checking them is cheap + correct).
  */
-async function assertMediaRefsExist(tx: Sql | TransactionSql, def: ContentTypeDef, data: Record<string, unknown>, registry: Registry): Promise<void> {
+async function assertMediaRefsExist(tx: Sql | TransactionSql, def: ModuleDef, data: Record<string, unknown>, registry: Registry): Promise<void> {
   if (def.mediaFields.size === 0 && def.componentFields.size === 0) return;
   const ids: number[] = [];
   for (const [name, { multiple }] of def.mediaFields) {
@@ -187,7 +187,7 @@ function collectInstanceMediaIds(registry: Registry, apiId: string, obj: unknown
  * exists in its TARGET content-type, INSIDE the caller's tx (so the existence check + the row insert/update
  * commit atomically). Sibling of {@link assertMediaRefsExist}: the body parser already validated shape +
  * cardinality + positive-int4; here we gather the referenced ids from the COERCED component trees, BINNED
- * BY TARGET api_id (different relation fields point at different content-types), then per-target reject (a
+ * BY TARGET api_id (different relation fields point at different modules), then per-target reject (a
  * 400 via EntryWriteError) any id that names no row. A relation ref can ONLY live inside a component, so the
  * gate is `def.componentFields.size === 0` (a type with no component field is a byte-identical no-op).
  *
@@ -196,7 +196,7 @@ function collectInstanceMediaIds(registry: Registry, apiId: string, obj: unknown
  * id; the READ path applies default-published + default-locale visibility). This mirrors how a media id is
  * stored regardless of any asset-level state. The variant-create RawJson unwrap is reused identically.
  */
-async function assertRelationRefsExist(tx: Sql | TransactionSql, def: ContentTypeDef, data: Record<string, unknown>, registry: Registry): Promise<void> {
+async function assertRelationRefsExist(tx: Sql | TransactionSql, def: ModuleDef, data: Record<string, unknown>, registry: Registry): Promise<void> {
   if (def.componentFields.size === 0) return;
   const byTarget = new Map<string, number[]>();
   for (const [name, cmeta] of def.componentFields) {
@@ -271,7 +271,7 @@ function collectInstanceRelationRefs(registry: Registry, apiId: string, obj: unk
 }
 
 /** Build the write response Buffer: `{"data":<serialized row>,"meta":{}}`, byte-consistent with GET. */
-function writeOk(status: number, def: ContentTypeDef, row: Record<string, unknown>): CoreResponse {
+function writeOk(status: number, def: ModuleDef, row: Record<string, unknown>): CoreResponse {
   return {
     status,
     contentType: JSON_CT,

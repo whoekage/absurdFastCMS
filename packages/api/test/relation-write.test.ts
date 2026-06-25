@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import type { ListenToken } from '../src/http/uws.adapter.ts';
 import { deriveLinkTableName } from '../src/db/ddl.ts';
-import type { ContentTypeSchema } from '../src/db/schema/model.ts';
+import type { Schema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog, ct, startTestServerFromSchemas } from './helpers.ts';
 
@@ -43,7 +43,7 @@ beforeEach(async () => {
   await cleanCatalog(sql);
 });
 
-async function boot(schemas: ContentTypeSchema[], seed?: () => Promise<void>): Promise<void> {
+async function boot(schemas: Schema[], seed?: () => Promise<void>): Promise<void> {
   const s = await startTestServerFromSchemas(sql, schemas, seed ? { seed } : {});
   base = s.base;
   token = s.token;

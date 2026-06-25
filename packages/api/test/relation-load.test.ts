@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { Registry } from '../src/db/registry.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
-import { mintId, type ContentTypeSchema } from '../src/db/schema/model.ts';
+import { mintId, type Schema } from '../src/db/schema/model.ts';
 import { buildEngine, rebuildType, loadAllRelations, loadType } from '../src/db/engine.loader.ts';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { Engine } from '../src/store/engine.ts';
@@ -49,7 +49,7 @@ async function insertEdge(link: string, ownerPk: number, relatedPk: number): Pro
 }
 
 /** Materialize the ct_ + link tables from in-code IR (files-first, zero meta). */
-async function setup(schemas: ContentTypeSchema[]): Promise<void> {
+async function setup(schemas: Schema[]): Promise<void> {
   await migrate(sql, schemas, { allowDestructive: true });
 }
 
@@ -59,7 +59,7 @@ function linkOf(registry: Registry, type: string, field: string): string {
 }
 
 /** Build the engine from the given files-first schemas. */
-async function boot(schemas: ContentTypeSchema[]): Promise<Engine> {
+async function boot(schemas: Schema[]): Promise<Engine> {
   return buildEngine(sql, Registry.fromSchemas(schemas));
 }
 
@@ -542,7 +542,7 @@ test('declaring a relation does NOT change the unpopulated read bytes or schemaV
 
   // Add a relation + edge, re-boot (the relation is declared only in this second catalog). Reuse the SAME
   // book schema (stable id/fields) so migrate's diff is exactly "add a relation", not drop+recreate the type.
-  const bookWithRel: ContentTypeSchema = { ...bookCt, relations: [{ id: mintId('rel'), field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] };
+  const bookWithRel: Schema = { ...bookCt, relations: [{ id: mintId('rel'), field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] };
   const withRel = [authorCt, bookWithRel];
   await migrate(sql, withRel, { allowDestructive: true });
   const link = linkOf(Registry.fromSchemas(withRel), 'book', 'authors');

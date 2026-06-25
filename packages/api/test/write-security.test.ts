@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
-import type { ContentTypeSchema } from '../src/db/schema/model.ts';
+import type { Schema } from '../src/db/schema/model.ts';
 import type { ListenToken } from '../src/http/uws.adapter.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { tableExists, startTestServerFromSchemas, ct } from './helpers.ts';
@@ -20,7 +20,7 @@ let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let token: ListenToken;
 let base: string;
 let close: (t: ListenToken) => void;
-let schemas: ContentTypeSchema[];
+let schemas: Schema[];
 
 before(async () => {
   db = await createFileDatabase('sec');

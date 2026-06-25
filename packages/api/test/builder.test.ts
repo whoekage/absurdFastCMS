@@ -150,7 +150,7 @@ test('S5 previewSchemaEdit: returns the change-set + generated source but writes
   const p = await previewSchemaEdit(sql, { apiId: 'delta', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   assert.equal(p.ok, true);
   assert.ok(p.changes.some((c) => c.kind === 'addType'));
-  assert.match(p.generatedSource, /defineType/);
+  assert.match(p.generatedSource, /defineSchema/);
   assert.equal(await tableExists(sql, 'ct_delta'), false); // dry run: no table
   assert.equal((await readAppliedSchemas(sql)).some((s) => s.apiId === 'delta'), false); // no snapshot row
 });

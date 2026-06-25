@@ -40,13 +40,13 @@ after(async () => {
 // S6 requires If-Match on PUT/DELETE. These helpers auto-attach the CURRENT on-disk version (the GET ETag)
 // unless an explicit `ifMatch` override is passed — so the functional route tests exercise the happy path
 // while the precondition is enforced. (412/428 are asserted in the concurrency suite.)
-const ver = async (): Promise<string> => (await fetch(`${srv.base}/builder/content-types`)).headers.get('etag') ?? '';
+const ver = async (): Promise<string> => (await fetch(`${srv.base}/builder/modules`)).headers.get('etag') ?? '';
 const put = async (apiId: string, body: unknown, ifMatch?: string): Promise<Response> =>
-  fetch(`${srv.base}/builder/content-types/${apiId}`, { method: 'PUT', headers: { 'content-type': 'application/json', 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
+  fetch(`${srv.base}/builder/modules/${apiId}`, { method: 'PUT', headers: { 'content-type': 'application/json', 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
 const del = async (apiId: string, body: unknown, ifMatch?: string): Promise<Response> =>
-  fetch(`${srv.base}/builder/content-types/${apiId}`, { method: 'DELETE', headers: { 'content-type': 'application/json', 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
+  fetch(`${srv.base}/builder/modules/${apiId}`, { method: 'DELETE', headers: { 'content-type': 'application/json', 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
 const preview = (apiId: string, body: unknown): Promise<Response> =>
-  fetch(`${srv.base}/builder/content-types/${apiId}/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  fetch(`${srv.base}/builder/modules/${apiId}/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 test('PUT create → 200 uniform envelope; GET list/one reflect it; the type serves live', async () => {
   const r = await put('gadget', { apiId: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
@@ -56,10 +56,10 @@ test('PUT create → 200 uniform envelope; GET list/one reflect it; the type ser
   assert.ok(env.applied.some((c: { kind: string }) => c.kind === 'addType'));
   assert.ok(env.schema.id.startsWith('ct_') && env.schema.fields[0].id.startsWith('f_'));
   // GET list + one
-  const list = await (await fetch(`${srv.base}/builder/content-types`)).json();
+  const list = await (await fetch(`${srv.base}/builder/modules`)).json();
   assert.ok(list.ok && list.schemas.some((s: { apiId: string }) => s.apiId === 'gadget'));
-  assert.equal((await fetch(`${srv.base}/builder/content-types/gadget`)).status, 200);
-  assert.equal((await fetch(`${srv.base}/builder/content-types/nope`)).status, 404);
+  assert.equal((await fetch(`${srv.base}/builder/modules/gadget`)).status, 200);
+  assert.equal((await fetch(`${srv.base}/builder/modules/nope`)).status, 404);
   assert.equal((await fetch(`${srv.base}/gadget`)).status, 200); // live
 });
 
@@ -88,7 +88,7 @@ test('POST preview → 200 with changes + generatedSource, but writes/migrates N
   const r = await preview('widget', { apiId: 'widget', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   assert.equal(r.status, 200);
   const p = await r.json();
-  assert.ok(p.ok && p.applied.some((c: { kind: string }) => c.kind === 'addType') && /defineType/.test(p.generatedSource));
+  assert.ok(p.ok && p.applied.some((c: { kind: string }) => c.kind === 'addType') && /defineSchema/.test(p.generatedSource));
   assert.equal(await tableExists(sql, 'ct_widget'), false); // dry run
   assert.equal((await fetch(`${srv.base}/widget`)).status, 404);
 });

@@ -1,5 +1,5 @@
 import type { Sql } from 'postgres';
-import type { ContentTypeDef } from '../db/registry.ts';
+import type { ModuleDef } from '../db/registry.ts';
 import { getFilesByIds, type FileAsset } from '../db/file.repository.ts';
 import { JSON_CT, type CoreResponse } from './read.router.ts';
 
@@ -76,7 +76,7 @@ export function parsePopulateNames(query: string): { names: Set<string>; star: b
  * the named media fields. Returns an empty Map when nothing media is to be populated => the caller skips
  * the post-step and returns the engine Buffer untouched (byte-identical).
  */
-export function mediaPopulateTargets(def: ContentTypeDef, query: string): Map<string, { multiple: boolean }> {
+export function mediaPopulateTargets(def: ModuleDef, query: string): Map<string, { multiple: boolean }> {
   const out = new Map<string, { multiple: boolean }>();
   if (def.mediaFields.size === 0) return out;
   const { names, star } = parsePopulateNames(query);

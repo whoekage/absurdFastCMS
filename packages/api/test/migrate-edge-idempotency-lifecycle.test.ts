@@ -2,7 +2,7 @@ import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { migrate, migrateLint, MigrationBlockedError } from '../src/db/schema/migrate.ts';
-import type { ContentTypeSchema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
+import type { Schema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
 import type { FieldOptions } from '../src/db/type.catalog.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
@@ -19,7 +19,7 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[]): ContentTypeSchema => ({ id, apiId, fields });
+const ct = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -38,8 +38,8 @@ after(async () => {
 });
 
 /** Read the applied-snapshot rows for a type id (the canonical-JSON bookkeeping the diff reads back). */
-async function appliedRows(s: Sql): Promise<{ type_id: string; api_id: string; schema: ContentTypeSchema }[]> {
-  return s<{ type_id: string; api_id: string; schema: ContentTypeSchema }[]>`
+async function appliedRows(s: Sql): Promise<{ type_id: string; api_id: string; schema: Schema }[]> {
+  return s<{ type_id: string; api_id: string; schema: Schema }[]>`
     SELECT type_id, api_id, schema FROM _schema_applied ORDER BY type_id
   `;
 }

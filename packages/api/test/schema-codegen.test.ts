@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateTypes } from '../src/db/schema/codegen.ts';
-import type { ContentTypeSchema } from '../src/db/schema/model.ts';
+import type { Schema } from '../src/db/schema/model.ts';
 
 /**
  * S5-A — the pure types codegen (no DB). JSON is the source; this derives the `.d.ts`. Validates the
@@ -9,7 +9,7 @@ import type { ContentTypeSchema } from '../src/db/schema/model.ts';
  * conditional system fields (draft&publish / i18n).
  */
 
-const article: ContentTypeSchema = {
+const article: Schema = {
   id: 'ct_article',
   apiId: 'article',
   options: { draftAndPublish: false, i18n: false },

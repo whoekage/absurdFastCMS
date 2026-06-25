@@ -150,7 +150,7 @@ const NULL_LIT = Buffer.from('null', 'utf8');
 const POPULATE_DEPTH_CAP = 2;
 
 /**
- * The content-type REGISTRY + output facade. Owns named content-types -> {@link Table} instances and
+ * The content-type REGISTRY + output facade. Owns named modules -> {@link Table} instances and
  * their per-table {@link OutputArena}. Thin by design: the Table does all the query work (filter /
  * sort / paginate via `scanTree`/`query`); the Engine adds the serialize-on-write output store and
  * the list/single Buffer assembly (late materialization).

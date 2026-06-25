@@ -2,7 +2,7 @@ import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { migrate, readAppliedSchemas, MigrationBlockedError } from '../src/db/schema/migrate.ts';
-import type { ContentTypeSchema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
+import type { Schema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
 import type { FieldOptions } from '../src/db/type.catalog.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog, tableExists, physicalColumns } from './helpers.ts';
@@ -17,7 +17,7 @@ import { cleanCatalog, tableExists, physicalColumns } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[]): ContentTypeSchema => ({ id, apiId, fields });
+const ct = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -36,12 +36,12 @@ after(async () => {
 });
 
 // Owner ct_post (manyToOne author -> writer, inverse "posts"). Target ct_writer.
-const writer = (extra: FieldSchema[] = []): ContentTypeSchema => ({
+const writer = (extra: FieldSchema[] = []): Schema => ({
   id: 'ct_w',
   apiId: 'writer',
   fields: [f('f_nm', 'name', 'string', { nullable: true }), ...extra],
 });
-const postWithRel = (extra: FieldSchema[] = []): ContentTypeSchema => ({
+const postWithRel = (extra: FieldSchema[] = []): Schema => ({
   id: 'ct_p',
   apiId: 'post',
   fields: [f('f_ti', 'title', 'string', { nullable: true }), ...extra],
@@ -119,7 +119,7 @@ test('renaming the OWNER scalar field (id-matched) keeps edges + endpoint data i
   const { wId, p1Id } = await seedAuthorGraph();
 
   // Rename ct_post.title -> headline (same field id f_ti) — a RENAME COLUMN, lossless, must not disturb edges.
-  const renamed: ContentTypeSchema = {
+  const renamed: Schema = {
     id: 'ct_p',
     apiId: 'post',
     fields: [f('f_ti', 'headline', 'string', { nullable: true })],
@@ -142,7 +142,7 @@ test('renaming the OWNER scalar field (id-matched) keeps edges + endpoint data i
 test('dropping a relation is BLOCKED without ack — link table + edges remain intact', async () => {
   const { wId, p1Id } = await seedAuthorGraph();
 
-  const postNoRel: ContentTypeSchema = { id: 'ct_p', apiId: 'post', fields: [f('f_ti', 'title', 'string', { nullable: true })] };
+  const postNoRel: Schema = { id: 'ct_p', apiId: 'post', fields: [f('f_ti', 'title', 'string', { nullable: true })] };
   await assert.rejects(migrate(sql, [writer(), postNoRel]), MigrationBlockedError);
 
   // Nothing changed: link table still present, edges + endpoint rows untouched, applied snapshot unchanged.
@@ -159,7 +159,7 @@ test('dropping a relation is BLOCKED without ack — link table + edges remain i
 test('dropping a relation with allowDestructive removes the link table but keeps endpoint rows', async () => {
   const { wId, p1Id, p2Id } = await seedAuthorGraph();
 
-  const postNoRel: ContentTypeSchema = { id: 'ct_p', apiId: 'post', fields: [f('f_ti', 'title', 'string', { nullable: true })] };
+  const postNoRel: Schema = { id: 'ct_p', apiId: 'post', fields: [f('f_ti', 'title', 'string', { nullable: true })] };
   const r = await migrate(sql, [writer(), postNoRel], { allowDestructive: true });
   assert.deepEqual(r.applied.map((c) => c.kind), ['dropRelation']);
 
@@ -182,7 +182,7 @@ test('ADD a NEW relation to an existing owner creates a fresh link table; existi
   const [p] = await sql<{ id: number }[]>`INSERT INTO ct_post (title) VALUES ('p1') RETURNING id`;
   await sql.unsafe(`INSERT INTO post_author_lnk (owner_id, related_id) VALUES (${p!.id}, ${w!.id})`);
 
-  const postTwoRels: ContentTypeSchema = {
+  const postTwoRels: Schema = {
     id: 'ct_p',
     apiId: 'post',
     fields: [f('f_ti', 'title', 'string', { nullable: true })],
@@ -204,8 +204,8 @@ test('ADD a NEW relation to an existing owner creates a fresh link table; existi
 
 test('manyToMany link table enforces UNIQUE(owner_id, related_id); ord + edges survive an unrelated add', async () => {
   // post <-> tag manyToMany. The cardinality contract is UNIQUE(owner_id, related_id).
-  const tag: ContentTypeSchema = { id: 'ct_t', apiId: 'tag', fields: [f('f_lb', 'label', 'string', { nullable: true })] };
-  const postM2M: ContentTypeSchema = {
+  const tag: Schema = { id: 'ct_t', apiId: 'tag', fields: [f('f_lb', 'label', 'string', { nullable: true })] };
+  const postM2M: Schema = {
     id: 'ct_p',
     apiId: 'post',
     fields: [f('f_ti', 'title', 'string', { nullable: true })],

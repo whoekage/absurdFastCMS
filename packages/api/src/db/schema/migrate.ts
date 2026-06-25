@@ -19,7 +19,7 @@ import {
 } from '../ddl.ts';
 import { resolveFields } from '../content-type.repository.ts';
 import type { ResolvedType } from '../type.catalog.ts';
-import { contentTypeSchemaZ, type ContentTypeSchema } from './model.ts';
+import { schemaZ, type Schema } from './model.ts';
 import { fieldSchemaToSpec } from './adapt.ts';
 import { diff, type Change, type ChangeSet } from './diff.ts';
 
@@ -285,13 +285,13 @@ export async function ensureAppliedTable(sql: Sql): Promise<void> {
 }
 
 /** The last-applied catalog, reconstructed from `_schema_applied` (Zod-validated against corruption). */
-export async function readAppliedSchemas(sql: Sql): Promise<ContentTypeSchema[]> {
+export async function readAppliedSchemas(sql: Sql): Promise<Schema[]> {
   const rows = await sql<{ schema: unknown }[]>`SELECT schema FROM _schema_applied ORDER BY api_id`;
-  return rows.map((r) => contentTypeSchemaZ.parse(r.schema) as ContentTypeSchema);
+  return rows.map((r) => schemaZ.parse(r.schema) as Schema);
 }
 
 /** Set `_schema_applied` to EXACTLY `next` (delete dropped types, upsert the rest) — within the apply tx. */
-async function reconcileApplied(tx: Sql, next: ContentTypeSchema[]): Promise<void> {
+async function reconcileApplied(tx: Sql, next: Schema[]): Promise<void> {
   const ids = next.map((s) => s.id);
   if (ids.length > 0) await tx`DELETE FROM _schema_applied WHERE type_id <> ALL(${ids})`;
   else await tx`DELETE FROM _schema_applied`;
@@ -354,7 +354,7 @@ export function planRenameSteps(renames: readonly { from: string; to: string; fi
  * BACKFILL `_schema_applied` after a baseline seed materialized the tables out-of-band (so the next boot's
  * diff is empty). Reuses the same upsert as a migrate's reconcile, in its own tx.
  */
-export async function writeAppliedSnapshot(sql: Sql, schemas: ContentTypeSchema[]): Promise<void> {
+export async function writeAppliedSnapshot(sql: Sql, schemas: Schema[]): Promise<void> {
   await ensureAppliedTable(sql);
   await sql.begin(async (tx) => {
     await reconcileApplied(tx as unknown as Sql, schemas);
@@ -362,7 +362,7 @@ export async function writeAppliedSnapshot(sql: Sql, schemas: ContentTypeSchema[
 }
 
 /** Apply the change-set + reconcile the applied snapshot in ONE serialized transaction (all-or-nothing). */
-async function applyChangeSet(sql: Sql, cs: ChangeSet, next: ContentTypeSchema[]): Promise<void> {
+async function applyChangeSet(sql: Sql, cs: ChangeSet, next: Schema[]): Promise<void> {
   // Pre-plan per-table column renames into a collision-safe step sequence (handles the field-name SWAP /
   // rename-cycle that a naive in-order apply hits with 42701). The plan executes as a block at the FIRST
   // renameField of each table; the logical `applied` list (cs.changes) is unaffected.
@@ -411,7 +411,7 @@ async function applyChangeSet(sql: Sql, cs: ChangeSet, next: ContentTypeSchema[]
  * Takes the IR (not a directory) so it is decoupled from the source format — the loader lives at the edge
  * (`compose/migrate.ts` / `createConti`), and tests drive it with IR directly.
  */
-export async function migrate(sql: Sql, next: ContentTypeSchema[], opts: MigrateOptions = {}): Promise<MigrateResult> {
+export async function migrate(sql: Sql, next: Schema[], opts: MigrateOptions = {}): Promise<MigrateResult> {
   await ensureAppliedTable(sql);
   const prev = await readAppliedSchemas(sql);
   const cs = diff(prev, next);
@@ -428,7 +428,7 @@ export async function migrate(sql: Sql, next: ContentTypeSchema[], opts: Migrate
  */
 export async function migrateLint(
   sql: Sql,
-  next: ContentTypeSchema[],
+  next: Schema[],
   opts: MigrateOptions = {},
 ): Promise<{ changes: readonly Change[]; blocked: readonly Change[] }> {
   await ensureAppliedTable(sql);

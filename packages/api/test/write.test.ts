@@ -32,8 +32,8 @@ before(async () => {
   db = await createFileDatabase('wr');
   sql = db.sql;
   // A SECOND content-type (widget) to prove per-type cache isolation on an article write.
-  const widget: import('../src/db/schema/model.ts').ContentTypeSchema = { id: 'ct_widget', apiId: 'widget', fields: [{ id: 'f_label', name: 'label', type: 'string', options: { nullable: false } }] };
-  const blank: import('../src/db/schema/model.ts').ContentTypeSchema = { id: 'ct_blank', apiId: 'blank', fields: [] }; // system-fields-only
+  const widget: import('../src/db/schema/model.ts').Schema = { id: 'ct_widget', apiId: 'widget', fields: [{ id: 'f_label', name: 'label', type: 'string', options: { nullable: false } }] };
+  const blank: import('../src/db/schema/model.ts').Schema = { id: 'ct_blank', apiId: 'blank', fields: [] }; // system-fields-only
   const server = await startTestServerFromSchemas(sql, [ARTICLE_SCHEMA, widget, blank], {
     seed: async () => { await sql`INSERT INTO ct_widget (label) VALUES ('w1')`; await seedRows(); },
   });

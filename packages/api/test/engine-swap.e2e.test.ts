@@ -12,7 +12,7 @@ import { cleanCatalog, startTestServerFromFiles } from './helpers.ts';
  * SAME-running uWS server and asserts a GET reflects the change WITHOUT a restart (the live swap): add a
  * type, add a field (a pre-existing row survives the re-stream), lossless field rename, a relation
  * registered live, a FAILED edit keeps last-good serving, a no-op skips the swap, hooks are swap-aware, and
- * the legacy /content-types mutation path is 410 while the Builder is active. ALL assertions go via HTTP.
+ * the legacy /modules mutation path is 410 while the Builder is active. ALL assertions go via HTTP.
  *
  * (dropType / renameType are handled by swapFromIR but are not reachable through applyEdit's whole-type
  * upsert — they need the S5/S8 id-keyed routes — so they are covered by the migrate suite, not here.)
@@ -144,10 +144,10 @@ test('8 — hooks are SWAP-AWARE: a hooks.ts added then picked up on the next ed
   assert.equal((await dataOf('/gadget')).data[0]!.title, 'HI'); // the swapped-in hook ran (live.hooks getter)
 });
 
-test('11 — the legacy /content-types mutation route is GONE (404); the files-first Builder works', async () => {
-  // Legacy-meta teardown: the meta controller is deleted, so POST /content-types is no longer a registered
+test('11 — the legacy /modules mutation route is GONE (404); the files-first Builder works', async () => {
+  // Legacy-meta teardown: the meta controller is deleted, so POST /modules is no longer a registered
   // route — it falls through to the 404 fallback (was a 410 shim during the transition).
-  const r = await fetch(`${srv.base}/content-types`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  const r = await fetch(`${srv.base}/modules`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
   assert.equal(r.status, 404);
   const ok = await srv.applyEdit({ apiId: 'widget', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   assert.ok(ok.ok);

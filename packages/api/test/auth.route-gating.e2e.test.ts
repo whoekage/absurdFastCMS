@@ -28,11 +28,11 @@ import { RbacRegistry } from '../src/auth/rbac.registry.ts';
  * promoted to super-admin exactly once (idempotent + race-safe); no body-supplied role/userId escalates;
  * no path/method bypass; and drafts never leak on the public read path under gating.
  *
- * LEGACY-META TEARDOWN (rewritten): this file used to gate the legacy `POST /content-types` meta CONTROLLER,
+ * LEGACY-META TEARDOWN (rewritten): this file used to gate the legacy `POST /modules` meta CONTROLLER,
  * which is deleted. The gate matrix is re-expressed onto the SURVIVING gated surface — the same shared
  * `gate()` (SessionCache.validate + RbacRegistry.checkPermission) backs all three:
  *   - `builder.manage` → the files-first Builder routes (`POST /builder/reload`, `PUT/DELETE/preview
- *     /builder/content-types/:apiId`); the per-field/relation/component-field sub-route 401 cases collapse
+ *     /builder/modules/:apiId`); the per-field/relation/component-field sub-route 401 cases collapse
  *     into the whole-type Builder gate (documented coverage delta — the granular sub-routes no longer exist).
  *   - `content.create|update|delete|publish` → the data write routes on `crudt`.
  *   - `media.upload` → `POST /_files/upload`.
@@ -87,12 +87,12 @@ async function grantRole(userId: string, roleName: string): Promise<void> {
 
 /** The current Builder catalog ETag (If-Match precondition for PUT/DELETE). */
 async function builderEtag(): Promise<string> {
-  return (await fetch(`${base}/builder/content-types`)).headers.get('etag') ?? '';
+  return (await fetch(`${base}/builder/modules`)).headers.get('etag') ?? '';
 }
 
 /** Whether the Builder catalog currently exposes a type (a files-first replacement for the meta-row check). */
 async function builderHasType(apiId: string): Promise<boolean> {
-  const list = (await (await fetch(`${base}/builder/content-types`)).json()) as { schemas?: { apiId: string }[] };
+  const list = (await (await fetch(`${base}/builder/modules`)).json()) as { schemas?: { apiId: string }[] };
   return (list.schemas ?? []).some((s) => s.apiId === apiId);
 }
 
@@ -203,7 +203,7 @@ test('checklist#1/#10: a builder.manage mutation is 401 with no session, 403 as 
   assert.ok(reload.status === 200 || reload.status === 201, `expected 2xx reload, got ${reload.status} ${await reload.clone().text()}`);
 
   assert.equal(await builderHasType('gatecheck'), false, 'gatecheck does not exist yet');
-  const create = await fetch(`${base}/builder/content-types/gatecheck`, {
+  const create = await fetch(`${base}/builder/modules/gatecheck`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json', cookie: adminCookie, 'if-match': await builderEtag() },
     body: JSON.stringify({ apiId: 'gatecheck', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] }),
@@ -215,9 +215,9 @@ test('checklist#1/#10: a builder.manage mutation is 401 with no session, 403 as 
 test('checklist#1: every gated mutation route is 401 with no session (builder + data + media)', async () => {
   const routes: [string, string, string | undefined][] = [
     ['POST', '/builder/reload', '{}'],
-    ['POST', '/builder/content-types/x/preview', '{"apiId":"x","fields":[]}'],
-    ['PUT', '/builder/content-types/x', '{"apiId":"x","fields":[]}'],
-    ['DELETE', '/builder/content-types/x', undefined],
+    ['POST', '/builder/modules/x/preview', '{"apiId":"x","fields":[]}'],
+    ['PUT', '/builder/modules/x', '{"apiId":"x","fields":[]}'],
+    ['DELETE', '/builder/modules/x', undefined],
     ['POST', '/crudt', '{"title":"x"}'],
     ['PUT', '/crudt/1', '{"title":"x"}'],
     ['DELETE', '/crudt/1', undefined],
@@ -236,9 +236,9 @@ test('checklist#1: every gated mutation route is 401 with no session (builder + 
 // READS STAY PUBLIC (checklist #9 — no draft leak; reads need no auth).
 // ---------------------------------------------------------------------------------------------------
 
-test('reads stay PUBLIC: GET /builder/content-types + GET /:type need no session (200)', async () => {
-  const list = await fetch(`${base}/builder/content-types`);
-  assert.equal(list.status, 200, 'GET /builder/content-types must be public');
+test('reads stay PUBLIC: GET /builder/modules + GET /:type need no session (200)', async () => {
+  const list = await fetch(`${base}/builder/modules`);
+  assert.equal(list.status, 200, 'GET /builder/modules must be public');
   const read = await fetch(`${base}/crudt`);
   assert.equal(read.status, 200, 'GET /:type must be public with no session');
 });
@@ -319,7 +319,7 @@ test('checklist#3/#4: a body-supplied role/userId/isAdmin NEVER escalates authz'
   await grantRole(await userIdOf('massassign@example.com'), 'author');
   const adminId = await userIdOf('admin@example.com');
 
-  const res = await fetch(`${base}/builder/content-types/evil`, {
+  const res = await fetch(`${base}/builder/modules/evil`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json', cookie: authorCookie, 'if-match': await builderEtag() },
     body: JSON.stringify({
@@ -336,7 +336,7 @@ test('checklist#3/#4: a body-supplied role/userId/isAdmin NEVER escalates authz'
   assert.equal(grants.length, 1, 'only the explicitly-granted author role exists; the body added nothing');
 
   // A request with userId in the body but NO session → 401 (body userId ignored).
-  const noSession = await fetch(`${base}/builder/content-types/evil2`, {
+  const noSession = await fetch(`${base}/builder/modules/evil2`, {
     method: 'PUT', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ apiId: 'evil2', fields: [], userId: adminId, role: 'super-admin' }),
   });
@@ -463,7 +463,7 @@ test('a ZERO-permission (no perms seeded) session is 403 on every gated write, p
   // Every gated builder/write route → 403 (authenticated, but lacking the mapped perm).
   const gated: [string, string, string | undefined][] = [
     ['POST', '/builder/reload', '{}'],
-    ['PUT', '/builder/content-types/nopermct', JSON.stringify({ apiId: 'nopermct', fields: [] })],
+    ['PUT', '/builder/modules/nopermct', JSON.stringify({ apiId: 'nopermct', fields: [] })],
     ['POST', '/crudt', JSON.stringify({ title: 'x' })],
     ['PUT', '/crudt/1', JSON.stringify({ title: 'x' })],
     ['DELETE', '/crudt/1', undefined],

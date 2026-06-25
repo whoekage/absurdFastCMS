@@ -5,7 +5,7 @@ import { Registry } from '../src/db/registry.ts';
 import { DetachedTable, Engine } from '../src/store/engine.ts';
 import { insertEntry, EntryWriteError } from '../src/db/entry.repository.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
-import type { ContentTypeSchema } from '../src/db/schema/model.ts';
+import type { Schema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { ct } from './helpers.ts';
 
@@ -18,7 +18,7 @@ import { ct } from './helpers.ts';
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
-let gadgetSchema: ContentTypeSchema;
+let gadgetSchema: Schema;
 
 before(async () => {
   db = await createFileDatabase('erb');

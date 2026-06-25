@@ -1,5 +1,5 @@
 import type { Sql } from 'postgres';
-import type { ComponentDef, ContentTypeDef, Registry } from '../db/registry.ts';
+import type { ComponentDef, ModuleDef, Registry } from '../db/registry.ts';
 import type { Engine } from '../store/engine.ts';
 import type { FilterNode } from '../store/table.ts';
 import { getFilesByIds, type FileAsset } from '../db/file.repository.ts';
@@ -41,7 +41,7 @@ import { JSON_CT, type CoreResponse } from './read.router.ts';
  */
 
 /** The component fields of `def` THIS request asked to populate (`*` -> all). Empty -> caller skips. */
-export function componentPopulateTargets(def: ContentTypeDef, query: string): Map<string, { kind: string; component?: string; components?: readonly string[] }> {
+export function componentPopulateTargets(def: ModuleDef, query: string): Map<string, { kind: string; component?: string; components?: readonly string[] }> {
   const out = new Map<string, { kind: string; component?: string; components?: readonly string[] }>();
   if (def.componentFields.size === 0) return out;
   const { names, star } = parsePopulateNames(query);

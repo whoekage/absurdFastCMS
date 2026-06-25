@@ -2,18 +2,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { defineType, c, defToSchema, type InferType } from '../src/db/schema/define.ts';
+import { defineSchema, c, defToSchema, type InferType } from '../src/db/schema/define.ts';
 import { parseSchema } from '../src/db/schema/serialize.ts';
 
 /**
- * Phase 1 of the TS-DSL pivot — `defineType` + `c.*` builders. Proves the DSL introspects to the SAME IR
+ * Phase 1 of the TS-DSL pivot — `defineSchema` + `c.*` builders. Proves the DSL introspects to the SAME IR
  * the JSON path produced (so diff/migrate/registry are unchanged), splits relations out of `fields`, falls
  * back ids to the key/apiId, and that types are inferred (the compile-time block fails `tsc` if wrong).
  */
 
 const articlePath = fileURLToPath(new URL('./fixtures/article.json', import.meta.url));
 
-const Article = defineType({
+const Article = defineSchema({
   id: 'ct_article',
   options: { draftAndPublish: false, i18n: false },
   fields: {
@@ -35,7 +35,7 @@ test('defToSchema produces the SAME IR as the committed article.json (minus cosm
 });
 
 test('defToSchema splits relations out of fields', () => {
-  const Post = defineType({
+  const Post = defineSchema({
     id: 'ct_post',
     fields: {
       title: c.string({ id: 'f_t' }),
@@ -49,7 +49,7 @@ test('defToSchema splits relations out of fields', () => {
 });
 
 test('ids fall back to the field key / apiId when not pinned', () => {
-  const Thing = defineType({ fields: { name: c.string() } });
+  const Thing = defineSchema({ fields: { name: c.string() } });
   const ir = defToSchema(Thing, 'thing');
   assert.equal(ir.id, 'thing'); // type id <- apiId
   assert.equal(ir.fields[0]!.id, 'name'); // field id <- key

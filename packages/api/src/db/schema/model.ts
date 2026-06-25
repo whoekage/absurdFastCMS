@@ -83,7 +83,7 @@ const relationSchemaZ = z
  * `ct_<apiId>` when absent — stored only to mirror Strapi's display↔table decoupling). `info` is cosmetic
  * (unused by the registry). Field ORDER is significant (the byte-identical wire order).
  */
-export const contentTypeSchemaZ = z
+export const schemaZ = z
   .object({
     id: idSchema,
     apiId: z.string().min(1),
@@ -146,7 +146,7 @@ export interface ComponentSchema {
 }
 
 /** A whole content-type declaration (one `schema/<apiId>.json` file). */
-export interface ContentTypeSchema {
+export interface Schema {
   /** Stable identity (never changes; survives an apiId/displayName rename). */
   id: string;
   apiId: string;

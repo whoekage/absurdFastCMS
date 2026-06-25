@@ -1,5 +1,5 @@
 import { coerceI64, coerceDecimal, formatDecimal } from '../store/column.ts';
-import type { ComponentDef, ContentTypeDef, Registry, RegistryField, RelationMeta } from './registry.ts';
+import type { ComponentDef, ModuleDef, Registry, RegistryField, RelationMeta } from './registry.ts';
 import { SYSTEM_COLUMN_NAMES } from './registry.ts';
 import type { ComponentFieldKind } from './type.catalog.ts';
 
@@ -73,7 +73,7 @@ export interface ParsedBody {
  * type with NO component field never reaches the registry-dependent arm (byte-identical). A component
  * field hit WITHOUT a registry is a loud {@link BodyParseError} (a wiring bug, not a client error shape).
  */
-export function validateBody(def: ContentTypeDef, raw: unknown, mode: WriteMode, registry?: Registry): ParsedBody {
+export function validateBody(def: ModuleDef, raw: unknown, mode: WriteMode, registry?: Registry): ParsedBody {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new BodyParseError('request body must be a JSON object');
   }

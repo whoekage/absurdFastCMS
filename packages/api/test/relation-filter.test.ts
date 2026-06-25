@@ -4,7 +4,7 @@ import type { Sql } from 'postgres';
 import { Registry } from '../src/db/registry.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
 import { deriveLinkTableName } from '../src/db/ddl.ts';
-import { mintId, type ContentTypeSchema } from '../src/db/schema/model.ts';
+import { mintId, type Schema } from '../src/db/schema/model.ts';
 import { buildEngine, rebuildType } from '../src/db/engine.loader.ts';
 import { Engine } from '../src/store/engine.ts';
 import { CursorCodec } from '../src/store/cursor.codec.ts';
@@ -55,11 +55,11 @@ async function insertEdge(link: string, ownerPk: number, relatedPk: number): Pro
 }
 
 /** Materialize the ct_ + link tables from in-code IR (files-first, zero meta). */
-async function setupCatalog(schemas: ContentTypeSchema[]): Promise<void> {
+async function setupCatalog(schemas: Schema[]): Promise<void> {
   await migrate(sql, schemas, { allowDestructive: true });
 }
 
-async function boot(schemas: ContentTypeSchema[]): Promise<Engine> {
+async function boot(schemas: Schema[]): Promise<Engine> {
   // Wire a cursor codec so the keyset (seek) tests have a working codec; harmless for offset tests.
   return buildEngine(sql, Registry.fromSchemas(schemas), { cursorCodec: new CursorCodec('relfilter-secret') });
 }

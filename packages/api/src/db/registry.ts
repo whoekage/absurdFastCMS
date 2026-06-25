@@ -2,16 +2,16 @@ import type { Sql } from 'postgres';
 import type { ColumnType } from '../store/column.ts';
 import type { FieldDef } from '../store/table.ts';
 import { deriveTableName, validateIdentifier, RELATION_KINDS, type RelationKind } from './ddl.ts';
-import type { ContentTypeRow, FieldRow, RelationRow } from './content-type.repository.ts';
+import type { ModuleRow, FieldRow, RelationRow } from './content-type.repository.ts';
 import type { ComponentTypeRow, ComponentFieldRow } from './component-type.repository.ts';
 import { isComponentFieldKind, type CmsType, type ComponentFieldKind } from './type.catalog.ts';
 import { schemaToRows, relationRowsByType, componentSchemaToRows } from './schema/adapt.ts';
-import type { ContentTypeSchema, ComponentSchema } from './schema/model.ts';
+import type { Schema, ComponentSchema } from './schema/model.ts';
 
 /**
  * THE RAM SOURCE OF TRUTH at runtime. Built at boot from the files-first content-type schemas (via
  * {@link Registry.fromSchemas}), the
- * {@link Registry} holds a per-type {@link ContentTypeDef} that drives EVERYTHING downstream — the
+ * {@link Registry} holds a per-type {@link ModuleDef} that drives EVERYTHING downstream — the
  * engine `define`, the loader's typed coercion, the body validator, and the write repo — so they can
  * never diverge from the DB schema. Every SQL identifier those modules use (table + column names)
  * comes ONLY from a def built here (validated at create time, re-validated here), never from client
@@ -126,7 +126,7 @@ export interface RegistryField {
   localized: boolean;
 }
 
-/** A positional coercion descriptor (parallel to {@link ContentTypeDef.fields}) for the loader hot path. */
+/** A positional coercion descriptor (parallel to {@link ModuleDef.fields}) for the loader hot path. */
 export interface ColumnDescriptor {
   name: string;
   kind: 'id' | 'i64' | 'decimal' | 'date' | 'json' | 'passthrough';
@@ -160,7 +160,7 @@ export interface RelationMeta {
 }
 
 /** A content-type fully resolved for the runtime — the unit the registry hands to every consumer. */
-export interface ContentTypeDef {
+export interface ModuleDef {
   /** The canonical stored api_id (the engine + registry key). */
   apiId: string;
   /** 'ct_'+apiId (re-validated via deriveTableName at build). */
@@ -486,8 +486,8 @@ function buildRelation(apiId: string, row: RelationRow): RelationMeta {
   return meta;
 }
 
-/** Assemble a full {@link ContentTypeDef} from a content_types row + its user field rows + relation rows. */
-function buildDef(ct: ContentTypeRow, fieldRows: FieldRow[], relationRows: RelationRow[]): ContentTypeDef {
+/** Assemble a full {@link ModuleDef} from a content_types row + its user field rows + relation rows. */
+function buildDef(ct: ModuleRow, fieldRows: FieldRow[], relationRows: RelationRow[]): ModuleDef {
   // Re-derive the table name (re-validates the api_id identifier — defense-in-depth) rather than
   // trusting the stored table_name verbatim.
   const tableName = deriveTableName(ct.api_id);
@@ -634,7 +634,7 @@ function componentEngineType(r: ComponentFieldRow): string {
  * (listContentTypes + getFields-per-type) and per-type rebuild on a schema change / write.
  */
 export class Registry {
-  private readonly byApiId = new Map<string, ContentTypeDef>();
+  private readonly byApiId = new Map<string, ModuleDef>();
   /** be-05: the parallel component-type store (no engine presence; pure schema for write/populate walks). */
   private readonly components = new Map<string, ComponentDef>();
 
@@ -644,12 +644,12 @@ export class Registry {
   }
 
   /** O(1) def lookup, or undefined. */
-  get(apiId: string): ContentTypeDef | undefined {
+  get(apiId: string): ModuleDef | undefined {
     return this.byApiId.get(apiId);
   }
 
   /** Every def, in build order. */
-  all(): ContentTypeDef[] {
+  all(): ModuleDef[] {
     return [...this.byApiId.values()];
   }
 
@@ -675,7 +675,7 @@ export class Registry {
    * cross-contaminate through a shared on-disk dir. Each schema → row shapes (`schemaToRows`) → `buildDef`,
    * and components/relations are built in cross-type passes (`componentSchemaToRows`/`relationRowsByType`).
    */
-  static fromSchemas(schemas: ContentTypeSchema[], components: ComponentSchema[] = []): Registry {
+  static fromSchemas(schemas: Schema[], components: ComponentSchema[] = []): Registry {
     const reg = new Registry();
     // Components FIRST (a content-type / component field can reference one).
     for (const cs of components) {

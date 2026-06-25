@@ -1,5 +1,5 @@
 import type { Sql, TransactionSql } from 'postgres';
-import type { ContentTypeDef, RelationMeta } from './registry.ts';
+import type { ModuleDef, RelationMeta } from './registry.ts';
 import type { RelationOp } from './body.parser.ts';
 import { quoteIdent, validateIdentifier, inverseKind, type RelationKind } from './ddl.ts';
 import { EntryWriteError, mapPgError } from './entry.repository.ts';
@@ -33,7 +33,7 @@ function owningKind(meta: RelationMeta): RelationKind {
 }
 
 /** Apply every relation op for `ownerId` (the body-owner's row) within the caller's tx `tx`. */
-export async function applyRelationOps(tx: Sql | TransactionSql, def: ContentTypeDef, ownerId: number, ops: RelationOp[]): Promise<void> {
+export async function applyRelationOps(tx: Sql | TransactionSql, def: ModuleDef, ownerId: number, ops: RelationOp[]): Promise<void> {
   for (const op of ops) {
     const meta = def.relationsByField.get(op.field);
     if (meta === undefined) throw new EntryWriteError('write rejected: unknown relation field'); // unreachable past the validator.

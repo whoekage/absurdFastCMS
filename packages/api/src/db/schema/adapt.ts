@@ -1,12 +1,12 @@
-import type { ContentTypeRow, FieldRow, RelationRow, FieldSpec } from '../content-type.repository.ts';
+import type { ModuleRow, FieldRow, RelationRow, FieldSpec } from '../content-type.repository.ts';
 import { resolveFields } from '../content-type.repository.ts';
 import { resolveComponentFields, type ComponentTypeRow, type ComponentFieldRow } from '../component-type.repository.ts';
 import { deriveTableName, deriveLinkTableName, inverseKind } from '../ddl.ts';
-import type { ContentTypeSchema, ComponentSchema, FieldSchema } from './model.ts';
+import type { Schema, ComponentSchema, FieldSchema } from './model.ts';
 
 /**
  * The ADAPTER from the files-first schema model to the meta ROW shapes the {@link Registry} already
- * consumes ({@link ContentTypeRow}/{@link FieldRow}/{@link RelationRow}). This is the seam that lets
+ * consumes ({@link ModuleRow}/{@link FieldRow}/{@link RelationRow}). This is the seam that lets
  * `Registry.fromSchemas` reuse the battle-tested `buildDef` verbatim: schema → rows → buildDef.
  *
  * The forward direction reuses the EXACT `resolveFields` the meta writer (`createContentType`) uses, so a
@@ -47,7 +47,7 @@ export function fieldSchemaToSpec(f: FieldSchema): FieldSpec {
   return spec;
 }
 
-export function schemaToFieldSpecs(schema: ContentTypeSchema): FieldSpec[] {
+export function schemaToFieldSpecs(schema: Schema): FieldSpec[] {
   return schema.fields.map(fieldSchemaToSpec);
 }
 
@@ -59,17 +59,17 @@ function defaultText(value: unknown): string | null {
 }
 
 /**
- * Convert a {@link ContentTypeSchema} into the meta rows `buildDef` expects. Resolves every field through
+ * Convert a {@link Schema} into the meta rows `buildDef` expects. Resolves every field through
  * the catalog (via `resolveFields`) so the file path is byte-for-byte what the meta writer would store.
  *
  * RELATIONS are NOT produced here: a relation's identity spans TWO types (an owner row on the owner + a
  * synthesized inverse row on the target), so one schema in isolation can't build them. {@link relationRowsByType}
  * does the cross-type pass; {@link schemaToRows} returns only the ct + scalar field rows.
  */
-export function schemaToRows(schema: ContentTypeSchema): { ct: ContentTypeRow; fieldRows: FieldRow[] } {
+export function schemaToRows(schema: Schema): { ct: ModuleRow; fieldRows: FieldRow[] } {
   const resolved = resolveFields(schemaToFieldSpecs(schema));
   const epoch = new Date(0); // synthetic created_at/updated_at — buildDef does not read them.
-  const ct: ContentTypeRow = {
+  const ct: ModuleRow = {
     id: SYNTHETIC_ID,
     api_id: schema.apiId,
     table_name: deriveTableName(schema.apiId),
@@ -104,8 +104,8 @@ export function schemaToRows(schema: ContentTypeSchema): { ct: ContentTypeRow; f
  * The inverse side lives on the target, which is why this is a cross-type pass and not part of
  * `schemaToRows`. A dangling target (relation points at an unknown type) fails LOUD.
  */
-export function relationRowsByType(schemas: ContentTypeSchema[]): Map<string, RelationRow[]> {
-  const byApiId = new Map<string, ContentTypeSchema>();
+export function relationRowsByType(schemas: Schema[]): Map<string, RelationRow[]> {
+  const byApiId = new Map<string, Schema>();
   for (const s of schemas) byApiId.set(s.apiId.toLowerCase(), s);
   const out = new Map<string, RelationRow[]>();
   const epoch = new Date(0);

@@ -5,7 +5,7 @@ import { config } from '../config.ts';
 /**
  * `ContiConfig` — the typed, config-as-code shape of the SERVER configuration a user authors in
  * `conti.config.ts`. This describes how the server is WIRED (db connection, listen port, auth/cursor
- * secrets, storage, i18n default, debug) — it is NOT the content SCHEMA (content-types are data in
+ * secrets, storage, i18n default, debug) — it is NOT the content SCHEMA (modules are data in
  * Postgres, managed by the Builder). Keep that boundary: server wiring = code here; content modelling
  * = data in PG.
  *

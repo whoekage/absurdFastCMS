@@ -95,19 +95,19 @@ export class DuplicateFieldError extends Error {
     this.value = value;
   }
 }
-export class ContentTypeExistsError extends Error {
+export class ModuleExistsError extends Error {
   readonly apiId: string;
   constructor(apiId: string) {
     super(`content-type ${JSON.stringify(apiId)} already exists`);
-    this.name = 'ContentTypeExistsError';
+    this.name = 'ModuleExistsError';
     this.apiId = apiId;
   }
 }
-export class ContentTypeNotFoundError extends Error {
+export class ModuleNotFoundError extends Error {
   readonly apiId: string;
   constructor(apiId: string) {
     super(`content-type ${JSON.stringify(apiId)} not found`);
-    this.name = 'ContentTypeNotFoundError';
+    this.name = 'ModuleNotFoundError';
     this.apiId = apiId;
   }
 }
@@ -632,7 +632,7 @@ export async function runSchemaTx<T>(sql: Sql, tableName: string, work: (tx: Sql
         if (constraint === 'ctr_type_field_lower_uq') throw new FieldExistsError(constraint);
         if (constraint === 'ctf_type_sort_uq' || constraint === 'cmptf_type_sort_uq') throw new SchemaChangeConflictError(`schema change on ${tableName} conflicted (concurrent sort race); retry`);
         // content_types_api_id_lower_uq / content_types_table_name_lower_uq (and any unknown) -> type exists.
-        throw new ContentTypeExistsError(tableName);
+        throw new ModuleExistsError(tableName);
       }
       case '23502': // not_null_violation — NOT NULL add to populated table without default
         throw new DefaultTypeError(`adding a NOT NULL column requires a constant default on a populated table`);

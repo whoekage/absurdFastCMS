@@ -1,7 +1,7 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import type { ComponentSchema, ContentTypeSchema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
+import type { ComponentSchema, Schema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
 import type { FieldOptions } from '../src/db/type.catalog.ts';
 
 const { runMigrations } = await import('../src/db/migration.runner.ts');
@@ -44,8 +44,8 @@ function cmp(apiId: string, fields: { name: string; type: FieldType; options?: F
   return { id: mintId('cmp'), apiId, fields: fields.map((f): FieldSchema => ({ id: mintId('f'), ...f })) };
 }
 
-/** Per-test files-first server: each test owns its host content-types + in-memory components. */
-async function boot(schemas: ContentTypeSchema[], components: ComponentSchema[] = []): Promise<void> {
+/** Per-test files-first server: each test owns its host modules + in-memory components. */
+async function boot(schemas: Schema[], components: ComponentSchema[] = []): Promise<void> {
   const srv = await startTestServerFromSchemas(sql, schemas, { components });
   base = srv.base;
   close = srv.close;
@@ -87,7 +87,7 @@ async function seedAuthorRows(): Promise<{ a1: number; a2: number }> {
 // be-05b GUARD ported to the files-first path: `relation` is a ComponentFieldKind, but unlike
 // component/component-repeatable/dynamiczone it has NO top-level form — an inline ref only lives inside a
 // component json. A top-level `relation` field is rejected by resolveFields -> rejectTopLevelRelation,
-// which migrate() runs (replacing the legacy POST /content-types + addField controller guards).
+// which migrate() runs (replacing the legacy POST /modules + addField controller guards).
 test('R0b a top-level `relation` field is rejected by the files-first migrate (component-only kind)', async () => {
   const bad = ct({ apiId: 'post', fields: [{ name: 'writer', cmsType: 'relation', options: { target: 'author' } }] });
   await assert.rejects(migrate(sql, [bad], { allowDestructive: true }), /relation/i);

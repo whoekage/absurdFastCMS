@@ -1,4 +1,4 @@
-import { defineType, c } from '@conti/core';
+import { defineSchema, c } from '@conti/core';
 
 /**
  * The demo content-type — files-first, code-first. One FOLDER per entity: this `entities/<apiId>/schema.ts`
@@ -7,7 +7,7 @@ import { defineType, c } from '@conti/core';
  * file wholesale; lifecycle hooks go in a sibling `entities/article/hooks.ts` (`defineHooks({...})`) — and
  * custom `services.ts`/`controller.ts` live in the same folder — none of which the Builder touches.
  */
-const Article = defineType({
+const Article = defineSchema({
   id: 'ct_article',
   options: { draftAndPublish: false, i18n: false },
   fields: {

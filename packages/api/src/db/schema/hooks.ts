@@ -2,7 +2,7 @@ import type { Hooks, HookContext } from './define.ts';
 
 /**
  * The content-lifecycle hook DISPATCH (pivot phase 4). Hooks are dev-authored, colocated in
- * `schema/<apiId>.ts` via `defineType({ hooks })`, and fire at the content-service seam (`handleWrite`) —
+ * `schema/<apiId>.ts` via `defineSchema({ hooks })`, and fire at the content-service seam (`handleWrite`) —
  * per LOGICAL ACTION, not per DB row (the Strapi-v5 lesson: row-level hooks multi-fire on D&P/i18n and lose
  * the semantic event). The two classes split on the COMMIT boundary:
  *

@@ -4,7 +4,7 @@ import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer, type ListenToken } from '../src/http/uws.adapter.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
-import type { ContentTypeSchema } from '../src/db/schema/model.ts';
+import type { Schema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { freePort, physicalColumns, ct, ARTICLE_SCHEMA } from './helpers.ts';
 
@@ -25,7 +25,7 @@ let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let token: ListenToken;
 let base: string;
 let close: (t: ListenToken) => void;
-let baseSchemas: ContentTypeSchema[]; // the catalog seeded in before() — the mid-test type adds to this
+let baseSchemas: Schema[]; // the catalog seeded in before() — the mid-test type adds to this
 let baseRegistry: Awaited<ReturnType<PostgresStore['loadFromSchemas']>>['registry'];
 
 // DEFAULT_LOCALE is read from .env.test; the read router resolves a locale-less read of an i18n type to it.
@@ -320,7 +320,7 @@ test('write-side: i18n composes with draft & publish (locale=fr&status=published
 });
 
 test('the registry def carries i18n + per-field localized + the synthesized system fields only for an i18n type', () => {
-  // Files-first source of truth: the registry def (the legacy GET /content-types/:apiId projection is gone).
+  // Files-first source of truth: the registry def (the legacy GET /modules/:apiId projection is gone).
   const page = baseRegistry.get('page')!;
   assert.equal(page.i18n, true, 'an i18n type carries i18n:true');
   assert.equal(page.fields.find((f) => f.name === 'title')!.localized, true, 'a field defaults to localized:true');

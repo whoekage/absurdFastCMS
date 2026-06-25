@@ -1,7 +1,7 @@
 import { writeFile, mkdir, rename } from 'node:fs/promises';
 import path from 'node:path';
 import type { Sql } from 'postgres';
-import type { ContentTypeSchema } from '../db/schema/model.ts';
+import type { Schema } from '../db/schema/model.ts';
 import { diff, type Change } from '../db/schema/diff.ts';
 import { migrate, readAppliedSchemas, ensureAppliedTable } from '../db/schema/migrate.ts';
 import { generateSchemaSource, BuilderCodegenError } from '../db/schema/codegen.ts';
@@ -46,7 +46,7 @@ export interface ReconcileResult {
   /** apiIds whose `entities/<apiId>/schema.ts` was regenerated from the snapshot (recover-forward). */
   recovered: readonly string[];
   /** The IR the served Engine MUST be built from (files after any recovery). */
-  schemas: ContentTypeSchema[];
+  schemas: Schema[];
   /** The hooks Map after reconciliation (re-used as loaded — a recovered drop adds no new hooks.ts). */
   hooks: Map<string, Hooks>;
 }
@@ -63,14 +63,14 @@ function isReverseDestructive(c: Change): boolean {
  * table-name / display semantics). Recover-forward HALTs rather than write such a file. (The loud cases —
  * a field type the codegen can't emit — throw `BuilderCodegenError` and are handled separately.)
  */
-function isRoundTrippable(s: ContentTypeSchema): boolean {
+function isRoundTrippable(s: Schema): boolean {
   if (s.collectionName !== undefined) return false;
   if (s.info !== undefined) return false;
   return s.fields.every((f) => f.localized === undefined);
 }
 
 /** Atomic same-dir flip (mirror of applySchemaEdit's temp→rename) so a crash mid-recovery never half-writes. */
-async function atomicWriteSchemaFile(entitiesDir: string, schema: ContentTypeSchema): Promise<void> {
+async function atomicWriteSchemaFile(entitiesDir: string, schema: Schema): Promise<void> {
   const dir = path.join(entitiesDir, schema.apiId);
   await mkdir(dir, { recursive: true });
   const target = path.join(dir, 'schema.ts');
@@ -82,7 +82,7 @@ async function atomicWriteSchemaFile(entitiesDir: string, schema: ContentTypeSch
 export async function reconcileBoot(
   sql: Sql,
   entitiesDir: string,
-  filesIR: ContentTypeSchema[],
+  filesIR: Schema[],
   filesHooks: Map<string, Hooks>,
 ): Promise<ReconcileResult> {
   await ensureAppliedTable(sql);

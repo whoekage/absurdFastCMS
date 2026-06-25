@@ -70,7 +70,7 @@ const DISTINCT_SCAN_CAP = 10_000;
 /** Cap how many distinct sample values are echoed back per string column. */
 const DISTINCT_SAMPLE_CAP = 25;
 
-/** All defined content-types with their row counts — the `/debug` index. */
+/** All defined modules with their row counts — the `/debug` index. */
 export function listTypes(engine: Engine): { types: { type: string; rowCount: number }[] } {
   return {
     types: engine.typeNames().map((type) => ({ type, rowCount: engine.rowCount(type) })),

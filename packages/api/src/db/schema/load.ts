@@ -3,7 +3,7 @@ import { existsSync, type Dirent } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { defToSchema, type TypeDef, type Hooks } from './define.ts';
-import type { ContentTypeSchema } from './model.ts';
+import type { Schema } from './model.ts';
 
 /**
  * The EDGE loader for the code-first source. The project's entity definitions live under `entities/`, ONE
@@ -30,7 +30,7 @@ export class SchemaLoadError extends Error {
 
 /** The loaded catalog: the IR (for migrate/registry) + the lifecycle hooks keyed by apiId (for the write path). */
 export interface LoadedTypes {
-  schemas: ContentTypeSchema[];
+  schemas: Schema[];
   hooks: Map<string, Hooks>;
 }
 
@@ -63,7 +63,7 @@ async function loadTypesImpl(dir: string, token: string): Promise<LoadedTypes> {
     .filter((d) => d.isDirectory() && d.name !== 'components')
     .map((d) => d.name)
     .sort();
-  const schemas: ContentTypeSchema[] = [];
+  const schemas: Schema[] = [];
   const hooks = new Map<string, Hooks>();
   for (const apiId of entityNames) {
     const schemaFile = path.join(dir, apiId, 'schema.ts');
@@ -76,7 +76,7 @@ async function loadTypesImpl(dir: string, token: string): Promise<LoadedTypes> {
       throw e;
     }
     if (!mod.default || typeof mod.default !== 'object' || !('fields' in mod.default)) {
-      throw new SchemaLoadError(`${apiId}/schema.ts`, 'must `export default defineType({ ... })`');
+      throw new SchemaLoadError(`${apiId}/schema.ts`, 'must `export default defineSchema({ ... })`');
     }
     schemas.push(defToSchema(mod.default, apiId));
     const hooksFile = path.join(dir, apiId, 'hooks.ts');

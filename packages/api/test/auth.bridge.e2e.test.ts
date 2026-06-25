@@ -96,7 +96,7 @@ test('a non-/auth route is unaffected by the auth mount (existing read path stay
   // /article is the seeded-or-empty read route; with no article type it 404s, but it must NOT be
   // swallowed by /auth/* — the literal `auth` segment never shadows a `:type`. Either a 200 list or a
   // 404 is acceptable; what matters is it is NOT an auth-handler response.
-  const res = await fetch(`${base}/content-types`);
+  const res = await fetch(`${base}/modules`);
   assert.ok(res.status === 200 || res.status === 404, `unexpected status ${res.status}`);
   // An auth response would carry better-auth's JSON error shape; a builder response is the content-type list.
   const text = await res.text();

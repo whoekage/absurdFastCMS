@@ -7,7 +7,7 @@ import { rebuildType } from '../db/engine.loader.ts';
 import { handleRequest, errorResponse, JSON_CT, type CoreResponse } from './read.router.ts';
 import { handleWrite, type WriteContext } from './write.handler.ts';
 import { HookRegistry } from '../db/schema/hooks.ts';
-import { applySchemaEdit, applySchemaDelete, previewSchemaEdit, BuilderValidationError, BuilderNotFoundError, BuilderBusyError, type ContentTypeDraft, type SchemaEditResult } from '../compose/builder.ts';
+import { applySchemaEdit, applySchemaDelete, previewSchemaEdit, BuilderValidationError, BuilderNotFoundError, BuilderBusyError, type ModuleDraft, type SchemaEditResult } from '../compose/builder.ts';
 import { swapFromIR } from '../db/engine.swap.ts';
 import { loadTypes, loadTypesCacheBusted } from '../db/schema/load.ts';
 import { readAppliedSchemas, ensureAppliedTable, MigrationBlockedError, MigrationDataLossError, MigrationUnsupportedError } from '../db/schema/migrate.ts';
@@ -74,7 +74,7 @@ export interface UwsServer {
    * swap), WITHOUT a restart. Present only when the Builder is wired (store + registry + `entitiesDir`).
    * Throws on a migrate failure (last-good keeps serving); a blocked/no-op edit returns without swapping.
    */
-  applyEdit?(draft: ContentTypeDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult>;
+  applyEdit?(draft: ModuleDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult>;
 }
 
 /** Full HTTP status lines for the statuses the core can emit. */
@@ -217,7 +217,7 @@ function corkSendNoStore(res: uWS.HttpResponse, aborted: () => boolean, status: 
 
 /** Which template a builder route is on — drives which getParameter slots to read synchronously. */
 interface CtRouteOpts {
-  /** Read getParameter(0) as `:apiId` (false for the `/content-types` collection). */
+  /** Read getParameter(0) as `:apiId` (false for the `/modules` collection). */
   hasApiId: boolean;
   /** The literal segment after `:apiId` (`'fields'`), or undefined. */
   sub?: string;
@@ -844,7 +844,7 @@ export function createServer(
         await swapFromIR(sql, live, result.next, result.applied!, new HookRegistry(nextHooks));
         return result;
       };
-      const runEdit = async (draft: ContentTypeDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult> =>
+      const runEdit = async (draft: ModuleDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult> =>
         swapAfter(await applySchemaEdit(sql, dir, draft, opts ?? {}));
       const runDelete = async (apiId: string): Promise<SchemaEditResult> => swapAfter(await applySchemaDelete(sql, dir, apiId));
 
@@ -917,7 +917,7 @@ export function createServer(
       // ---- BUILDER ROUTE SURFACE (design §1). GET reads are PUBLIC; mutations gated on builder.manage. ----
 
       // GET list — applied catalog (with ids) + ETag/304.
-      app.get('/builder/content-types', (res, req) => {
+      app.get('/builder/modules', (res, req) => {
         const inm = req.getHeader('if-none-match');
         let aborted = false;
         res.onAborted(() => { aborted = true; });
@@ -932,7 +932,7 @@ export function createServer(
       });
 
       // GET one — 404 when absent; else the single schema WITH ids + ETag/304.
-      app.get('/builder/content-types/:apiId', (res, req) => {
+      app.get('/builder/modules/:apiId', (res, req) => {
         const apiId = req.getParameter(0) ?? '';
         const inm = req.getHeader('if-none-match');
         let aborted = false;
@@ -949,12 +949,12 @@ export function createServer(
       });
 
       // POST preview — dry-run (no write/migrate/swap), no mutex/version. GATED.
-      app.post('/builder/content-types/:apiId/preview', (res, req) => {
+      app.post('/builder/modules/:apiId/preview', (res, req) => {
         const apiId = req.getParameter(0) ?? '';
         gate(res, req, 'builder.manage', true, (raw, aborted) => {
           const parsed = parseBody(raw);
           if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-          const body = parsed.body as { allowDestructive?: boolean } & ContentTypeDraft;
+          const body = parsed.body as { allowDestructive?: boolean } & ModuleDraft;
           if (body.apiId !== apiId) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.apiId must equal the path apiId' }));
           void (async () => {
             let result: CoreResponse;
@@ -968,14 +968,14 @@ export function createServer(
       });
 
       // PUT upsert — create / update / apiId-rename. GATED + mutex + If-Match/version + idempotency.
-      app.put('/builder/content-types/:apiId', (res, req) => {
+      app.put('/builder/modules/:apiId', (res, req) => {
         const apiId = req.getParameter(0) ?? '';
         const ifMatch = req.getHeader('if-match'); // '' when absent (uWS; lowercase key)
         const idemKey = req.getHeader('idempotency-key');
         gate(res, req, 'builder.manage', true, (raw, aborted) => {
           const parsed = parseBody(raw);
           if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-          const body = parsed.body as { allowDestructive?: boolean; version?: string } & ContentTypeDraft;
+          const body = parsed.body as { allowDestructive?: boolean; version?: string } & ModuleDraft;
           if (body.apiId !== apiId) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.apiId must equal the path apiId' }));
           if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
           const { allowDestructive, version: _v, ...meaningful } = body;
@@ -986,7 +986,7 @@ export function createServer(
       });
 
       // DELETE — drop a whole type (always destructive → require allowDestructive). GATED + same wrap.
-      app.del('/builder/content-types/:apiId', (res, req) => {
+      app.del('/builder/modules/:apiId', (res, req) => {
         const apiId = req.getParameter(0) ?? '';
         const ifMatch = req.getHeader('if-match');
         const idemKey = req.getHeader('idempotency-key');

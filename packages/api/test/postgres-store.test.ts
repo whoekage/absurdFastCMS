@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
-import type { ContentTypeSchema } from '../src/db/schema/model.ts';
+import type { Schema } from '../src/db/schema/model.ts';
 import { handleRequest } from '../src/http/read.router.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { ct } from './helpers.ts';
@@ -19,7 +19,7 @@ import { ct } from './helpers.ts';
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
-let articleSchema: ContentTypeSchema;
+let articleSchema: Schema;
 
 interface SeedRow {
   title: string | null;

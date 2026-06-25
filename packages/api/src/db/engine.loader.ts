@@ -4,7 +4,7 @@ import { CursorCodec } from '../store/cursor.codec.ts';
 import { Relation } from '../store/relation.ts';
 import type { Table } from '../store/table.ts';
 import { quoteIdent, validateIdentifier, inverseKind } from './ddl.ts';
-import type { ContentTypeDef, ColumnDescriptor, Registry, RelationMeta } from './registry.ts';
+import type { ModuleDef, ColumnDescriptor, Registry, RelationMeta } from './registry.ts';
 import { config } from '../config.ts';
 
 /** Rows pulled per cursor batch — bounds peak memory so a multi-million-row table never buffers whole. */
@@ -20,7 +20,7 @@ export function cursorCodecFromEnv(): CursorCodec {
 
 /**
  * The GENERALIZED loader. Every SQL identifier (table + column names) comes ONLY from the validated
- * {@link ContentTypeDef}, never from client input, and is re-asserted defensively before any SQL. A
+ * {@link ModuleDef}, never from client input, and is re-asserted defensively before any SQL. A
  * `json` column is fetched as `"col"::text` so its verbatim bytes (nested integers > 2^53 + key order)
  * are stored unparsed; int8/numeric/uuid arrive as STRINGS and are passed straight to the engine's
  * exact coercers (never Number()-coerced).
@@ -41,7 +41,7 @@ export function assertTableName(name: string): void {
 }
 
 /** Build the SELECT column list from the def: json columns get `"col"::text AS "col"`, others plain. */
-function selectList(def: ContentTypeDef): string {
+function selectList(def: ModuleDef): string {
   return def.fields
     .map((f) => (f.json ? `${quoteIdent(f.column)}::text AS ${quoteIdent(f.column)}` : quoteIdent(f.column)))
     .join(', ');
@@ -69,7 +69,7 @@ function coerceRow(plan: ColumnDescriptor[], dbRow: Record<string, unknown>): Re
  * ct_ table type-aware-coercing each column, then warm the indexes ONCE. Shared by {@link loadType}
  * (boot) and {@link rebuildType} (per-write fast path). Empty type yields a valid 0-row pair.
  */
-export async function buildDetached(sql: Sql, def: ContentTypeDef): Promise<DetachedTable> {
+export async function buildDetached(sql: Sql, def: ModuleDef): Promise<DetachedTable> {
   assertTableName(def.tableName);
   const detached = new DetachedTable(def.fieldDefs);
   const t: Table = detached.table;
@@ -87,7 +87,7 @@ export async function buildDetached(sql: Sql, def: ContentTypeDef): Promise<Deta
 }
 
 /** Define one type on the engine and load it (boot path). Inserts nothing if the table is empty. */
-export async function loadType(sql: Sql, engine: Engine, def: ContentTypeDef): Promise<void> {
+export async function loadType(sql: Sql, engine: Engine, def: ModuleDef): Promise<void> {
   const detached = await buildDetached(sql, def);
   // Install the fully-built detached pair directly as a NEW type — no throwaway empty Table/arena (and
   // no needless cache-invalidation publish on the cold boot path). Same byte format as Engine.insert.
@@ -197,7 +197,7 @@ export async function buildEngine(sql: Sql, registry: Registry, opts?: EngineOpt
  * first so `rowIdByEq` reads the new numbering). Re-deriving everything is the simplest-correct option:
  * it covers the written type as owner, as target, the inverse registered on the target, and self-refs.
  */
-export async function rebuildType(sql: Sql, engine: Engine, def: ContentTypeDef, registry: Registry): Promise<void> {
+export async function rebuildType(sql: Sql, engine: Engine, def: ModuleDef, registry: Registry): Promise<void> {
   const detached = await buildDetached(sql, def);
   engine.replaceType(def.apiId, detached); // 1. new Table installed (new dense ids).
   await loadAllRelations(sql, engine, registry); // 2. re-derive ALL relations against the current Tables.

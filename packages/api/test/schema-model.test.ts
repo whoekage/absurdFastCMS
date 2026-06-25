@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSchema, stringifySchema, loadSchemaDir, SchemaFileError } from '../src/db/schema/serialize.ts';
 import { schemaToRows, relationRowsByType, SchemaAdaptError } from '../src/db/schema/adapt.ts';
-import type { ContentTypeSchema } from '../src/db/schema/model.ts';
+import type { Schema } from '../src/db/schema/model.ts';
 
 /**
  * S1-A — the PURE files-first schema layer (no DB). Validates the committed demo `schema/article.json`
@@ -60,8 +60,8 @@ test('loadSchemaDir: empty for a missing dir, sorted load, stem===apiId guard', 
 
   const dir = await mkdtemp(path.join(tmpdir(), 'conti-schema-'));
   try {
-    const good: ContentTypeSchema = { id: 'ct_b', apiId: 'beta', fields: [{ id: 'f_n', name: 'n', type: 'integer', options: { nullable: true } }] };
-    const alpha: ContentTypeSchema = { id: 'ct_a', apiId: 'alpha', fields: [] };
+    const good: Schema = { id: 'ct_b', apiId: 'beta', fields: [{ id: 'f_n', name: 'n', type: 'integer', options: { nullable: true } }] };
+    const alpha: Schema = { id: 'ct_a', apiId: 'alpha', fields: [] };
     await writeFile(path.join(dir, 'beta.json'), stringifySchema(good));
     await writeFile(path.join(dir, 'alpha.json'), stringifySchema(alpha));
     const loaded = await loadSchemaDir(dir);
@@ -76,13 +76,13 @@ test('loadSchemaDir: empty for a missing dir, sorted load, stem===apiId guard', 
 });
 
 test('relationRowsByType synthesizes owner + inverse rows across the two types', () => {
-  const post: ContentTypeSchema = {
+  const post: Schema = {
     id: 'ct_p',
     apiId: 'post',
     fields: [{ id: 'f_t', name: 'title', type: 'string', options: { nullable: true } }],
     relations: [{ id: 'rel_a', field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' }],
   };
-  const writer: ContentTypeSchema = { id: 'ct_w', apiId: 'writer', fields: [] };
+  const writer: Schema = { id: 'ct_w', apiId: 'writer', fields: [] };
   const rels = relationRowsByType([post, writer]);
 
   const owner = rels.get('ct_p')!;
@@ -101,7 +101,7 @@ test('relationRowsByType synthesizes owner + inverse rows across the two types',
 });
 
 test('relationRowsByType fails LOUD on a dangling relation target', () => {
-  const post: ContentTypeSchema = {
+  const post: Schema = {
     id: 'ct_p',
     apiId: 'post',
     fields: [],

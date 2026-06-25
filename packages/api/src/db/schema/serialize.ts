@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { contentTypeSchemaZ, type ContentTypeSchema } from './model.ts';
+import { schemaZ, type Schema } from './model.ts';
 
 /**
  * The FILE boundary for the files-first schema: parse + Zod-validate one `schema/<apiId>.json`, serialize
@@ -18,35 +18,35 @@ export class SchemaFileError extends Error {
   }
 }
 
-/** Parse + Zod-validate one schema file's TEXT into a {@link ContentTypeSchema}. `file` is error context. */
-export function parseSchema(text: string, file = '<inline>'): ContentTypeSchema {
+/** Parse + Zod-validate one schema file's TEXT into a {@link Schema}. `file` is error context. */
+export function parseSchema(text: string, file = '<inline>'): Schema {
   let data: unknown;
   try {
     data = JSON.parse(text);
   } catch (e) {
     throw new SchemaFileError(file, `invalid JSON: ${(e as Error).message}`);
   }
-  const result = contentTypeSchemaZ.safeParse(data);
+  const result = schemaZ.safeParse(data);
   if (!result.success) {
     throw new SchemaFileError(file, result.error.issues.map((i) => `${i.path.join('.') || '<root>'}: ${i.message}`).join('; '));
   }
-  // The Zod output is structurally the explicit ContentTypeSchema; the cast bridges the
+  // The Zod output is structurally the explicit Schema; the cast bridges the
   // exactOptionalPropertyTypes `| undefined` drift between z.infer and the public interface (see model.ts).
-  return result.data as ContentTypeSchema;
+  return result.data as Schema;
 }
 
-/** Serialize a {@link ContentTypeSchema} to canonical on-disk text (2-space indent, trailing newline). */
-export function stringifySchema(schema: ContentTypeSchema): string {
+/** Serialize a {@link Schema} to canonical on-disk text (2-space indent, trailing newline). */
+export function stringifySchema(schema: Schema): string {
   return `${JSON.stringify(schema, null, 2)}\n`;
 }
 
 /**
- * Load every `*.json` in a schema directory into {@link ContentTypeSchema}s, sorted by filename for a
+ * Load every `*.json` in a schema directory into {@link Schema}s, sorted by filename for a
  * deterministic build order. A MISSING directory is an EMPTY catalog (valid — a fresh project before its
  * first type). Each file's stem MUST equal its `apiId` (so a rename touches the file name too, and the
  * route key `apiId` is always findable by name).
  */
-export async function loadSchemaDir(dir: string): Promise<ContentTypeSchema[]> {
+export async function loadSchemaDir(dir: string): Promise<Schema[]> {
   let entries: string[];
   try {
     entries = await readdir(dir);
@@ -55,7 +55,7 @@ export async function loadSchemaDir(dir: string): Promise<ContentTypeSchema[]> {
     throw e;
   }
   const files = entries.filter((f) => f.endsWith('.json')).sort();
-  const out: ContentTypeSchema[] = [];
+  const out: Schema[] = [];
   for (const f of files) {
     const text = await readFile(path.join(dir, f), 'utf8');
     const schema = parseSchema(text, f);
