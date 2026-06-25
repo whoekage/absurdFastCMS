@@ -1,10 +1,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { createContentType } from '../src/db/content-type.repository.ts';
 import type { ListenToken } from '../src/http/uws.adapter.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { rawField, startTestServer } from './helpers.ts';
+import { rawField, startTestServerFromSchemas, ct } from './helpers.ts';
 
 /**
  * ENTRY-TYPES SLICE — write round-trip for i64/decimal/json over the REAL uWS + Postgres path. A
@@ -21,15 +20,14 @@ let close: (t: ListenToken) => void;
 before(async () => {
   db = await createFileDatabase('et');
   sql = db.sql;
-  await createContentType(sql, {
+  const server = await startTestServerFromSchemas(sql, [ct({
     apiId: 'metric',
     fields: [
       { name: 'big', cmsType: 'biginteger', options: { nullable: false } },
       { name: 'amount', cmsType: 'decimal', options: { precision: 18, scale: 2, nullable: false } },
       { name: 'payload', cmsType: 'json', options: { nullable: false } },
     ],
-  });
-  const server = await startTestServer(sql);
+  })]);
   close = server.close;
   token = server.token;
   base = server.base;

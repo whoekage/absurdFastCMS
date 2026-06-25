@@ -2,9 +2,11 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres.store.ts';
-import { createContentType } from '../src/db/content-type.repository.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
+import type { ContentTypeSchema } from '../src/db/schema/model.ts';
 import { handleRequest } from '../src/http/read.router.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
+import { ct } from './helpers.ts';
 
 /**
  * POSTGRES-STORE SLICE — the boot load path, end-to-end against a REAL Postgres (no mocks), on the
@@ -17,6 +19,7 @@ import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
+let articleSchema: ContentTypeSchema;
 
 interface SeedRow {
   title: string | null;
@@ -39,7 +42,7 @@ const ROWS: SeedRow[] = [
 before(async () => {
   db = await createFileDatabase('ps');
   sql = db.sql;
-  await createContentType(sql, {
+  articleSchema = ct({
     apiId: 'article',
     fields: [
       { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
@@ -51,6 +54,7 @@ before(async () => {
       { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
     ],
   });
+  await migrate(sql, [articleSchema], { allowDestructive: true });
   for (const r of ROWS) {
     await sql`
       INSERT INTO ct_article (title, body, status, views, rating, active, "publishedAt")
@@ -66,7 +70,7 @@ after(async () => {
 });
 
 test('load() builds an engine with every row, PK addressable, NULLs as JSON null', async () => {
-  const engine = await new PostgresStore(sql).load();
+  const engine = (await new PostgresStore(sql).loadFromSchemas([articleSchema])).engine;
   assert.equal(engine.rowCount('article'), ROWS.length);
 
   // PK lookup hits the right row (PKs are 1-based); the all-null row renders title/views/rating null.
@@ -100,7 +104,7 @@ test('load() builds an engine with every row, PK addressable, NULLs as JSON null
 });
 
 test('loaded engine answers a filtered + sorted list like a hand oracle', async () => {
-  const engine = await new PostgresStore(sql).load();
+  const engine = (await new PostgresStore(sql).loadFromSchemas([articleSchema])).engine;
   const res = handleRequest(engine, {
     method: 'GET',
     path: '/article',

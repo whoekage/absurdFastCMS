@@ -5,7 +5,9 @@ import { createServer } from '../src/http/uws.adapter.ts';
 import { loadTypes } from '../src/db/schema/load.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
 import { HookRegistry } from '../src/db/schema/hooks.ts';
-import type { ContentTypeSchema, ComponentSchema } from '../src/db/schema/model.ts';
+import { mintId, type ContentTypeSchema, type ComponentSchema, type FieldType } from '../src/db/schema/model.ts';
+import type { FieldOptions } from '../src/db/type.catalog.ts';
+import type { RelationKind } from '../src/db/ddl.ts';
 import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
 import { buildAuth } from '../src/auth/auth.ts';
 import { SessionCache } from '../src/auth/session.cache.ts';
@@ -201,6 +203,30 @@ export async function startTestServerFromSchemas(
   const port = await freePort();
   const token = await server.listen(port);
   return { base: `http://127.0.0.1:${port}`, close: server.close, token, engine, registry };
+}
+
+/**
+ * Convert the old `createContentType` spec shape (`{ apiId, fields:[{name, cmsType, options}], relations,
+ * draftPublish, i18n }`) into a files-first {@link ContentTypeSchema} (stable ids minted, `cmsType`→`type`).
+ * Lets a meta-path test migrate by wrapping its specs in `ct(...)` + `startTestServerFromSchemas` instead of
+ * imperative `createContentType` + `addRelation` calls.
+ */
+export interface CtSpec {
+  apiId: string;
+  fields: { name: string; cmsType: FieldType; options?: FieldOptions }[];
+  relations?: { field: string; kind: RelationKind; target: string; inverseField?: string }[];
+  draftPublish?: boolean;
+  i18n?: boolean;
+}
+export function ct(spec: CtSpec): ContentTypeSchema {
+  const out: ContentTypeSchema = {
+    id: mintId('ct'),
+    apiId: spec.apiId,
+    fields: spec.fields.map((f) => (f.options !== undefined ? { id: mintId('f'), name: f.name, type: f.cmsType, options: f.options } : { id: mintId('f'), name: f.name, type: f.cmsType })),
+  };
+  if (spec.draftPublish || spec.i18n) out.options = { ...(spec.draftPublish ? { draftAndPublish: true } : {}), ...(spec.i18n ? { i18n: true } : {}) };
+  if (spec.relations !== undefined) out.relations = spec.relations.map((r) => (r.inverseField !== undefined ? { id: mintId('rel'), field: r.field, kind: r.kind, target: r.target, inverseField: r.inverseField } : { id: mintId('rel'), field: r.field, kind: r.kind, target: r.target }));
+  return out;
 }
 
 /** The `article` demo type as a files-first IR (mirrors the old `ARTICLE_SEED_FIELDS`) — a shared test fixture. */

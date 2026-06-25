@@ -1,11 +1,11 @@
 import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { createContentType } from '../src/db/content-type.repository.ts';
 import { Registry } from '../src/db/registry.ts';
 import { buildEngine } from '../src/db/engine.loader.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { cleanCatalog, rawField } from './helpers.ts';
+import { cleanCatalog, rawField, ct } from './helpers.ts';
 
 /**
  * LOAD SLICE — generalized loader over a REAL Postgres (no mocks). Multi-type load, i64/decimal/json
@@ -28,15 +28,15 @@ after(async () => {
 });
 
 test('multi-type load with i64/decimal/json byte-exact round-trip; warm once; empty type 0 rows', async () => {
-  await createContentType(sql, {
-    apiId: 'note',
-    fields: [
+  const schemas = [
+    ct({ apiId: 'note', fields: [
       { name: 'big', cmsType: 'biginteger', options: { nullable: true } },
       { name: 'price', cmsType: 'decimal', options: { precision: 18, scale: 2, nullable: true } },
       { name: 'meta', cmsType: 'json', options: { nullable: true } },
-    ],
-  });
-  await createContentType(sql, { apiId: 'empty', fields: [{ name: 'x', cmsType: 'integer', options: { nullable: true } }] });
+    ] }),
+    ct({ apiId: 'empty', fields: [{ name: 'x', cmsType: 'integer', options: { nullable: true } }] }),
+  ];
+  await migrate(sql, schemas, { allowDestructive: true });
 
   // jsonb with a nested integer > 2^53 and out-of-order keys.
   const bigInt = 9007199254740993; // 2^53 + 1
@@ -47,7 +47,7 @@ test('multi-type load with i64/decimal/json byte-exact round-trip; warm once; em
   await sql.unsafe(`INSERT INTO ct_note (big, price, meta) VALUES (NULL, NULL, NULL)`);
   await sql.unsafe(`INSERT INTO ct_note (big, price, meta) VALUES ('1', '0.01', 'null'::jsonb)`);
 
-  const registry = await Registry.build(sql);
+  const registry = Registry.fromSchemas(schemas);
   const engine = await buildEngine(sql, registry);
 
   assert.equal(engine.rowCount('note'), 3);

@@ -4,8 +4,10 @@ import type { Sql } from 'postgres';
 import { Registry } from '../src/db/registry.ts';
 import { DetachedTable, Engine } from '../src/store/engine.ts';
 import { insertEntry, EntryWriteError } from '../src/db/entry.repository.ts';
-import { createContentType } from '../src/db/content-type.repository.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
+import type { ContentTypeSchema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
+import { ct } from './helpers.ts';
 
 /**
  * Pins two backstops the validator normally front-runs, against REAL Postgres (no mocks):
@@ -16,11 +18,13 @@ import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
+let gadgetSchema: ContentTypeSchema;
 
 before(async () => {
   db = await createFileDatabase('erb');
   sql = db.sql;
-  await createContentType(sql, { apiId: 'gadget', fields: [{ name: 'code', cmsType: 'string', options: { nullable: false } }] });
+  gadgetSchema = ct({ apiId: 'gadget', fields: [{ name: 'code', cmsType: 'string', options: { nullable: false } }] });
+  await migrate(sql, [gadgetSchema], { allowDestructive: true });
   // A real UNIQUE constraint on a user column so a duplicate insert raises 23505 through the repo.
   await sql`ALTER TABLE ct_gadget ADD CONSTRAINT ct_gadget_code_uniq UNIQUE (code)`;
 });
@@ -38,7 +42,7 @@ test('Engine.replaceType throws on a type that is not defined', () => {
 });
 
 test('a real 23505 unique violation maps to a generic EntryWriteError (no SQL/constraint leak)', async () => {
-  const registry = await Registry.build(sql);
+  const registry = Registry.fromSchemas([gadgetSchema]);
   const def = registry.get('gadget')!;
   await insertEntry(sql, def, { code: 'dup' });
   await assert.rejects(
@@ -56,7 +60,7 @@ test('a real 23505 unique violation maps to a generic EntryWriteError (no SQL/co
 // (SYSTEM_FIELDS stays 3 wide), so insertEntry's returned shape NEVER contains it. These pin the
 // physical behaviour via a DIRECT PG SELECT of the column — NOT via the wire.
 test('a fresh create auto-allocates a unique document_id via the sequence DEFAULT (direct PG)', async () => {
-  const registry = await Registry.build(sql);
+  const registry = Registry.fromSchemas([gadgetSchema]);
   const def = registry.get('gadget')!;
   // Plain creates: no opts -> column DEFAULTs to nextval('document_id_seq').
   const a = (await insertEntry(sql, def, { code: 'doc-a' })) as { id: number };
@@ -73,7 +77,7 @@ test('a fresh create auto-allocates a unique document_id via the sequence DEFAUL
 });
 
 test('the internal reuse seam attaches a second row to the SAME document_id (direct PG)', async () => {
-  const registry = await Registry.build(sql);
+  const registry = Registry.fromSchemas([gadgetSchema]);
   const def = registry.get('gadget')!;
   // Parent draws a fresh document_id from the sequence.
   const parent = (await insertEntry(sql, def, { code: 'variant-parent' })) as { id: number };
