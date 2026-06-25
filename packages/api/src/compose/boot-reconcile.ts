@@ -3,9 +3,8 @@ import path from 'node:path';
 import type { Sql } from 'postgres';
 import type { ContentTypeSchema } from '../db/schema/model.ts';
 import { diff, type Change } from '../db/schema/diff.ts';
-import { migrate, readAppliedSchemas, ensureAppliedTable, writeAppliedSnapshot } from '../db/schema/migrate.ts';
+import { migrate, readAppliedSchemas, ensureAppliedTable } from '../db/schema/migrate.ts';
 import { generateSchemaSource, BuilderCodegenError } from '../db/schema/codegen.ts';
-import { seedFromSchemas } from '../db/seed.ts';
 import type { Hooks } from '../db/schema/define.ts';
 
 /**
@@ -89,14 +88,14 @@ export async function reconcileBoot(
   await ensureAppliedTable(sql);
   const appliedIR = await readAppliedSchemas(sql); // a corrupt snapshot row Zod-throws here → boot aborts (loud)
 
-  // BASELINE: no snapshot yet but files exist (a fresh / pre-migrate DB whose ct_ tables may already be
-  // seeded). Materialize any missing table the create-if-absent way, then backfill the snapshot to the files
-  // so the NEXT boot's diff is empty. (seedFromSchemas is now invoked ONLY here — single owner of baseline
-  // table creation.)
+  // BASELINE: no snapshot yet but files exist (a fresh DB). One `migrate()` against an empty `_schema_applied`
+  // diffs to all-`addType` ⇒ it CREATEs every ct_ table AND writes the snapshot in the SAME tx, so the NEXT
+  // boot's diff is empty. (This replaces the legacy seedFromSchemas + writeAppliedSnapshot pair; because DDL
+  // and snapshot now commit together, the old "ct_ table present but _schema_applied empty" state — which
+  // needed create-if-absent — is unreachable in production.)
   if (appliedIR.length === 0) {
     if (filesIR.length === 0) return { outcome: 'clean', recovered: [], schemas: [], hooks: filesHooks };
-    await seedFromSchemas(sql, filesIR);
-    await writeAppliedSnapshot(sql, filesIR);
+    await migrate(sql, filesIR, { allowDestructive: true });
     return { outcome: 'clean', recovered: [], schemas: filesIR, hooks: filesHooks };
   }
 

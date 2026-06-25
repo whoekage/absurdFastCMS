@@ -11,9 +11,6 @@ import { STATUSES } from '../db/seed.ts';
  * on a free port without going through the entrypoint.
  */
 
-/** Re-exported for tests that seed the demo `article` content-type (the seed lives in `db/seed.ts`). */
-export { seedArticleIfAbsent } from '../db/seed.ts';
-
 /** The static engine FieldDef[] mirroring the `article` seed for the in-memory bench generator. */
 const ARTICLE_BENCH_FIELDS: FieldDef[] = [
   { name: 'id', type: 'i32' },

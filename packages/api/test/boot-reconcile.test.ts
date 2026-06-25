@@ -8,7 +8,6 @@ import { applySchemaEdit } from '../src/compose/builder.ts';
 import { reconcileBoot, SchemaReconcileHaltError } from '../src/compose/boot-reconcile.ts';
 import { readAppliedSchemas, ensureAppliedTable, writeAppliedSnapshot } from '../src/db/schema/migrate.ts';
 import { generateSchemaSource } from '../src/db/schema/codegen.ts';
-import { seedFromSchemas } from '../src/db/seed.ts';
 import type { ContentTypeSchema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog, physicalColumns } from './helpers.ts';
@@ -106,16 +105,21 @@ test('C — clean (file == snapshot): no-op, nothing migrated', async () => {
   assert.deepEqual((await physicalColumns(sql, 'ct_gclean')).map((c) => c.name).sort(), before, 'no column change');
 });
 
-test('D — baseline (no _schema_applied, ct_ seeded): backfills snapshot, idempotent on re-run', async () => {
+test('D — baseline (no _schema_applied, empty DB): migrate() creates the table + backfills snapshot, idempotent on re-run', async () => {
   const ir: ContentTypeSchema = { id: 'ct_gb', apiId: 'gbase', fields: [{ id: 'f_a', name: 'a', type: 'string', options: { nullable: true } }] };
-  await seedFromSchemas(sql, [ir]); // table created the legacy way
-  await sql`DROP TABLE IF EXISTS _schema_applied`; // baseline precondition: no snapshot
+  // Baseline precondition: NO snapshot AND the table not yet present. The new migrate()-based baseline path
+  // CREATEs the ct_ table itself (DDL + snapshot in one tx) — unlike the old seedFromSchemas create-if-absent,
+  // a pre-existing ct_ table would now 42P07 (compileCreateTable has no IF NOT EXISTS), but that state is
+  // unreachable in production since DDL + snapshot always commit together.
+  await sql`DROP TABLE IF EXISTS ct_gbase`;
+  await sql`DROP TABLE IF EXISTS _schema_applied`;
 
   const r = await reconcileBoot(sql, genDir, [ir], new Map());
-  assert.equal(r.outcome, 'clean'); // does NOT throw 23505 on the already-seeded table
+  assert.equal(r.outcome, 'clean');
+  assert.ok((await physicalColumns(sql, 'ct_gbase')).some((c) => c.name === 'a'), 'baseline migrate created the table');
   assert.ok((await readAppliedSchemas(sql)).some((s) => s.apiId === 'gbase'), 'snapshot backfilled');
 
-  // D2 — re-run is clean with an empty diff (seed DDL ⇄ snapshot shape agree, no phantom-diff).
+  // D2 — re-run is clean with an empty diff (migrate DDL ⇄ snapshot shape agree, no phantom-diff).
   assert.equal((await reconcileBoot(sql, genDir, [ir], new Map())).outcome, 'clean');
 });
 
