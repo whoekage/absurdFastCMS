@@ -157,19 +157,27 @@ prod:  deploy → conti migrate (from committed schema/) → data-preserving ALT
   across the cast. The CLI wires `conti migrate [--allow-destructive]` + `conti migrate lint` to these via
   the `compose/migrate.ts` wrappers (resolve config → db + schema dir, run base migrations, then the
   files-first migrate); a blocked migration prints a clean message and exits 1.
-- **S5 — Builder rewrites schema.json + START the CONTRACT (delete the scaffolding).** The Builder's write
-  target flips PG-meta → `schema/*.json` (preserving ids; mint a new id only for genuinely-new fields); dev
-  edits call `conti migrate` locally. Builder routes GATED OFF in prod (env). With files now the source, the
-  meta tables are 100% redundant — so this slice BEGINS the contract phase of the Cleanup ledger (§7.1):
-  delete `Registry.build(sql)` + the meta-read repos, re-point `loadWithRegistry`, migrate the ~30 test call
-  sites to `Registry.fromSchemas`. Tests: a Builder edit produces the right file diff + a rename keeps the
-  same `id`. (§7.1's table-drops + final grep-clean finish in S6.)
+- **S5 — codegen (DONE) + Builder rewrites schema.json + START the CONTRACT.**
+  - **codegen — SHIPPED (`db/schema/codegen.ts`).** Pure `generateTypes(schemas) → content-types.d.ts`
+    (CmsType→TS, enum→literal union, nullable→`?: T|null`, i64/decimal→string, conditional D&P/i18n system
+    fields; component/relation/json→`unknown` until their files-path support lands). The Builder will call it
+    as a side-effect; `conti gen:types --check` will be the CI freshness gate.
+  - **Builder + contract — BLOCKED, sequencing corrected.** The Builder's write target flips PG-meta →
+    `schema/*.json`, and the contract deletes `Registry.build(sql)` + the meta repos and migrates the ~25
+    `Registry.build`/`loadWithRegistry` test call sites to `Registry.fromSchemas`. BUT a recon found the
+    blocker: those call sites include the relation / component / media tests, and S1/S3/S4 **deferred
+    relations + components in the files path** (`diff`/`migrate`/`fromSchemas` throw on them). So the contract
+    CANNOT reach its "`grep Registry.build` → ZERO" done-gate until the files path supports relations +
+    components. **New prerequisite slice S4.5 (relations + components in model/diff/migrate/fromSchemas)
+    must land BEFORE the contract.** Until then the compat shim stays.
 - **S6 — prod lifecycle wiring.** `conti migrate` on `conti start`/deploy from committed `schema/`; prod
   Builder-lock; the documented dev→prod flow; an e2e (edit → migrate → serve → rename → data intact).
 
-Dependencies: S1 (EXPAND) → S3 → S4 → S5 (Builder rewrite + codegen side-effect, the S2 function + START of
-the CONTRACT phase per §7.1) → S6 (FINISH the contract: drop the meta tables, prod lifecycle). The compat
-shim `Registry.build(sql)` lives ONLY between S1 and S5 — it is scaffolding, never permanent.
+Dependencies (CORRECTED): S1 (EXPAND) → S3 → S4 → **S4.5 (relations + components in the files path —
+prerequisite for the contract)** → S5 (codegen ✓ + Builder rewrite + START the CONTRACT) → S6 (FINISH the
+contract: drop the meta tables, prod lifecycle). The compat shim `Registry.build(sql)` lives until the
+contract — it is scaffolding, never permanent, but it cannot be removed until S4.5 unblocks the relation/
+component test call sites.
 
 ### 7.1 Cleanup ledger — the scaffolding S1 adds, and where it ALL gets DELETED (contract phase, S5→S6)
 
