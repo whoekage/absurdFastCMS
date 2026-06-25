@@ -226,6 +226,13 @@ function diffMatchedType(typeId: string, p: ContentTypeSchema, n: ContentTypeSch
   const pFields = indexFields(p);
   const nFields = indexFields(n);
 
+  // Dropped fields (id only in prev) → DROP COLUMN (DESTRUCTIVE). Emitted FIRST among the field ops (still
+  // inside `alters`, after renameType) so a rename/add that REUSES a name this drop frees has it available —
+  // e.g. drop `legacy` + rename `current`→`legacy`, or drop `headline` + add a new field named `headline`,
+  // in ONE migrate. (A pure name SWAP of two surviving fields still needs intermediate staging; deferred.)
+  for (const [fid, pf] of pFields) {
+    if (!nFields.has(fid)) alters.push({ kind: 'dropField', typeId, apiId, risk: 'destructive', fieldId: fid, name: pf.name });
+  }
   // Field RENAMES, RETYPES, NULLABILITY (matched by field id) — a single field may emit several ops.
   for (const [fid, nf] of nFields) {
     const pf = pFields.get(fid);
@@ -247,10 +254,6 @@ function diffMatchedType(typeId: string, p: ContentTypeSchema, n: ContentTypeSch
     if (pFields.has(fid)) continue;
     const risk: ChangeRisk = !nullableOf(nf) && !hasDefault(nf) ? 'data-dependent' : 'safe';
     alters.push({ kind: 'addField', typeId, apiId, risk, field: nf, sort: n.fields.findIndex((f) => f.id === fid) });
-  }
-  // Dropped fields (id only in prev) → DROP COLUMN (DESTRUCTIVE, emitted in the drops phase).
-  for (const [fid, pf] of pFields) {
-    if (!nFields.has(fid)) drops.push({ kind: 'dropField', typeId, apiId, risk: 'destructive', fieldId: fid, name: pf.name });
   }
 
   // REORDER (wire-only): the relative order of COMMON fields changed. Pure add/drop does NOT trigger it.

@@ -334,3 +334,34 @@ entities/
   `hooks.ts`/`services.ts`/`controller.ts`. Clean machine/human split = no fragile in-place file rewriting.
 - Config: `ContiConfig.entities.dir` (default `<cwd>/entities`); `conti init` scaffolds `entities/article/`
   with all four files (services/controller commented placeholders).
+
+## 14. Migration edge-case sweep — what we handle, what we don't (found by a workflow)
+
+An 8-agent adversarial workflow wrote 74 real-PG migration tests (test/migrate-edge-*.ts) — create entity →
+insert real rows → migrate → SELECT + assert data. All 74 green. The sweep HANDLES (verified with data):
+rename (field + type, lossless via stable id; rename+retype together; rename round-trip; the stable-id-vs-
+new-id contrast proving id-matching prevents loss), drop (gated; sibling data intact; re-add is fresh),
+retype safe casts (int→bigint, varchar grow, decimal — values carried), nullability + defaults (NOT NULL+
+default backfills; NOT NULL w/o default on populated gated; nullable→NOT NULL with NULLs gated), multi-op in
+ONE migrate (rename+add+retype atomic, data preserved, topological order), transactional rollback (a blocked
+or failing op applies NOTHING — no partial), idempotency + the full lifecycle, relations (link tables +
+edges survive unrelated migrations; drop keeps endpoint rows).
+
+Two engine/harness fixes the sweep forced:
+- **diff ordering:** `dropField` now precedes field renames/adds within a migrate, so dropping `legacy` +
+  renaming `current`→`legacy` (or dropping `headline` + adding a new `headline`) in ONE migrate works
+  (previously collided with the not-yet-dropped column). 
+- **test harness:** `cleanCatalog` now sweeps `*_lnk` link tables by name (the files-first migrate writes no
+  meta, and `DROP ct_x CASCADE` only drops the FK, not the link table) — they lingered across tests.
+
+KNOWN LIMITATIONS found (data is SAFE in all — they reject/roll back, never corrupt — but the op is
+unsupported; each is pinned by a passing test asserting the current behaviour):
+1. **field-name SWAP in one migrate** (rename A→B AND B→A): rejected (Postgres 42701) + atomic rollback.
+   Needs intermediate temp-name staging. Rare; two-step rename works today.
+2. **enum value-set change** (add/remove a member): classified `rewrite` + gated, but the apply emits only
+   `ALTER COLUMN TYPE` and does NOT rebuild the CHECK — removing an in-use member errors + rolls back; adding
+   one would leave the value un-insertable. Fix = drop+re-add the CHECK with the new value-set in the retype
+   apply. (Enum evolution is common → worth a focused fix.)
+3. **lossy shrink on ack** (varchar shorten / decimal scale reduce): once `allowDestructive` is given, PG
+   truncates/rounds silently rather than failing loud on rows that would lose information. A data-loss
+   surface distinct from the rollback path — arguably acceptable (it was acked) but worth a pre-flight check.
