@@ -2,7 +2,10 @@
 
 # Legacy Meta-Path Teardown — Staged Plan (files + `_schema_applied` as sole truth)
 
-> ## ▶ RESUME HERE (progress as of 2026-06-26)
+> ## ✅ TEARDOWN COMPLETE (2026-06-26)
+> **ALL STAGES DONE — full suite green 1043 pass / 0 fail; final grep gate clean.** `entities/*.ts` + `_schema_applied` are the SOLE source of truth. Deleted: both controllers, the repo meta-write fns (repos gutted to `resolveFields`/`resolveComponentFields` + row types), `Registry.build`/`rebuildType`/`rebuildComponent`, `PostgresStore.load()`/`loadWithRegistry()` + the `src/store/store.ts` seam, `seedFromSchemas`/`seedArticleIfAbsent` (`seed.ts` → `STATUSES`-only), the adapter's legacy `/content-types`+`/component-types` route wiring + `builderActive`, and the 5 meta tables (`0001_init.sql`). `auth.route-gating` rewritten onto the surviving `/builder`+data+media gates (better-auth untouched). Stage 3 commits `a75b202`(3a)+`bef28cc`(3b); Stage 4 `87e1aa3`. Two documented coverage deltas: relation-in-component R0 retired; route-gating granular sub-route 401s collapsed into the whole-type `builder.manage` gate. KEPT (re-grep confirmed): `writeAppliedSnapshot` (boot-reconcile test H), `RESERVED_TABLE_NAMES`/`extractConstraint` (defensive, ddl.ts untouched), `removeType`/`removeComponent`.
+>
+> ## ▶ (historical) RESUME HERE (progress as of 2026-06-26)
 > **Stage 0 DONE** (commit `97eb60e`): `components` threaded through `loadFromSchemas`/`swapFromIR` (default `[]`).
 > **Stage 2 DONE** (commit `ef99955`) — full suite green 1043 pass / 0 fail. boot baseline re-rooted off `seedFromSchemas`→`migrate()`; `seed.ts` slimmed to `STATUSES`-only; 5 legacy meta-route test files deleted; `registry.test` ported to `Registry.fromSchemas`; `relation-declare` guards ported to the files-first `migrate()`/`Registry.fromSchemas` path (relation-vs-scalar `FieldExistsError` + `ct_`-target `ReservedTableNameError` retired as documented; `migrate()` lets a dangling target fail at FK time as a raw `PostgresError` while `Registry.fromSchemas` throws the typed `SchemaAdaptError`). `writeAppliedSnapshot` KEPT (still used by `boot-reconcile.test.ts` test H — plan step 2.3 was wrong).
 > **Stage 1 DONE (migratable set) — full suite green at 1105 pass / 0 fail.**
