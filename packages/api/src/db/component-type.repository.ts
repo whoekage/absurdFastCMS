@@ -124,7 +124,7 @@ export function validateComponentApiId(apiId: string): string {
 // --- field resolution (no DB) ------------------------------------------------------------------
 
 /** A resolved component field ready to INSERT: validated name + cms_type + params + nullable. */
-interface ResolvedComponentField {
+export interface ResolvedComponentField {
   name: string;
   cmsType: string;
   params: Record<string, unknown>;
@@ -134,8 +134,9 @@ interface ResolvedComponentField {
 /**
  * Validate + resolve a batch of component-field specs (names unique CI; each type resolves; a component
  * kind resolves to its `{kind, component|components}` params). Renders NO SQL, touches NO connection.
+ * Exported so the files-first adapter can resolve a component the SAME way the meta writer does.
  */
-function resolveComponentFields(specs: ComponentFieldSpec[]): ResolvedComponentField[] {
+export function resolveComponentFields(specs: ComponentFieldSpec[]): ResolvedComponentField[] {
   const seen = new Set<string>();
   const out: ResolvedComponentField[] = [];
   for (const spec of specs) {

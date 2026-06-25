@@ -19,8 +19,8 @@ import {
   type ComponentFieldRow,
 } from './component-type.repository.ts';
 import { isComponentFieldKind, type CmsType, type ComponentFieldKind } from './type.catalog.ts';
-import { schemaToRows, relationRowsByType } from './schema/adapt.ts';
-import type { ContentTypeSchema } from './schema/model.ts';
+import { schemaToRows, relationRowsByType, componentSchemaToRows } from './schema/adapt.ts';
+import type { ContentTypeSchema, ComponentSchema } from './schema/model.ts';
 
 /**
  * THE RAM SOURCE OF TRUTH at runtime. Built at boot from `content_types` + `content_type_fields`, the
@@ -693,8 +693,13 @@ export class Registry {
    * in docs/research/schema-source-of-truth.md: `Registry.build(sql)` is deleted everywhere in S5 once the
    * Builder writes files. New code MUST target `fromSchemas`, never `build`.
    */
-  static fromSchemas(schemas: ContentTypeSchema[]): Registry {
+  static fromSchemas(schemas: ContentTypeSchema[], components: ComponentSchema[] = []): Registry {
     const reg = new Registry();
+    // Components FIRST (a content-type / component field can reference one) — mirrors Registry.build's order.
+    for (const cs of components) {
+      const { cmp, fieldRows } = componentSchemaToRows(cs);
+      reg.components.set(cmp.api_id, buildComponentDef(cmp, fieldRows));
+    }
     // Relations span two types (owner + synthesized inverse), so build them in one cross-type pass first.
     const relByType = relationRowsByType(schemas);
     for (const schema of schemas) {

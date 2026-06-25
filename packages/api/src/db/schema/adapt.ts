@@ -1,7 +1,8 @@
 import type { ContentTypeRow, FieldRow, RelationRow, FieldSpec } from '../content-type.repository.ts';
 import { resolveFields } from '../content-type.repository.ts';
+import { resolveComponentFields, type ComponentTypeRow, type ComponentFieldRow } from '../component-type.repository.ts';
 import { deriveTableName, deriveLinkTableName, inverseKind } from '../ddl.ts';
-import type { ContentTypeSchema, FieldSchema } from './model.ts';
+import type { ContentTypeSchema, ComponentSchema, FieldSchema } from './model.ts';
 
 /**
  * The ADAPTER from the files-first schema model to the meta ROW shapes the {@link Registry} already
@@ -133,4 +134,26 @@ export function relationRowsByType(schemas: ContentTypeSchema[]): Map<string, Re
     }
   }
   return out;
+}
+
+/**
+ * Convert a {@link ComponentSchema} into the component meta rows `buildComponentDef` expects. Resolves
+ * every field through the SAME `resolveComponentFields` the meta writer uses (which allows a `relation`
+ * inline-ref field, unlike a content-type field). Synthetic numeric ids (buildComponentDef keys off the
+ * field name). A component has no physical table → these rows feed the registry only, never any DDL.
+ */
+export function componentSchemaToRows(schema: ComponentSchema): { cmp: ComponentTypeRow; fieldRows: ComponentFieldRow[] } {
+  const resolved = resolveComponentFields(schema.fields.map(fieldSchemaToSpec));
+  const epoch = new Date(0);
+  const cmp: ComponentTypeRow = { id: SYNTHETIC_ID, api_id: schema.apiId, created_at: epoch, updated_at: epoch };
+  const fieldRows: ComponentFieldRow[] = resolved.map((rf, i) => ({
+    id: i,
+    component_type_id: SYNTHETIC_ID,
+    name: rf.name,
+    cms_type: rf.cmsType,
+    params: rf.params,
+    nullable: rf.nullable,
+    sort: i,
+  }));
+  return { cmp, fieldRows };
 }

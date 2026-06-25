@@ -133,6 +133,18 @@ export interface RelationSchema {
   inverseField?: string;
 }
 
+/**
+ * A COMPONENT declaration — a reusable field group with NO physical table (stored as nested JSON in a host
+ * type's jsonb column). No options (draft&publish/i18n are content-type concerns) and no top-level relations
+ * (a `relation` field INSIDE a component is an inline id-ref, expressed as a normal {@link FieldSchema} of
+ * type `relation`). Lives in `schema/components/<apiId>.ts`.
+ */
+export interface ComponentSchema {
+  id: string;
+  apiId: string;
+  fields: FieldSchema[];
+}
+
 /** A whole content-type declaration (one `schema/<apiId>.json` file). */
 export interface ContentTypeSchema {
   /** Stable identity (never changes; survives an apiId/displayName rename). */

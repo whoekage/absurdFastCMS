@@ -4,10 +4,11 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { Sql } from 'postgres';
 import { createContentType } from '../src/db/content-type.repository.ts';
+import { createComponentType } from '../src/db/component-type.repository.ts';
 import { Registry } from '../src/db/registry.ts';
 import { ARTICLE_SEED_FIELDS } from '../src/db/seed.ts';
 import { parseSchema } from '../src/db/schema/serialize.ts';
-import type { ContentTypeSchema } from '../src/db/schema/model.ts';
+import type { ContentTypeSchema, ComponentSchema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog } from './helpers.ts';
 
@@ -73,4 +74,30 @@ test('fromSchemas builds two-way relation metadata identical to the meta path (o
   // The owner RelationMeta (post.author) and the synthesized inverse (writer.posts) must match byte-for-byte.
   assert.deepStrictEqual(fileReg.get('post')!.relationsByField.get('author'), metaReg.get('post')!.relationsByField.get('author'));
   assert.deepStrictEqual(fileReg.get('writer')!.relationsByField.get('posts'), metaReg.get('writer')!.relationsByField.get('posts'));
+});
+
+test('fromSchemas builds a COMPONENT def identical to the meta path', async () => {
+  // meta SOURCE: createComponentType -> component_types/_fields -> Registry.build.
+  await createComponentType(sql, {
+    apiId: 'seo',
+    fields: [
+      { name: 'metaTitle', cmsType: 'string', options: { length: 60, nullable: true } },
+      { name: 'metaDescription', cmsType: 'text', options: { nullable: false } },
+    ],
+  });
+  const metaDef = (await Registry.build(sql)).getComponent('seo');
+  assert.ok(metaDef, 'meta path built a seo component def');
+
+  // file SOURCE: the same component as a ComponentSchema.
+  const seo: ComponentSchema = {
+    id: 'cmp_seo',
+    apiId: 'seo',
+    fields: [
+      { id: 'f_mt', name: 'metaTitle', type: 'string', options: { length: 60, nullable: true } },
+      { id: 'f_md', name: 'metaDescription', type: 'text', options: { nullable: false } },
+    ],
+  };
+  const fileDef = Registry.fromSchemas([], [seo]).getComponent('seo');
+  assert.ok(fileDef, 'file path built a seo component def');
+  assert.deepStrictEqual(fileDef, metaDef); // identical ComponentDef (fields/maps/sets) regardless of source
 });
