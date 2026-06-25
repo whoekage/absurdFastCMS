@@ -26,6 +26,7 @@ let token: ListenToken;
 let base: string;
 let close: (t: ListenToken) => void;
 let baseSchemas: ContentTypeSchema[]; // the catalog seeded in before() — the mid-test type adds to this
+let baseRegistry: Awaited<ReturnType<PostgresStore['loadFromSchemas']>>['registry'];
 
 // DEFAULT_LOCALE is read from .env.test; the read router resolves a locale-less read of an i18n type to it.
 // We do NOT assume a specific value — we assert relative to whichever variant we tag as the default below.
@@ -56,6 +57,7 @@ before(async () => {
 
   const store = new PostgresStore(sql);
   const { engine, registry } = await store.loadFromSchemas(baseSchemas);
+  baseRegistry = registry;
   const server = createServer(engine, store, registry);
   const port = await freePort();
   token = await server.listen(port);
@@ -317,18 +319,18 @@ test('write-side: i18n composes with draft & publish (locale=fr&status=published
   assert.equal(enDefault.data.find((r: any) => r.title === 'Compose'), undefined, 'the unpublished en variant is excluded by default');
 });
 
-test('the projected def exposes i18n + per-field localized only for an i18n type', async () => {
-  const page = await (await fetch(`${base}/content-types/page`)).json();
-  assert.equal(page.i18n, true, 'an i18n type projects i18n:true');
-  const title = page.fields.find((f: { name: string }) => f.name === 'title');
-  assert.equal(title.localized, true, 'a field defaults to localized:true');
-  // document_id + locale appear as system fields on the projected def for an i18n type.
-  assert.ok(page.fields.find((f: { name: string }) => f.name === 'document_id'));
-  assert.ok(page.fields.find((f: { name: string }) => f.name === 'locale'));
+test('the registry def carries i18n + per-field localized + the synthesized system fields only for an i18n type', () => {
+  // Files-first source of truth: the registry def (the legacy GET /content-types/:apiId projection is gone).
+  const page = baseRegistry.get('page')!;
+  assert.equal(page.i18n, true, 'an i18n type carries i18n:true');
+  assert.equal(page.fields.find((f) => f.name === 'title')!.localized, true, 'a field defaults to localized:true');
+  // document_id + locale are synthesized + appended as system fields on an i18n type's def.
+  assert.ok(page.fields.find((f) => f.name === 'document_id'));
+  assert.ok(page.fields.find((f) => f.name === 'locale'));
 
-  const article = await (await fetch(`${base}/content-types/article`)).json();
-  assert.equal('i18n' in article, false, 'a non-i18n type omits the i18n key (byte-identical)');
-  for (const f of article.fields) assert.equal('localized' in f, false, 'a non-i18n type omits per-field localized');
-  assert.equal(article.fields.find((f: { name: string }) => f.name === 'document_id'), undefined);
-  assert.equal(article.fields.find((f: { name: string }) => f.name === 'locale'), undefined);
+  const article = baseRegistry.get('article')!;
+  assert.equal(article.i18n, false, 'a non-i18n type carries i18n:false');
+  // A non-i18n type synthesizes NEITHER document_id (loader-skip stays) NOR locale.
+  assert.equal(article.fields.find((f) => f.name === 'document_id'), undefined);
+  assert.equal(article.fields.find((f) => f.name === 'locale'), undefined);
 });

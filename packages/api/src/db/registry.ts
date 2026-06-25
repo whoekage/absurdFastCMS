@@ -2,22 +2,8 @@ import type { Sql } from 'postgres';
 import type { ColumnType } from '../store/column.ts';
 import type { FieldDef } from '../store/table.ts';
 import { deriveTableName, validateIdentifier, RELATION_KINDS, type RelationKind } from './ddl.ts';
-import {
-  listContentTypes,
-  getContentType,
-  getFields,
-  getRelations,
-  type ContentTypeRow,
-  type FieldRow,
-  type RelationRow,
-} from './content-type.repository.ts';
-import {
-  listComponentTypes,
-  getComponentType,
-  getComponentFields,
-  type ComponentTypeRow,
-  type ComponentFieldRow,
-} from './component-type.repository.ts';
+import type { ContentTypeRow, FieldRow, RelationRow } from './content-type.repository.ts';
+import type { ComponentTypeRow, ComponentFieldRow } from './component-type.repository.ts';
 import { isComponentFieldKind, type CmsType, type ComponentFieldKind } from './type.catalog.ts';
 import { schemaToRows, relationRowsByType, componentSchemaToRows } from './schema/adapt.ts';
 import type { ContentTypeSchema, ComponentSchema } from './schema/model.ts';
@@ -709,62 +695,9 @@ export class Registry {
     return reg;
   }
 
-  /**
-   * Build the WHOLE registry from meta. Empty catalog is valid (an empty registry).
-   *
-   * TEMPORARY COMPAT SHIM (S1 expand-contract): reads the `content_types`/`content_type_fields` meta
-   * tables so the ~30 existing call sites + the full suite stay green byte-identical while files become the
-   * source. SCHEDULED FOR DELETION in S5 (§7.1 Cleanup ledger) — do not add new callers; use
-   * {@link Registry.fromSchemas} instead.
-   */
-  static async build(sql: Sql): Promise<Registry> {
-    const reg = new Registry();
-    // be-05: build component defs FIRST so a content-type / component referencing one can resolve it.
-    const components = await listComponentTypes(sql);
-    for (const cmp of components) {
-      const fieldRows = await getComponentFields(sql, cmp.id);
-      reg.components.set(cmp.api_id, buildComponentDef(cmp, fieldRows));
-    }
-    const types = await listContentTypes(sql);
-    for (const ct of types) {
-      const fieldRows = await getFields(sql, ct.id);
-      const relationRows = await getRelations(sql, ct.id);
-      reg.byApiId.set(ct.api_id, buildDef(ct, fieldRows, relationRows));
-    }
-    return reg;
-  }
-
-  /**
-   * be-05: rebuild ONE component def fresh from the DB (the per-component create/addField/dropField hook)
-   * and replace the map entry. Throws {@link RegistryError} if the component vanished.
-   */
-  async rebuildComponent(sql: Sql, apiId: string): Promise<ComponentDef> {
-    const cmp = await getComponentType(sql, apiId);
-    if (cmp === null) throw new RegistryError(apiId, '', 'component-type not found on rebuild');
-    const fieldRows = await getComponentFields(sql, cmp.id);
-    const def = buildComponentDef(cmp, fieldRows);
-    this.components.set(def.apiId, def);
-    return def;
-  }
-
   /** be-05: remove ONE component def (the drop hook). Returns whether it was present. */
   removeComponent(apiId: string): boolean {
     return this.components.delete(apiId);
-  }
-
-  /**
-   * Rebuild ONE type's def fresh from the DB (the per-type schema-change / write hook) and replace the
-   * map entry. Re-reads getContentType + getFields so a rename / drop / type change reflects fresh,
-   * never patched in place. Throws {@link RegistryError} if the type vanished.
-   */
-  async rebuildType(sql: Sql, apiId: string): Promise<ContentTypeDef> {
-    const ct = await getContentType(sql, apiId);
-    if (ct === null) throw new RegistryError(apiId, '', 'content-type not found on rebuild');
-    const fieldRows = await getFields(sql, ct.id);
-    const relationRows = await getRelations(sql, ct.id);
-    const def = buildDef(ct, fieldRows, relationRows);
-    this.byApiId.set(def.apiId, def);
-    return def;
   }
 
   /** Remove ONE type's def (the drop hook). Returns whether it was present (false signals a desync). */

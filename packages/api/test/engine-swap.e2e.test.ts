@@ -144,9 +144,11 @@ test('8 — hooks are SWAP-AWARE: a hooks.ts added then picked up on the next ed
   assert.equal((await dataOf('/gadget')).data[0]!.title, 'HI'); // the swapped-in hook ran (live.hooks getter)
 });
 
-test('11 — legacy /content-types mutation is 410 Gone while the Builder is active; /builder works', async () => {
+test('11 — the legacy /content-types mutation route is GONE (404); the files-first Builder works', async () => {
+  // Legacy-meta teardown: the meta controller is deleted, so POST /content-types is no longer a registered
+  // route — it falls through to the 404 fallback (was a 410 shim during the transition).
   const r = await fetch(`${srv.base}/content-types`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-  assert.equal(r.status, 410);
+  assert.equal(r.status, 404);
   const ok = await srv.applyEdit({ apiId: 'widget', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   assert.ok(ok.ok);
   assert.equal((await get('/widget')).status, 200);

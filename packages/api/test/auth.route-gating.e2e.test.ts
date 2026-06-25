@@ -1,5 +1,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import type { Sql } from 'postgres';
 
@@ -7,12 +10,15 @@ import { runMigrations } from '../src/db/migration.runner.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer } from '../src/http/uws.adapter.ts';
-import { freePort } from './helpers.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
+import { loadTypes } from '../src/db/schema/load.ts';
+import { generateSchemaSource } from '../src/db/schema/codegen.ts';
+import { HookRegistry } from '../src/db/schema/hooks.ts';
+import { freePort, ct } from './helpers.ts';
 import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
 import { buildAuth } from '../src/auth/auth.ts';
 import { SessionCache } from '../src/auth/session.cache.ts';
 import { RbacRegistry } from '../src/auth/rbac.registry.ts';
-import { createContentType } from '../src/db/content-type.repository.ts';
 
 /**
  * be-09b — ROUTE-GATING + FIRST-ADMIN BOOTSTRAP, E2E over a REAL uWS server + REAL better-auth + REAL
@@ -21,7 +27,20 @@ import { createContentType } from '../src/db/content-type.repository.ts';
  * 2xx with the permission); reads stay PUBLIC; the warm gated path is ZERO-PG; the first sign-up is
  * promoted to super-admin exactly once (idempotent + race-safe); no body-supplied role/userId escalates;
  * no path/method bypass; and drafts never leak on the public read path under gating.
+ *
+ * LEGACY-META TEARDOWN (rewritten): this file used to gate the legacy `POST /content-types` meta CONTROLLER,
+ * which is deleted. The gate matrix is re-expressed onto the SURVIVING gated surface — the same shared
+ * `gate()` (SessionCache.validate + RbacRegistry.checkPermission) backs all three:
+ *   - `builder.manage` → the files-first Builder routes (`POST /builder/reload`, `PUT/DELETE/preview
+ *     /builder/content-types/:apiId`); the per-field/relation/component-field sub-route 401 cases collapse
+ *     into the whole-type Builder gate (documented coverage delta — the granular sub-routes no longer exist).
+ *   - `content.create|update|delete|publish` → the data write routes on `crudt`.
+ *   - `media.upload` → `POST /_files/upload`.
+ * `dpgate` (D&P) + `crudt` are pre-built files-first (entities fixtures + migrate) so the first HTTP sign-up
+ * is still genuinely first (bootstrap stays clean), and the Builder routes register (entitiesDir present).
  */
+
+const genDir = fileURLToPath(new URL(`./fixtures/.gen-${process.pid}-routegating/`, import.meta.url));
 
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let sql: Sql; // the COUNTED handle (debug query counter) shared by better-auth + cache + rbac + store.
@@ -66,11 +85,33 @@ async function grantRole(userId: string, roleName: string): Promise<void> {
   await rbac.rebuild();
 }
 
+/** The current Builder catalog ETag (If-Match precondition for PUT/DELETE). */
+async function builderEtag(): Promise<string> {
+  return (await fetch(`${base}/builder/content-types`)).headers.get('etag') ?? '';
+}
+
+/** Whether the Builder catalog currently exposes a type (a files-first replacement for the meta-row check). */
+async function builderHasType(apiId: string): Promise<boolean> {
+  const list = (await (await fetch(`${base}/builder/content-types`)).json()) as { schemas?: { apiId: string }[] };
+  return (list.schemas ?? []).some((s) => s.apiId === apiId);
+}
+
 before(async () => {
   db = await createFileDatabase('routegating');
   await runMigrations(db.url);
   sql = postgres(db.url, { max: 8, prepare: true, debug: () => { queryCount++; } });
   setAuthSql(sql);
+
+  // Pre-build dpgate (Draft & Publish) + crudt (plain) files-first: write the entities fixtures, then migrate
+  // them so the ct_ tables + snapshot exist. The first HTTP sign-up below is therefore still genuinely first.
+  const dpgate = ct({ apiId: 'dpgate', draftPublish: true, fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }] });
+  const crudt = ct({ apiId: 'crudt', fields: [{ name: 'title', cmsType: 'string' }] });
+  await rm(genDir, { recursive: true, force: true });
+  for (const schema of [dpgate, crudt]) {
+    await mkdir(path.join(genDir, schema.apiId), { recursive: true });
+    await writeFile(path.join(genDir, schema.apiId, 'schema.ts'), generateSchemaSource(schema));
+  }
+  await migrate(sql, [dpgate, crudt], { allowDestructive: true });
 
   const port0 = await freePort();
   base = `http://127.0.0.1:${port0}`;
@@ -81,16 +122,10 @@ before(async () => {
   auth = buildAuth({ baseURL: base, sessionEvictor: sessionCache, sql, rbacInvalidate: () => rbac.rebuild() });
   await rbac.rebuild();
 
-  // Pre-create the D&P type BEFORE loadWithRegistry so the live engine/registry knows it (the draft-leak
-  // test below writes rows through the gated API, which rebuilds a KNOWN type in place).
-  await createContentType(sql, {
-    apiId: 'dpgate',
-    draftPublish: true,
-    fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }],
-  });
-
-  const { engine, registry } = await store.loadWithRegistry();
-  const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac);
+  const { schemas, hooks } = await loadTypes(genDir);
+  const { engine, registry } = await store.loadFromSchemas(schemas);
+  // positions: auth=5, sessionCache=6, rbac=7 ⇒ authEnabled; HookRegistry=9, entitiesDir=10 ⇒ builderActive.
+  const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, undefined, new HookRegistry(hooks), genDir);
   token = await server.listen(port0);
   close = server.close;
 });
@@ -103,6 +138,7 @@ after(async () => {
   await sql.end();
   await db.sql.end();
   await dropFileDatabase(db.name);
+  await rm(genDir, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------------------------------
@@ -134,7 +170,7 @@ test('checklist#7/#8: the FIRST sign-up is promoted to super-admin; the second g
 });
 
 test('checklist#6: re-invoking the bootstrap after an admin exists is a NO-OP (refused)', async () => {
-  // Directly drive the hook path semantics: a third user signs up; no second admin appears.
+  // A third user signs up; no second admin appears.
   await signUp('third@example.com');
   const thirdId = await userIdOf('third@example.com');
   await rbac.rebuild();
@@ -149,55 +185,50 @@ test('checklist#6: re-invoking the bootstrap after an admin exists is a NO-OP (r
 // 401-vs-403 SPLIT + DENY-BY-DEFAULT on the Builder (checklist #1, #10).
 // ---------------------------------------------------------------------------------------------------
 
-test('checklist#1/#10: POST /content-types is 401 with no session, 403 as viewer, 2xx as super-admin', async () => {
-  const body = JSON.stringify({ apiId: 'gatecheck', fields: [{ name: 'title', cmsType: 'string' }] });
-
-  // NO session → 401 (unauthenticated). Assert NO content-type row was created.
-  const noAuth = await fetch(`${base}/content-types`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body,
-  });
+test('checklist#1/#10: a builder.manage mutation is 401 with no session, 403 as viewer, 2xx as super-admin', async () => {
+  // NO session → 401 on the gated Builder reload.
+  const noAuth = await fetch(`${base}/builder/reload`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
   assert.equal(noAuth.status, 401, `expected 401, got ${noAuth.status}`);
-  let exists = await sql`SELECT 1 FROM content_types WHERE api_id = 'gatecheck'`;
-  assert.equal(exists.length, 0, 'an unauthenticated POST must NOT create a content-type');
 
-  // VIEWER session (no builder.manage) → 403 (forbidden). Still no row.
+  // VIEWER session (no builder.manage) → 403.
   const viewerCookie = await signUp('viewer1@example.com');
   await grantRole(await userIdOf('viewer1@example.com'), 'viewer');
-  const asViewer = await fetch(`${base}/content-types`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie: viewerCookie }, body,
-  });
+  const asViewer = await fetch(`${base}/builder/reload`, { method: 'POST', headers: { 'content-type': 'application/json', cookie: viewerCookie }, body: '{}' });
   assert.equal(asViewer.status, 403, `expected 403, got ${asViewer.status}`);
-  exists = await sql`SELECT 1 FROM content_types WHERE api_id = 'gatecheck'`;
-  assert.equal(exists.length, 0, 'a viewer POST must NOT create a content-type');
 
-  // SUPER-ADMIN session → 2xx, row created.
+  // SUPER-ADMIN session → 2xx; and a PUT actually creates a type (gate allows the authorized mutation).
   const adminCookie = await signUp('builder@example.com');
   await grantRole(await userIdOf('builder@example.com'), 'super-admin');
-  const asAdmin = await fetch(`${base}/content-types`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie: adminCookie }, body,
+  const reload = await fetch(`${base}/builder/reload`, { method: 'POST', headers: { 'content-type': 'application/json', cookie: adminCookie }, body: '{}' });
+  assert.ok(reload.status === 200 || reload.status === 201, `expected 2xx reload, got ${reload.status} ${await reload.clone().text()}`);
+
+  assert.equal(await builderHasType('gatecheck'), false, 'gatecheck does not exist yet');
+  const create = await fetch(`${base}/builder/content-types/gatecheck`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', cookie: adminCookie, 'if-match': await builderEtag() },
+    body: JSON.stringify({ apiId: 'gatecheck', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] }),
   });
-  assert.ok(asAdmin.status === 200 || asAdmin.status === 201, `expected 2xx, got ${asAdmin.status} ${await asAdmin.clone().text()}`);
-  exists = await sql`SELECT 1 FROM content_types WHERE api_id = 'gatecheck'`;
-  assert.equal(exists.length, 1, 'a super-admin POST must create the content-type');
+  assert.ok(create.status === 200 || create.status === 201, `super-admin builder PUT must 2xx, got ${create.status} ${await create.clone().text()}`);
+  assert.equal(await builderHasType('gatecheck'), true, 'a super-admin builder PUT must create the type');
 });
 
-test('checklist#1: every Builder mutation route is gated (401 with no session)', async () => {
-  const routes: [string, string][] = [
-    ['DELETE', '/content-types/gatecheck'],
-    ['POST', '/content-types/gatecheck/fields'],
-    ['PUT', '/content-types/gatecheck/fields/title'],
-    ['DELETE', '/content-types/gatecheck/fields/title'],
-    ['POST', '/content-types/gatecheck/relations'],
-    ['POST', '/component-types'],
-    ['DELETE', '/component-types/seo'],
-    ['POST', '/component-types/seo/fields'],
-    ['DELETE', '/component-types/seo/fields/x'],
+test('checklist#1: every gated mutation route is 401 with no session (builder + data + media)', async () => {
+  const routes: [string, string, string | undefined][] = [
+    ['POST', '/builder/reload', '{}'],
+    ['POST', '/builder/content-types/x/preview', '{"apiId":"x","fields":[]}'],
+    ['PUT', '/builder/content-types/x', '{"apiId":"x","fields":[]}'],
+    ['DELETE', '/builder/content-types/x', undefined],
+    ['POST', '/crudt', '{"title":"x"}'],
+    ['PUT', '/crudt/1', '{"title":"x"}'],
+    ['DELETE', '/crudt/1', undefined],
+    ['POST', '/crudt/1/actions/publish', undefined],
+    ['POST', '/_files/upload', undefined],
   ];
-  for (const [method, path] of routes) {
-    const res = await fetch(`${base}${path}`, {
-      method, headers: { 'content-type': 'application/json' }, body: method === 'DELETE' ? undefined : '{}',
+  for (const [method, p, body] of routes) {
+    const res = await fetch(`${base}${p}`, {
+      method, headers: { 'content-type': 'application/json' }, body,
     });
-    assert.equal(res.status, 401, `${method} ${path} must be 401 with no session, got ${res.status}`);
+    assert.equal(res.status, 401, `${method} ${p} must be 401 with no session, got ${res.status}`);
   }
 });
 
@@ -205,17 +236,16 @@ test('checklist#1: every Builder mutation route is gated (401 with no session)',
 // READS STAY PUBLIC (checklist #9 — no draft leak; reads need no auth).
 // ---------------------------------------------------------------------------------------------------
 
-test('reads stay PUBLIC: GET /content-types + GET /:type need no session (200)', async () => {
-  const list = await fetch(`${base}/content-types`);
-  assert.equal(list.status, 200, 'GET /content-types must be public');
-  // A seeded type read with no auth.
-  const read = await fetch(`${base}/gatecheck`);
+test('reads stay PUBLIC: GET /builder/content-types + GET /:type need no session (200)', async () => {
+  const list = await fetch(`${base}/builder/content-types`);
+  assert.equal(list.status, 200, 'GET /builder/content-types must be public');
+  const read = await fetch(`${base}/crudt`);
   assert.equal(read.status, 200, 'GET /:type must be public with no session');
 });
 
 test('checklist#9: a DRAFT is not leaked on the public read path under gating', async () => {
-  // `dpgate` (a D&P type) was pre-created in before(). Insert a published row + a draft via the gated API
-  // as super-admin (the engine rebuilds the type in place), then read with NO auth.
+  // `dpgate` (a D&P type) is pre-built files-first. Insert a published row + a draft via the gated DATA API
+  // as super-admin, then read with NO auth.
   const adminCookie = await signUp('dpadmin@example.com');
   await grantRole(await userIdOf('dpadmin@example.com'), 'super-admin');
   const pub = await fetch(`${base}/dpgate`, {
@@ -224,12 +254,8 @@ test('checklist#9: a DRAFT is not leaked on the public read path under gating', 
   });
   assert.ok(pub.status === 200 || pub.status === 201, `seed published failed: ${pub.status} ${await pub.clone().text()}`);
   const pubId = ((await pub.json()) as { data: { id: number } }).data.id;
-  // Publish it so published_at IS NOT NULL.
-  const doPub = await fetch(`${base}/dpgate/${pubId}/actions/publish`, {
-    method: 'POST', headers: { cookie: adminCookie },
-  });
+  const doPub = await fetch(`${base}/dpgate/${pubId}/actions/publish`, { method: 'POST', headers: { cookie: adminCookie } });
   assert.equal(doPub.status, 200, `publish failed: ${doPub.status} ${await doPub.clone().text()}`);
-  // Insert a draft (stays unpublished).
   const draft = await fetch(`${base}/dpgate`, {
     method: 'POST', headers: { 'content-type': 'application/json', cookie: adminCookie },
     body: JSON.stringify({ title: 'secret-draft' }),
@@ -249,14 +275,9 @@ test('checklist#9: a DRAFT is not leaked on the public read path under gating', 
 // ---------------------------------------------------------------------------------------------------
 
 test('checklist#5: create/update/delete each gate on their own permission (no method gets a weaker check)', async () => {
-  // Set up a target type + one row as super-admin.
+  // Seed one crudt row as super-admin.
   const adminCookie = await signUp('crudadmin@example.com');
   await grantRole(await userIdOf('crudadmin@example.com'), 'super-admin');
-  const mk = await fetch(`${base}/content-types`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie: adminCookie },
-    body: JSON.stringify({ apiId: 'crudt', fields: [{ name: 'title', cmsType: 'string' }] }),
-  });
-  assert.ok(mk.status === 200 || mk.status === 201, `mk type: ${mk.status} ${await mk.clone().text()}`);
   const seed = await fetch(`${base}/crudt`, {
     method: 'POST', headers: { 'content-type': 'application/json', cookie: adminCookie },
     body: JSON.stringify({ title: 'a' }),
@@ -284,7 +305,6 @@ test('checklist#5: create/update/delete each gate on their own permission (no me
   // DELETE → FORBIDDEN (author lacks content.delete) — a different verb does NOT get a weaker check.
   const del = await fetch(`${base}/crudt/${rowId}`, { method: 'DELETE', headers: { cookie: authorCookie } });
   assert.equal(del.status, 403, `author DELETE must be 403, got ${del.status}`);
-  // The row must still exist.
   const still = await sql`SELECT 1 FROM ct_crudt WHERE id = ${rowId}`;
   assert.equal(still.length, 1, 'a forbidden DELETE must not remove the row');
 });
@@ -299,26 +319,25 @@ test('checklist#3/#4: a body-supplied role/userId/isAdmin NEVER escalates authz'
   await grantRole(await userIdOf('massassign@example.com'), 'author');
   const adminId = await userIdOf('admin@example.com');
 
-  const res = await fetch(`${base}/content-types`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', cookie: authorCookie },
+  const res = await fetch(`${base}/builder/content-types/evil`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', cookie: authorCookie, 'if-match': await builderEtag() },
     body: JSON.stringify({
-      apiId: 'evil', fields: [{ name: 'x', cmsType: 'string' }],
+      apiId: 'evil', fields: [{ name: 'x', type: 'string' }],
       userId: adminId, role: 'super-admin', isAdmin: true, permission: 'builder.manage',
     }),
   });
   // Authorized against the SESSION principal only → author lacks builder.manage → 403.
   assert.equal(res.status, 403, `body-supplied role must be ignored; expected 403, got ${res.status}`);
-  const exists = await sql`SELECT 1 FROM content_types WHERE api_id = 'evil'`;
-  assert.equal(exists.length, 0, 'the privileged-body Builder write must not create a content-type');
+  assert.equal(await builderHasType('evil'), false, 'the privileged-body Builder write must not create a type');
 
   // user_roles for the author was NOT mutated by the body (no self-escalation surface this slice).
   const grants = await sql`SELECT 1 FROM user_roles WHERE user_id = ${await userIdOf('massassign@example.com')}`;
   assert.equal(grants.length, 1, 'only the explicitly-granted author role exists; the body added nothing');
 
   // A request with userId in the body but NO session → 401 (body userId ignored).
-  const noSession = await fetch(`${base}/content-types`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+  const noSession = await fetch(`${base}/builder/content-types/evil2`, {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ apiId: 'evil2', fields: [], userId: adminId, role: 'super-admin' }),
   });
   assert.equal(noSession.status, 401, 'a body userId with no session must be 401, not an escalation');
@@ -329,17 +348,17 @@ test('checklist#3/#4: a body-supplied role/userId/isAdmin NEVER escalates authz'
 // ---------------------------------------------------------------------------------------------------
 
 test('checklist#2: an odd-slash path never reaches a write (401/404, never 2xx, never a created row)', async () => {
-  for (const path of ['//content-types', '///content-types']) {
-    const res = await fetch(`${base}${path}`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ apiId: 'slashbypass', fields: [] }),
+  for (const p of ['//crudt', '///crudt']) {
+    const res = await fetch(`${base}${p}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'slashbypass' }),
     });
-    assert.ok(res.status === 401 || res.status === 404,
-      `${path} must be 401/404, never 2xx; got ${res.status}`);
-    assert.ok(res.status < 200 || res.status >= 300, `${path} must NEVER 2xx`);
+    // The odd-slash spelling never reaches the gated write handler: it is rejected (401 unauth / 404 no-route /
+    // 405 method-mismatch), and crucially NEVER 2xx and never persists a row.
+    assert.ok([401, 404, 405].includes(res.status), `${p} must be rejected (401/404/405), never 2xx; got ${res.status}`);
+    assert.ok(res.status < 200 || res.status >= 300, `${p} must NEVER 2xx`);
   }
-  const created = await sql`SELECT 1 FROM content_types WHERE api_id = 'slashbypass'`;
-  assert.equal(created.length, 0, 'no odd-slash spelling created a content-type');
+  const created = await sql`SELECT 1 FROM ct_crudt WHERE title = 'slashbypass'`;
+  assert.equal(created.length, 0, 'no odd-slash spelling created a row');
 });
 
 test('checklist#10: an unknown path returns 404 from the fallback, not 200/500', async () => {
@@ -360,7 +379,7 @@ test('checklist#11: POST /_files/upload is 401 no session / 403 viewer; GET /_fi
     return { body, ct: `multipart/form-data; boundary=${boundary}` };
   };
 
-  // NO session → 401. No file row persisted.
+  // NO session → 401.
   const m1 = multipart();
   const noAuth = await fetch(`${base}/_files/upload`, { method: 'POST', headers: { 'content-type': m1.ct }, body: m1.body });
   assert.equal(noAuth.status, 401, `no-session upload must be 401, got ${noAuth.status}`);
@@ -399,28 +418,19 @@ test('a session whose role was revoked mid-session is re-evaluated against the l
   const uid = await userIdOf('revoke@example.com');
   await grantRole(uid, 'super-admin');
 
-  // With the grant: a Builder write is allowed.
-  const ok = await fetch(`${base}/content-types`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie },
-    body: JSON.stringify({ apiId: 'revoketype', fields: [{ name: 't', cmsType: 'string' }] }),
-  });
+  // With the grant: a builder.manage write is allowed.
+  const ok = await fetch(`${base}/builder/reload`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: '{}' });
   assert.ok(ok.status === 200 || ok.status === 201, `granted write must 2xx, got ${ok.status}`);
 
   // Revoke the role + rebuild — the session stays warm (still authenticates) but loses the permission.
   await sql`DELETE FROM user_roles WHERE user_id = ${uid}`;
   await rbac.rebuild();
-  const denied = await fetch(`${base}/content-types`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie },
-    body: JSON.stringify({ apiId: 'revoketype2', fields: [] }),
-  });
+  const denied = await fetch(`${base}/builder/reload`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: '{}' });
   assert.equal(denied.status, 403, `a revoked session must now be 403, got ${denied.status}`);
 });
 
 // ---------------------------------------------------------------------------------------------------
-// EDGE: an EXPIRED/EVICTED session at a gated route → 401 (not 403, not 2xx). A real sign-out deletes
-// the PG session row + the delete.after hook evicts the RAM cache; the next gated request re-misses the
-// cache, re-reads PG, finds no live session → principal null → 401. (Same terminal state an expired
-// session reaches: warm hit fails the TTL compare → local evict → PG miss → null.)
+// EDGE: an EXPIRED/EVICTED session at a gated route → 401 (not 403, not 2xx).
 // ---------------------------------------------------------------------------------------------------
 
 test('an EVICTED/expired session at a gated route is 401 (deny-by-default), not a stale 2xx', async () => {
@@ -428,80 +438,59 @@ test('an EVICTED/expired session at a gated route is 401 (deny-by-default), not 
   await grantRole(await userIdOf('evictgate@example.com'), 'super-admin');
 
   // Warm + prove the grant works at the gated route.
-  const ok = await fetch(`${base}/content-types`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie },
-    body: JSON.stringify({ apiId: 'evictbefore', fields: [{ name: 't', cmsType: 'string' }] }),
-  });
+  const ok = await fetch(`${base}/builder/reload`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: '{}' });
   assert.ok(ok.status === 200 || ok.status === 201, `granted write must 2xx, got ${ok.status}`);
 
-  // Real sign-out → deletes the session row → session.delete.after evicts the RAM cache. (Origin matches
-  // baseURL so better-auth's CSRF origin check passes on this state-changing route.)
+  // Real sign-out → deletes the session row → session.delete.after evicts the RAM cache.
   const out = await fetch(`${base}/auth/sign-out`, { method: 'POST', headers: { cookie, origin: base } });
   assert.equal(out.status, 200, `sign-out failed: ${out.status} ${await out.clone().text()}`);
 
   // The SAME cookie now resolves no live session: the gated route re-misses RAM, re-reads PG, finds none.
-  const denied = await fetch(`${base}/content-types`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie },
-    body: JSON.stringify({ apiId: 'evictafter', fields: [] }),
-  });
+  const denied = await fetch(`${base}/builder/reload`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: '{}' });
   assert.equal(denied.status, 401, `an evicted/expired session must be 401, got ${denied.status}`);
-  const created = await sql`SELECT 1 FROM content_types WHERE api_id = 'evictafter'`;
-  assert.equal(created.length, 0, 'an evicted-session write must not create a content-type');
 });
 
 // ---------------------------------------------------------------------------------------------------
-// EDGE: a WRITE by a principal with NO write perm seeded for the action → 403 (deny-by-default). A fresh
-// (non-first) sign-up holds ZERO permissions; it authenticates fine (so NOT 401) but no write action is
-// granted, so EVERY gated write route is 403 and nothing is persisted.
+// EDGE: a WRITE by a principal with NO write perm seeded for the action → 403 (deny-by-default).
 // ---------------------------------------------------------------------------------------------------
 
 test('a ZERO-permission (no perms seeded) session is 403 on every gated write, persists nothing', async () => {
-  // A fresh sign-up after the first admin exists → bootstrap no-op → no role → no perms (deny-by-default).
   const cookie = await signUp('noperm@example.com');
   const uid = await userIdOf('noperm@example.com');
   await rbac.rebuild();
   assert.equal(rbac.permissionsOf(uid).size, 0, 'a non-first sign-up must hold ZERO permissions');
 
-  // Every gated write/builder/upload route → 403 (authenticated, but lacking the mapped perm).
+  // Every gated builder/write route → 403 (authenticated, but lacking the mapped perm).
   const gated: [string, string, string | undefined][] = [
-    ['POST', '/content-types', JSON.stringify({ apiId: 'nopermct', fields: [] })],
-    ['POST', '/gatecheck', JSON.stringify({ title: 'x' })],
-    ['PUT', '/gatecheck/1', JSON.stringify({ title: 'x' })],
-    ['DELETE', '/gatecheck/1', undefined],
-    ['POST', '/gatecheck/1/actions/publish', undefined],
+    ['POST', '/builder/reload', '{}'],
+    ['PUT', '/builder/content-types/nopermct', JSON.stringify({ apiId: 'nopermct', fields: [] })],
+    ['POST', '/crudt', JSON.stringify({ title: 'x' })],
+    ['PUT', '/crudt/1', JSON.stringify({ title: 'x' })],
+    ['DELETE', '/crudt/1', undefined],
+    ['POST', '/dpgate/1/actions/publish', undefined],
   ];
-  for (const [method, path, body] of gated) {
-    const res = await fetch(`${base}${path}`, {
+  for (const [method, p, body] of gated) {
+    const res = await fetch(`${base}${p}`, {
       method,
       headers: body !== undefined ? { 'content-type': 'application/json', cookie } : { cookie },
       body,
     });
-    assert.equal(res.status, 403, `${method} ${path} for a zero-perm session must be 403, got ${res.status}`);
+    assert.equal(res.status, 403, `${method} ${p} for a zero-perm session must be 403, got ${res.status}`);
   }
-  const created = await sql`SELECT 1 FROM content_types WHERE api_id = 'nopermct'`;
-  assert.equal(created.length, 0, 'a zero-perm Builder write must persist nothing');
+  assert.equal(await builderHasType('nopermct'), false, 'a zero-perm Builder write must persist nothing');
 });
 
 test('the WARM gated path is ZERO-PG (validate + checkPermission are RAM)', async () => {
   const cookie = await signUp('zeropg@example.com');
   await grantRole(await userIdOf('zeropg@example.com'), 'editor');
 
-  // Warm the session cache with one request (cold validate hits PG once).
-  await fetch(`${base}/zeropg-warm-miss`, { headers: { cookie } }); // a GET is public; warms nothing gated
-  // Drive a gated write to warm the session entry through validate.
-  await fetch(`${base}/content-types`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie },
-    body: JSON.stringify({ apiId: 'zeropgtype', fields: [] }),
-  });
+  // Warm the session entry through a gated request (editor lacks builder.manage → 403, but validate warms).
+  await fetch(`${base}/builder/reload`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: '{}' });
 
-  // Now measure: a gated request that is DENIED at the perm check (editor lacks builder.manage) — the
-  // only PG work would be the session validate, which is now WARM (off-heap). The 403 short-circuits
-  // before any handler SQL. Count queries across the request window.
+  // Now measure: a gated request DENIED at the perm check (editor lacks builder.manage) — the only PG work
+  // would be the session validate, which is now WARM (off-heap). The 403 short-circuits before any handler SQL.
   queryCount = 0;
-  const res = await fetch(`${base}/content-types`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie },
-    body: JSON.stringify({ apiId: 'zeropgtype2', fields: [] }),
-  });
+  const res = await fetch(`${base}/builder/reload`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: '{}' });
   assert.equal(res.status, 403, 'editor lacks builder.manage');
   assert.equal(queryCount, 0,
     `a WARM gated request (warm validate + RAM checkPermission) must fire ZERO Postgres queries, saw ${queryCount}`);
@@ -512,7 +501,6 @@ test('the WARM gated path is ZERO-PG (validate + checkPermission are RAM)', asyn
 // ---------------------------------------------------------------------------------------------------
 
 test('checklist#6: N concurrent first sign-ups against a FRESH db yield EXACTLY ONE super-admin', async () => {
-  // A fresh, independent db so "no admin yet" is genuinely true for the race.
   const fresh = await createFileDatabase('rgrace');
   try {
     await runMigrations(fresh.url);
@@ -523,15 +511,13 @@ test('checklist#6: N concurrent first sign-ups against a FRESH db yield EXACTLY 
       const fcache = new SessionCache(() => fauth, undefined, 0);
       const fport = await freePort();
       const fbase = `http://127.0.0.1:${fport}`;
-      // The auth instance for THIS db (its own sql for the bootstrap hook).
       setAuthSql(fsql);
       fauth = buildAuth({ baseURL: fbase, sessionEvictor: fcache, sql: fsql, rbacInvalidate: () => frbac.rebuild() });
       const fstore = new PostgresStore(fsql);
-      const { engine, registry } = await fstore.loadWithRegistry();
+      const { engine, registry } = await fstore.loadFromSchemas([]); // files-first empty catalog (no types)
       const fserver = createServer(engine, fstore, registry, undefined, fauth, fcache, frbac);
       const ftoken = await fserver.listen(fport);
       try {
-        // Fire N concurrent real sign-ups.
         const N = 8;
         const results = await Promise.all(
           Array.from({ length: N }, (_, i) =>

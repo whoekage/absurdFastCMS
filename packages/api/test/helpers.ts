@@ -99,18 +99,6 @@ export function rawField(buf: Buffer | string, field: string): string {
   return s.slice(start, i);
 }
 
-/** Bring up a real uWS server over the given sql: load engine+registry, create + listen on a free port. */
-export async function startTestServer(
-  sql: Sql,
-): Promise<{ base: string; close: (token: unknown) => void; token: unknown; engine: Engine; registry: Registry }> {
-  const store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadWithRegistry();
-  const server = createServer(engine, store, registry);
-  const port = await freePort();
-  const token = await server.listen(port);
-  return { base: `http://127.0.0.1:${port}`, close: server.close, token, engine, registry };
-}
-
 /**
  * FILES-FIRST test server (S4): build engine+registry from `entitiesDir`'s files and wire the Builder so
  * `applyEdit` makes a schema change LIVE in-process. Asserting via HTTP GET against `base` is the contract —

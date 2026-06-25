@@ -15,8 +15,6 @@ import { SchemaDiffError } from '../db/schema/diff.ts';
 import { SchemaChangeConflictError } from '../db/ddl.ts';
 import { computeCatalogVersion, hashRequest } from '../compose/catalog-version.ts';
 import { ensureIdempotencyTable, idempotencyLookup, recordIdempotency, pruneIdempotency } from '../compose/builder-idempotency.ts';
-import { handleContentTypeRequest, type ContentTypeContext } from './content-type.controller.ts';
-import { handleComponentTypeRequest, type ComponentTypeContext } from './component-type.controller.ts';
 import { handleUpload, handleListFiles, handleGetFile, handleDeleteFile, type FileContext, type ParsedUpload } from './upload.handler.ts';
 import { mediaPopulateTargets, stripMediaPopulate, applyMediaPopulate } from './media.populate.ts';
 import { componentPopulateTargets, applyComponentPopulate } from './component.populate.ts';
@@ -225,68 +223,6 @@ interface CtRouteOpts {
   sub?: string;
   /** Read getParameter(1) as `:name` (the `.../fields/:name` template). */
   hasName?: boolean;
-}
-
-/**
- * A CONTENT-TYPE BUILDER route — structurally identical to {@link handleWriteRoute}: capture the
- * params synchronously, read the body (reusing the {@link MAX_BODY_BYTES} cap -> 413), JSON.parse in a
- * try/catch -> 400, run the async core, then cork the response. GET/DELETE also drain the body (empty
- * -> `body=undefined`). An unexpected throw from the core maps to 500 here (no message leak).
- */
-function handleContentTypeRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, method: string, ctx: ContentTypeContext, opts: CtRouteOpts): void {
-  const apiId = opts.hasApiId ? (req.getParameter(0) ?? '') : undefined;
-  const fieldName = opts.hasName ? (req.getParameter(1) ?? '') : undefined;
-  const { aborted } = readBody(res, (raw) => {
-    void (async () => {
-      if (raw === null) return corkSend(res, aborted, errorResponse(413, 'request body too large'));
-      let body: unknown = undefined;
-      if (raw.length > 0) {
-        try {
-          body = JSON.parse(raw.toString('utf8'));
-        } catch {
-          return corkSend(res, aborted, errorResponse(400, 'invalid JSON body'));
-        }
-      }
-      let result: CoreResponse;
-      try {
-        result = await handleContentTypeRequest(ctx, { method, apiId, fieldName, sub: opts.sub, body });
-      } catch {
-        result = errorResponse(500, 'internal error');
-      }
-      corkSend(res, aborted, result);
-    })();
-  });
-}
-
-/**
- * be-05 — a COMPONENT-TYPE BUILDER route. Structurally identical to {@link handleContentTypeRoute}:
- * capture params synchronously, read the body (413 cap, JSON.parse -> 400), run the async core, cork the
- * response. The `/component-types` literal prefix can never shadow a real `/:type` ('-' is illegal in an
- * api_id, and uWS matches a static segment over a `:param`).
- */
-function handleComponentTypeRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, method: string, ctx: ComponentTypeContext, opts: CtRouteOpts): void {
-  const apiId = opts.hasApiId ? (req.getParameter(0) ?? '') : undefined;
-  const fieldName = opts.hasName ? (req.getParameter(1) ?? '') : undefined;
-  const { aborted } = readBody(res, (raw) => {
-    void (async () => {
-      if (raw === null) return corkSend(res, aborted, errorResponse(413, 'request body too large'));
-      let body: unknown = undefined;
-      if (raw.length > 0) {
-        try {
-          body = JSON.parse(raw.toString('utf8'));
-        } catch {
-          return corkSend(res, aborted, errorResponse(400, 'invalid JSON body'));
-        }
-      }
-      let result: CoreResponse;
-      try {
-        result = await handleComponentTypeRequest(ctx, { method, apiId, fieldName, sub: opts.sub, body });
-      } catch {
-        result = errorResponse(500, 'internal error');
-      }
-      corkSend(res, aborted, result);
-    })();
-  });
 }
 
 // be-04 MEDIA — sanitize a busboy-reported filename to its bare basename over a safe alphabet. NEVER used
@@ -844,9 +780,8 @@ export function createServer(
   });
 
   // S4: the files-first Builder apply+swap, exposed on the returned server. Wired only when `entitiesDir`
-  // is present (a read-only/legacy server leaves it undefined → the legacy meta routes stay live).
+  // is present (a read-only server leaves it undefined → no Builder routes register).
   let applyEditFn: UwsServer['applyEdit'];
-  const builderActive = store !== undefined && registry !== undefined && entitiesDir !== undefined;
 
   // WRITES (only when a store + registry are supplied): commit to Postgres, then rebuild ONLY the
   // written type's RAM storage in place (per-type rebuild + per-type cache invalidation).
@@ -872,47 +807,6 @@ export function createServer(
         return live.hooks;
       },
     };
-    // CONTENT-TYPE BUILDER (runtime DDL over HTTP) — registered BEFORE the data `/:type` routes. The
-    // `/content-types` prefix can never shadow a real type: '-' is not a legal api_id char, so no
-    // content-type is ever named 'content-types', and uWS matches a static segment over a `:param`.
-    // Wired only here (store + registry present): a read-only server has no builder, so /content-types
-    // falls to any('/*') -> 404. An unsupported verb on a builder path is not a registered (path,verb),
-    // so it also falls to any('/*') -> the read core -> 404 (the spec-permitted method-mismatch handling).
-    const ctCtx: ContentTypeContext = { sql: store.sql, engine: () => live.engine, registry: () => live.registry! };
-
-    // be-09b — GATED content-type BUILDER mutation. Captures the sync params off `req` FIRST (req is
-    // stack-allocated), then gate('builder.manage') buffers the body + applies the 401/403 split, and on
-    // success parses + dispatches the existing core. GET stays public (no gate).
-    const ctMutate = (method: string, opts: CtRouteOpts) => (res: uWS.HttpResponse, req: uWS.HttpRequest): void => {
-      // S4/S12 cutover: when the files-first Builder is active, the legacy meta-based mutation path is DEAD
-      // (it wrote the meta tables + mutated the registry out-of-band of `_schema_applied`/the files — a
-      // divergent source of truth). Return 410 Gone pointing at /builder; the GET projection stays live.
-      if (builderActive) return writeJson(res, 410, { error: 'content-type mutation moved to POST /builder' });
-      const apiId = opts.hasApiId ? (req.getParameter(0) ?? '') : undefined;
-      const fieldName = opts.hasName ? (req.getParameter(1) ?? '') : undefined;
-      gate(res, req, 'builder.manage', true, (raw, aborted) => {
-        const parsed = parseBody(raw);
-        if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-        void (async () => {
-          let result: CoreResponse;
-          try {
-            result = await handleContentTypeRequest(ctCtx, { method, apiId, fieldName, sub: opts.sub, body: parsed.body });
-          } catch {
-            result = errorResponse(500, 'internal error');
-          }
-          corkSend(res, aborted, result);
-        })();
-      });
-    };
-    app.post('/content-types', ctMutate('POST', { hasApiId: false }));
-    app.get('/content-types', (res, req) => handleContentTypeRoute(res, req, 'GET', ctCtx, { hasApiId: false }));
-    app.get('/content-types/:apiId', (res, req) => handleContentTypeRoute(res, req, 'GET', ctCtx, { hasApiId: true }));
-    app.del('/content-types/:apiId', ctMutate('DELETE', { hasApiId: true }));
-    app.post('/content-types/:apiId/relations', ctMutate('POST', { hasApiId: true, sub: 'relations' }));
-    app.post('/content-types/:apiId/fields', ctMutate('POST', { hasApiId: true, sub: 'fields' }));
-    app.put('/content-types/:apiId/fields/:name', ctMutate('PUT', { hasApiId: true, sub: 'fields', hasName: true }));
-    app.del('/content-types/:apiId/fields/:name', ctMutate('DELETE', { hasApiId: true, sub: 'fields', hasName: true }));
-
     // S4 FILES-FIRST BUILDER — apply a whole-type edit + make it LIVE in-process (no restart). Wired only
     // when `entitiesDir` is present. applySchemaEdit writes the file + migrates atomically; on success the
     // engine is rebuilt incrementally from the returned `next` IR and the live cell is swapped. A blocked /
@@ -1125,34 +1019,6 @@ export function createServer(
         });
       });
     }
-
-    // be-05 COMPONENT-TYPE BUILDER (meta-only runtime schema over HTTP). Same `/component-types` literal-
-    // prefix safety as `/content-types` ('-' is illegal in an api_id). No engine sync (components have no
-    // engine presence) — the controller syncs only the registry's component store. GATED on builder.manage.
-    const cmpCtx: ComponentTypeContext = { sql: store.sql, registry: () => live.registry! };
-    const cmpMutate = (method: string, opts: CtRouteOpts) => (res: uWS.HttpResponse, req: uWS.HttpRequest): void => {
-      const apiId = opts.hasApiId ? (req.getParameter(0) ?? '') : undefined;
-      const fieldName = opts.hasName ? (req.getParameter(1) ?? '') : undefined;
-      gate(res, req, 'builder.manage', true, (raw, aborted) => {
-        const parsed = parseBody(raw);
-        if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-        void (async () => {
-          let result: CoreResponse;
-          try {
-            result = await handleComponentTypeRequest(cmpCtx, { method, apiId, fieldName, sub: opts.sub, body: parsed.body });
-          } catch {
-            result = errorResponse(500, 'internal error');
-          }
-          corkSend(res, aborted, result);
-        })();
-      });
-    };
-    app.post('/component-types', cmpMutate('POST', { hasApiId: false }));
-    app.get('/component-types', (res, req) => handleComponentTypeRoute(res, req, 'GET', cmpCtx, { hasApiId: false }));
-    app.get('/component-types/:apiId', (res, req) => handleComponentTypeRoute(res, req, 'GET', cmpCtx, { hasApiId: true }));
-    app.del('/component-types/:apiId', cmpMutate('DELETE', { hasApiId: true }));
-    app.post('/component-types/:apiId/fields', cmpMutate('POST', { hasApiId: true, sub: 'fields' }));
-    app.del('/component-types/:apiId/fields/:name', cmpMutate('DELETE', { hasApiId: true, sub: 'fields', hasName: true }));
 
     // be-09b — GATED data writes. The verb→perm map is fixed at the registration site (POST=create,
     // PUT=update, DELETE=delete); the same can(perm) fronts every verb so no method gets a weaker check.
