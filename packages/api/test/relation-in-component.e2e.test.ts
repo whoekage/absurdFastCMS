@@ -1,26 +1,36 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
+import type { ComponentSchema, ContentTypeSchema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
+import type { FieldOptions } from '../src/db/type.catalog.ts';
 
 const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { cleanCatalog, freePort } = await import('./helpers.ts');
-const { PostgresStore } = await import('../src/db/postgres.store.ts');
-const { createServer } = await import('../src/http/uws.adapter.ts');
+const { cleanCatalog, ct, startTestServerFromSchemas } = await import('./helpers.ts');
+const { mintId } = await import('../src/db/schema/model.ts');
+const { migrate } = await import('../src/db/schema/migrate.ts');
 
 /**
  * be-05b RELATION-INSIDE-COMPONENT — INLINE relation refs inside components, end-to-end over a REAL uWS
  * server + REAL Postgres (per-file clone), NO MOCKS. Proves:
  *  - a `relation` field inside a SINGLE / REPEATABLE / DYNAMIC-ZONE component stores inline id ref(s) to a
  *    TARGET content-type (NOT a link table) and reads back VERBATIM un-populated;
- *  - the target must exist at component-type DEFINITION (a missing target -> 400);
  *  - write existence-check: a dangling id -> 400; a wrong-target id (exists in another type, not the
  *    declared target) -> 400; single vs many cardinality enforced;
  *  - read populate: a single ref -> the resolved target OBJECT (or null when dangling), a many ref -> an
  *    ARRAY of resolved objects (a dangling/invisible id DROPPED);
  *  - target VISIBILITY: a DRAFT target resolves to null/dropped (default published-only); an i18n target
  *    resolves in the default locale;
- *  - a component WITHOUT a relation-ref field + a non-component type read byte-identically (untouched).
+ *  - a component WITHOUT a relation-ref field + a non-component type read byte-identically (untouched);
+ *  - the files-first migrate REJECTS a top-level `relation` field (the be-05b component-only guard).
+ *
+ * MIGRATION NOTE (legacy-meta teardown): the original R0 ('a component relation field whose target
+ * content-type does not exist is rejected at component-type DEFINITION') asserted the legacy
+ * POST /component-types controller's definition-time validation. The files-first path (Registry.fromSchemas)
+ * does not re-validate a component relation target at definition; runtime safety is instead covered by the
+ * write-time existence checks below (R2 dangling id, R2b wrong-target id). R0 had no files-first analog and
+ * retired with its controller. R0b (top-level relation field) DID survive — it is ported to a migrate()
+ * rejection via the kept `rejectTopLevelRelation` guard.
  */
 
 let sql: Sql;
@@ -29,14 +39,17 @@ let base: string;
 let close: (token: unknown) => void;
 let token: unknown;
 
-async function boot(): Promise<void> {
-  const store = new PostgresStore(sql);
-  const built = await store.loadWithRegistry();
-  const server = createServer(built.engine, store, built.registry);
-  const port = await freePort();
-  token = await server.listen(port);
-  base = `http://127.0.0.1:${port}`;
-  close = server.close;
+/** Build an in-memory ComponentSchema (mints the component + field ids). Fields use the files-first `type`. */
+function cmp(apiId: string, fields: { name: string; type: FieldType; options?: FieldOptions }[]): ComponentSchema {
+  return { id: mintId('cmp'), apiId, fields: fields.map((f): FieldSchema => ({ id: mintId('f'), ...f })) };
+}
+
+/** Per-test files-first server: each test owns its host content-types + in-memory components. */
+async function boot(schemas: ContentTypeSchema[], components: ComponentSchema[] = []): Promise<void> {
+  const srv = await startTestServerFromSchemas(sql, schemas, { components });
+  base = srv.base;
+  close = srv.close;
+  token = srv.token;
 }
 
 before(async () => {
@@ -47,8 +60,8 @@ before(async () => {
 
 beforeEach(async () => {
   if (token) close(token);
+  token = undefined;
   await cleanCatalog(sql);
-  await boot();
 });
 
 after(async () => {
@@ -60,66 +73,35 @@ after(async () => {
 const POST = (p: string, body: unknown) => fetch(`${base}${p}`, { method: 'POST', body: JSON.stringify(body) });
 const GET = (p: string) => fetch(`${base}${p}`);
 
-/** Create the `author` target content-type + two rows; returns their ids. */
-async function seedAuthors(): Promise<{ a1: number; a2: number }> {
-  const r = await POST('/content-types', { apiId: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false } }] });
-  assert.ok(r.status === 201 || r.status === 200, await r.text());
+/** The `author` target content-type as a files-first IR. */
+const authorType = ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false } }] });
+
+/** Create two `author` rows over the live write path; returns their ids (the type is pre-built per test). */
+async function seedAuthorRows(): Promise<{ a1: number; a2: number }> {
   const a1 = ((await (await POST('/author', { name: 'Ada' })).json()) as { data: { id: number } }).data.id;
   const a2 = ((await (await POST('/author', { name: 'Alan' })).json()) as { data: { id: number } }).data.id;
   return { a1, a2 };
 }
 
-// --- R0: target must exist at component-type definition ----------------------------------------
-test('R0 a relation field whose target content-type does not exist is rejected at definition (400)', async () => {
-  const r = await POST('/component-types', {
-    apiId: 'byline',
-    fields: [{ name: 'writer', cmsType: 'relation', options: { target: 'ghost' } }],
-  });
-  const text = await r.text();
-  assert.equal(r.status, 400, text);
-  assert.match((JSON.parse(text) as { error: string }).error, /target/i);
-});
-
 // --- R0b: a `relation` field is COMPONENT-ONLY (no top-level content-type form) -----------------
-// be-05b GUARD: `relation` is a ComponentFieldKind, but unlike component/component-repeatable/dynamiczone
-// it has NO top-level form — an inline ref only lives inside a component json. Declaring it at the TOP
-// LEVEL of a content-type would resolve to a bare json column that is never existence-checked on write nor
-// populated on read (a silently-broken field). It must be rejected at definition (400), both on create and
-// addField. Top-level relations go through the be-01 relations[] (link-table) API, not the field path.
-test('R0b a top-level `relation` field on a content-type is rejected at create (400)', async () => {
-  await seedAuthors();
-  const r = await POST('/content-types', {
-    apiId: 'post',
-    fields: [{ name: 'writer', cmsType: 'relation', options: { target: 'author' } }],
-  });
-  const text = await r.text();
-  assert.equal(r.status, 400, text);
-  assert.match((JSON.parse(text) as { error: string }).error, /relation/i);
-  // The broken type must NOT have been created.
-  assert.equal((await GET('/post')).status, 404);
-});
-
-test('R0b a top-level `relation` field added via addField is rejected (400); the type is unchanged', async () => {
-  await seedAuthors();
-  const created = await POST('/content-types', { apiId: 'post', fields: [{ name: 'title', cmsType: 'string' }] });
-  assert.ok(created.status === 201 || created.status === 200, await created.text());
-  const r = await POST('/content-types/post/fields', { name: 'writer', cmsType: 'relation', options: { target: 'author' } });
-  const text = await r.text();
-  assert.equal(r.status, 400, text);
-  assert.match((JSON.parse(text) as { error: string }).error, /relation/i);
+// be-05b GUARD ported to the files-first path: `relation` is a ComponentFieldKind, but unlike
+// component/component-repeatable/dynamiczone it has NO top-level form — an inline ref only lives inside a
+// component json. A top-level `relation` field is rejected by resolveFields -> rejectTopLevelRelation,
+// which migrate() runs (replacing the legacy POST /content-types + addField controller guards).
+test('R0b a top-level `relation` field is rejected by the files-first migrate (component-only kind)', async () => {
+  const bad = ct({ apiId: 'post', fields: [{ name: 'writer', cmsType: 'relation', options: { target: 'author' } }] });
+  await assert.rejects(migrate(sql, [bad], { allowDestructive: true }), /relation/i);
 });
 
 // --- R1: SINGLE relation ref inside a single component — store, read verbatim, populate --------
 test('R1 single relation ref inside a single component: stored inline, read verbatim, populated on read', async () => {
-  const { a1 } = await seedAuthors();
-  await POST('/component-types', {
-    apiId: 'byline',
-    fields: [
-      { name: 'role', cmsType: 'string' },
-      { name: 'writer', cmsType: 'relation', options: { target: 'author' } },
-    ],
-  });
-  await POST('/content-types', { apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
+  const byline = cmp('byline', [
+    { name: 'role', type: 'string' },
+    { name: 'writer', type: 'relation', options: { target: 'author' } },
+  ]);
+  const post = ct({ apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
+  await boot([authorType, post], [byline]);
+  const { a1 } = await seedAuthorRows();
 
   // A valid ref -> stored as the bare id un-populated.
   const created = (await (await POST('/post', { by: { role: 'lead', writer: a1 } })).json()) as {
@@ -140,9 +122,10 @@ test('R1 single relation ref inside a single component: stored inline, read verb
 
 // --- R2: dangling id -> 400 --------------------------------------------------------------------
 test('R2 a dangling relation id is rejected on write (400)', async () => {
-  await seedAuthors();
-  await POST('/component-types', { apiId: 'byline', fields: [{ name: 'writer', cmsType: 'relation', options: { target: 'author' } }] });
-  await POST('/content-types', { apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
+  const byline = cmp('byline', [{ name: 'writer', type: 'relation', options: { target: 'author' } }]);
+  const post = ct({ apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
+  await boot([authorType, post], [byline]);
+  await seedAuthorRows();
   const dangling = await POST('/post', { by: { writer: 999999 } });
   const dText = await dangling.text();
   assert.equal(dangling.status, 400, dText);
@@ -151,15 +134,15 @@ test('R2 a dangling relation id is rejected on write (400)', async () => {
 
 // --- R2b: wrong-target id deterministically rejected -------------------------------------------
 test('R2b a wrong-target id that does not exist in the declared target is rejected (400)', async () => {
-  await seedAuthors(); // authors have ids 1,2.
-  await POST('/content-types', { apiId: 'tag', fields: [{ name: 'slug', cmsType: 'string', options: { nullable: false } }] });
+  const byline = cmp('byline', [{ name: 'writer', type: 'relation', options: { target: 'author' } }]);
+  const tag = ct({ apiId: 'tag', fields: [{ name: 'slug', cmsType: 'string', options: { nullable: false } }] });
+  const post = ct({ apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
+  await boot([authorType, tag, post], [byline]);
+  await seedAuthorRows(); // authors have ids 1,2.
   // Make a tag with an id guaranteed beyond the author id space (insert 5 tags -> ids 1..5).
   let tagId = 0;
   for (let i = 0; i < 5; i++) tagId = ((await (await POST('/tag', { slug: `t${i}` })).json()) as { data: { id: number } }).data.id;
   assert.ok(tagId > 2, `expected a tag id beyond author ids, got ${tagId}`);
-
-  await POST('/component-types', { apiId: 'byline', fields: [{ name: 'writer', cmsType: 'relation', options: { target: 'author' } }] });
-  await POST('/content-types', { apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
 
   const wrong = await POST('/post', { by: { writer: tagId } }); // exists in `tag`, NOT in `author`.
   const wText = await wrong.text();
@@ -169,12 +152,12 @@ test('R2b a wrong-target id that does not exist in the declared target is reject
 
 // --- R3: MANY relation refs (cardinality) ------------------------------------------------------
 test('R3 many relation refs inside a component: array stored, populated to an array of objects', async () => {
-  const { a1, a2 } = await seedAuthors();
-  await POST('/component-types', {
-    apiId: 'credits',
-    fields: [{ name: 'writers', cmsType: 'relation', options: { target: 'author', multiple: true } }],
-  });
-  await POST('/content-types', { apiId: 'post', fields: [{ name: 'credits', cmsType: 'component', options: { component: 'credits' } }] });
+  const credits = cmp('credits', [{ name: 'writers', type: 'relation', options: { target: 'author', multiple: true } }]);
+  const one = cmp('one', [{ name: 'w', type: 'relation', options: { target: 'author' } }]);
+  const post = ct({ apiId: 'post', fields: [{ name: 'credits', cmsType: 'component', options: { component: 'credits' } }] });
+  const solo = ct({ apiId: 'solo', fields: [{ name: 'one', cmsType: 'component', options: { component: 'one' } }] });
+  await boot([authorType, post, solo], [credits, one]);
+  const { a1, a2 } = await seedAuthorRows();
 
   const created = (await (await POST('/post', { credits: { writers: [a1, a2] } })).json()) as {
     data: { id: number; credits: { writers: number[] } };
@@ -186,34 +169,34 @@ test('R3 many relation refs inside a component: array stored, populated to an ar
   };
   assert.deepEqual(pop.data.credits.writers.map((w) => w.name), ['Ada', 'Alan']);
 
-  // A single id supplied to a MANY field is rejected? No — coerceRelationRef accepts a bare id for many.
+  // A single id supplied to a MANY field is accepted (coerceRelationRef accepts a bare id for many).
   const single = await POST('/post', { credits: { writers: a1 } });
   assert.ok(single.status === 201, await single.text());
 
   // A single-valued field receiving an array of 2 -> 400.
-  await POST('/component-types', { apiId: 'one', fields: [{ name: 'w', cmsType: 'relation', options: { target: 'author' } }] });
-  await POST('/content-types', { apiId: 'solo', fields: [{ name: 'one', cmsType: 'component', options: { component: 'one' } }] });
   const tooMany = await POST('/solo', { one: { w: [a1, a2] } });
   assert.equal(tooMany.status, 400, await tooMany.text());
 });
 
 // --- R4: relation ref inside a REPEATABLE component + a DYNAMIC ZONE block ----------------------
 test('R4 relation refs inside a repeatable component and a dynamic-zone block populate correctly', async () => {
-  const { a1, a2 } = await seedAuthors();
-  await POST('/component-types', { apiId: 'row', fields: [{ name: 'writer', cmsType: 'relation', options: { target: 'author' } }] });
-  await POST('/content-types', { apiId: 'rep', fields: [{ name: 'rows', cmsType: 'component-repeatable', options: { component: 'row' } }] });
-  const rep = (await (await POST('/rep', { rows: [{ writer: a1 }, { writer: a2 }] })).json()) as { data: { id: number } };
-  const repPop = (await (await GET(`/rep/${rep.data.id}?populate=rows`)).json()) as {
+  const row = cmp('row', [{ name: 'writer', type: 'relation', options: { target: 'author' } }]);
+  const authorBlock = cmp('authorBlock', [{ name: 'writer', type: 'relation', options: { target: 'author' } }]);
+  const rep = ct({ apiId: 'rep', fields: [{ name: 'rows', cmsType: 'component-repeatable', options: { component: 'row' } }] });
+  const zoned = ct({ apiId: 'zoned', fields: [{ name: 'body', cmsType: 'dynamiczone', options: { components: ['authorBlock'] } }] });
+  await boot([authorType, rep, zoned], [row, authorBlock]);
+  const { a1, a2 } = await seedAuthorRows();
+
+  const repRow = (await (await POST('/rep', { rows: [{ writer: a1 }, { writer: a2 }] })).json()) as { data: { id: number } };
+  const repPop = (await (await GET(`/rep/${repRow.data.id}?populate=rows`)).json()) as {
     data: { rows: { writer: { id: number } | null }[] };
   };
   assert.equal(repPop.data.rows[0]!.writer!.id, a1);
   assert.equal(repPop.data.rows[1]!.writer!.id, a2);
 
   // Dynamic zone: a block carrying a relation ref.
-  await POST('/component-types', { apiId: 'authorBlock', fields: [{ name: 'writer', cmsType: 'relation', options: { target: 'author' } }] });
-  await POST('/content-types', { apiId: 'zoned', fields: [{ name: 'body', cmsType: 'dynamiczone', options: { components: ['authorBlock'] } }] });
-  const zoned = (await (await POST('/zoned', { body: [{ __component: 'authorBlock', writer: a1 }] })).json()) as { data: { id: number } };
-  const zPop = (await (await GET(`/zoned/${zoned.data.id}?populate=body`)).json()) as {
+  const z = (await (await POST('/zoned', { body: [{ __component: 'authorBlock', writer: a1 }] })).json()) as { data: { id: number } };
+  const zPop = (await (await GET(`/zoned/${z.data.id}?populate=body`)).json()) as {
     data: { body: { __component: string; writer: { id: number; name: string } }[] };
   };
   assert.equal(zPop.data.body[0]!.__component, 'authorBlock');
@@ -223,15 +206,13 @@ test('R4 relation refs inside a repeatable component and a dynamic-zone block po
 
 // --- R5: dangling ref resolves to null (single) / dropped (many) on read -----------------------
 test('R5 a ref that becomes dangling resolves to null (single) and is dropped (many) on read', async () => {
-  const { a1, a2 } = await seedAuthors();
-  await POST('/component-types', {
-    apiId: 'credits',
-    fields: [
-      { name: 'lead', cmsType: 'relation', options: { target: 'author' } },
-      { name: 'team', cmsType: 'relation', options: { target: 'author', multiple: true } },
-    ],
-  });
-  await POST('/content-types', { apiId: 'post', fields: [{ name: 'credits', cmsType: 'component', options: { component: 'credits' } }] });
+  const credits = cmp('credits', [
+    { name: 'lead', type: 'relation', options: { target: 'author' } },
+    { name: 'team', type: 'relation', options: { target: 'author', multiple: true } },
+  ]);
+  const post = ct({ apiId: 'post', fields: [{ name: 'credits', cmsType: 'component', options: { component: 'credits' } }] });
+  await boot([authorType, post], [credits]);
+  const { a1, a2 } = await seedAuthorRows();
   const created = (await (await POST('/post', { credits: { lead: a1, team: [a1, a2] } })).json()) as { data: { id: number } };
 
   // Delete a2 -> the inline id is now dangling (the stored json still holds it).
@@ -255,12 +236,12 @@ test('R5 a ref that becomes dangling resolves to null (single) and is dropped (m
 
 // --- R6: draft target resolves to null (default published-only) --------------------------------
 test('R6 a DRAFT target resolves to null on read (default published-only visibility)', async () => {
-  // author opts into draft/publish (draftPublish is a TOP-LEVEL create-body key, sibling of fields).
-  await POST('/content-types', { apiId: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false } }], draftPublish: true });
+  // author opts into draft/publish.
+  const author = ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false } }], draftPublish: true });
+  const byline = cmp('byline', [{ name: 'writer', type: 'relation', options: { target: 'author' } }]);
+  const post = ct({ apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
+  await boot([author, post], [byline]);
   const a1 = ((await (await POST('/author', { name: 'Draftee' })).json()) as { data: { id: number } }).data.id; // created as DRAFT.
-
-  await POST('/component-types', { apiId: 'byline', fields: [{ name: 'writer', cmsType: 'relation', options: { target: 'author' } }] });
-  await POST('/content-types', { apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
   const created = (await (await POST('/post', { by: { writer: a1 } })).json()) as { data: { id: number } };
 
   // Draft target -> resolves to null (a default GET would not see it).
@@ -277,12 +258,11 @@ test('R6 a DRAFT target resolves to null on read (default published-only visibil
 
 // --- R7: i18n target resolves in the default locale --------------------------------------------
 test('R7 an i18n target resolves in the default locale on read', async () => {
-  // i18n is a TOP-LEVEL create-body key; per-field `localized` is a sibling of name/cmsType/options.
-  await POST('/content-types', { apiId: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false }, localized: true }], i18n: true });
+  const author = ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false }, localized: true }], i18n: true });
+  const byline = cmp('byline', [{ name: 'writer', type: 'relation', options: { target: 'author' } }]);
+  const post = ct({ apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
+  await boot([author, post], [byline]);
   const a1 = ((await (await POST('/author', { name: 'Ada (en)' })).json()) as { data: { id: number } }).data.id; // default-locale variant.
-
-  await POST('/component-types', { apiId: 'byline', fields: [{ name: 'writer', cmsType: 'relation', options: { target: 'author' } }] });
-  await POST('/content-types', { apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
   const created = (await (await POST('/post', { by: { writer: a1 } })).json()) as { data: { id: number } };
 
   const pop = (await (await GET(`/post/${created.data.id}?populate=by`)).json()) as { data: { by: { writer: { id: number; name: string; locale: string } } } };
@@ -292,15 +272,13 @@ test('R7 an i18n target resolves in the default locale on read', async () => {
 
 // --- R8: BYTE-IDENTICAL — un-populated read emits the bare id(s) verbatim -----------------------
 test('R8 an un-populated read emits the bare relation id(s) verbatim (zero-copy structural tree)', async () => {
-  const { a1, a2 } = await seedAuthors();
-  await POST('/component-types', {
-    apiId: 'credits',
-    fields: [
-      { name: 'lead', cmsType: 'relation', options: { target: 'author' } },
-      { name: 'team', cmsType: 'relation', options: { target: 'author', multiple: true } },
-    ],
-  });
-  await POST('/content-types', { apiId: 'post', fields: [{ name: 'credits', cmsType: 'component', options: { component: 'credits' } }] });
+  const credits = cmp('credits', [
+    { name: 'lead', type: 'relation', options: { target: 'author' } },
+    { name: 'team', type: 'relation', options: { target: 'author', multiple: true } },
+  ]);
+  const post = ct({ apiId: 'post', fields: [{ name: 'credits', cmsType: 'component', options: { component: 'credits' } }] });
+  await boot([authorType, post], [credits]);
+  const { a1, a2 } = await seedAuthorRows();
   const created = (await (await POST('/post', { credits: { lead: a1, team: [a1, a2] } })).json()) as { data: { id: number } };
 
   const raw = await (await GET(`/post/${created.data.id}`)).text();
@@ -310,8 +288,9 @@ test('R8 an un-populated read emits the bare relation id(s) verbatim (zero-copy 
 
 // --- R9: a component WITHOUT a relation-ref field is unaffected ---------------------------------
 test('R9 a component without a relation-ref field reads identically (no relation populate effect)', async () => {
-  await POST('/component-types', { apiId: 'seo', fields: [{ name: 'metaTitle', cmsType: 'string' }] });
-  await POST('/content-types', { apiId: 'page', fields: [{ name: 'seo', cmsType: 'component', options: { component: 'seo' } }] });
+  const seo = cmp('seo', [{ name: 'metaTitle', type: 'string' }]);
+  const page = ct({ apiId: 'page', fields: [{ name: 'seo', cmsType: 'component', options: { component: 'seo' } }] });
+  await boot([page], [seo]);
   const created = (await (await POST('/page', { seo: { metaTitle: 'Hi' } })).json()) as { data: { id: number } };
   const plain = await (await GET(`/page/${created.data.id}`)).text();
   const withPop = await (await GET(`/page/${created.data.id}?populate=seo`)).text();
@@ -324,7 +303,8 @@ test('R9 a component without a relation-ref field reads identically (no relation
 
 // --- R10: a non-component type is byte-identical (relation-ref machinery never runs) ------------
 test('R10 a non-component content type is byte-identical (relation-ref machinery never runs)', async () => {
-  await POST('/content-types', { apiId: 'plain', fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }] });
+  const plainType = ct({ apiId: 'plain', fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }] });
+  await boot([plainType]);
   const created = (await (await POST('/plain', { title: 'T' })).json()) as { data: { id: number } };
   const plain = await (await GET(`/plain/${created.data.id}`)).text();
   const withPop = await (await GET(`/plain/${created.data.id}?populate=*`)).text();

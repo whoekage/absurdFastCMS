@@ -12,12 +12,9 @@ delete process.env.S3_BUCKET; // select the LOCAL provider for this run.
 
 const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { freePort } = await import('./helpers.ts');
+const { startTestServerFromSchemas, ct } = await import('./helpers.ts');
 const { resetStorageProvider } = await import('../src/storage/index.ts');
 const { pngBytes } = await import('./storage-fixtures.ts');
-const { PostgresStore } = await import('../src/db/postgres.store.ts');
-const { createServer } = await import('../src/http/uws.adapter.ts');
-const { createContentType } = await import('../src/db/content-type.repository.ts');
 
 /**
  * be-04 × be-06 — i18n CROSSED WITH MEDIA, end-to-end over a REAL uWS server + REAL Postgres (per-file
@@ -60,24 +57,20 @@ before(async () => {
   // i18n type with: a localized title, a SHARED MULTIPLE media field (the crashing case), and a SHARED
   // SINGLE media field (the int4 case that already worked — asserted still fine), plus a LOCALIZED media
   // field (overlaid per variant via the request body).
-  await createContentType(sql, {
+  const pageSchema = ct({
     apiId: 'page',
+    i18n: true,
     fields: [
       { name: 'title', cmsType: 'string', options: { nullable: false }, localized: true },
       { name: 'gallery', cmsType: 'media', options: { multiple: true, nullable: true }, localized: false },
       { name: 'hero', cmsType: 'media', options: { nullable: true }, localized: false },
       { name: 'banner', cmsType: 'media', options: { nullable: true }, localized: true },
     ],
-    i18n: true,
   });
-
-  const store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadWithRegistry();
-  const server = createServer(engine, store, registry);
-  const port = await freePort();
-  token = await server.listen(port);
-  close = server.close;
-  base = `http://127.0.0.1:${port}`;
+  const srv = await startTestServerFromSchemas(sql, [pageSchema]);
+  base = srv.base;
+  close = srv.close;
+  token = srv.token;
 });
 
 after(async () => {
