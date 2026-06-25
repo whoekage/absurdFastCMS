@@ -19,7 +19,7 @@ import {
   type ComponentFieldRow,
 } from './component-type.repository.ts';
 import { isComponentFieldKind, type CmsType, type ComponentFieldKind } from './type.catalog.ts';
-import { schemaToRows } from './schema/adapt.ts';
+import { schemaToRows, relationRowsByType } from './schema/adapt.ts';
 import type { ContentTypeSchema } from './schema/model.ts';
 
 /**
@@ -695,9 +695,11 @@ export class Registry {
    */
   static fromSchemas(schemas: ContentTypeSchema[]): Registry {
     const reg = new Registry();
+    // Relations span two types (owner + synthesized inverse), so build them in one cross-type pass first.
+    const relByType = relationRowsByType(schemas);
     for (const schema of schemas) {
-      const { ct, fieldRows, relationRows } = schemaToRows(schema);
-      reg.byApiId.set(ct.api_id, buildDef(ct, fieldRows, relationRows));
+      const { ct, fieldRows } = schemaToRows(schema);
+      reg.byApiId.set(ct.api_id, buildDef(ct, fieldRows, relByType.get(schema.id) ?? []));
     }
     return reg;
   }

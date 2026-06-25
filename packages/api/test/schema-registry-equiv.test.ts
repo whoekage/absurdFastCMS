@@ -7,6 +7,7 @@ import { createContentType } from '../src/db/content-type.repository.ts';
 import { Registry } from '../src/db/registry.ts';
 import { ARTICLE_SEED_FIELDS } from '../src/db/seed.ts';
 import { parseSchema } from '../src/db/schema/serialize.ts';
+import type { ContentTypeSchema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog } from './helpers.ts';
 
@@ -47,4 +48,29 @@ test('fromSchemas(article.json) yields a ContentTypeDef byte-identical to the me
   // deepStrictEqual walks fields/fieldDefs/columnPlan/indexPlan + the Maps/Sets — order-independent for
   // Maps/Sets, order-sensitive for the projection arrays (both built from the same field order).
   assert.deepStrictEqual(fileDef, metaDef);
+});
+
+test('fromSchemas builds two-way relation metadata identical to the meta path (owner + inverse)', async () => {
+  // meta SOURCE: writer first, then post with a two-way manyToOne -> writer (inverse `posts`).
+  await createContentType(sql, { apiId: 'writer', fields: [{ name: 'name', cmsType: 'string', options: { nullable: true } }] });
+  await createContentType(sql, {
+    apiId: 'post',
+    fields: [{ name: 'title', cmsType: 'string', options: { nullable: true } }],
+    relations: [{ field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' }],
+  });
+  const metaReg = await Registry.build(sql);
+
+  // file SOURCE: the same two types as schema objects (relations declared on the owner only).
+  const writer: ContentTypeSchema = { id: 'ct_w', apiId: 'writer', fields: [{ id: 'f_nm', name: 'name', type: 'string', options: { nullable: true } }] };
+  const post: ContentTypeSchema = {
+    id: 'ct_p',
+    apiId: 'post',
+    fields: [{ id: 'f_ti', name: 'title', type: 'string', options: { nullable: true } }],
+    relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' }],
+  };
+  const fileReg = Registry.fromSchemas([writer, post]);
+
+  // The owner RelationMeta (post.author) and the synthesized inverse (writer.posts) must match byte-for-byte.
+  assert.deepStrictEqual(fileReg.get('post')!.relationsByField.get('author'), metaReg.get('post')!.relationsByField.get('author'));
+  assert.deepStrictEqual(fileReg.get('writer')!.relationsByField.get('posts'), metaReg.get('writer')!.relationsByField.get('posts'));
 });

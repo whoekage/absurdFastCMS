@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSchema, stringifySchema, loadSchemaDir, SchemaFileError } from '../src/db/schema/serialize.ts';
-import { schemaToRows, SchemaAdaptError } from '../src/db/schema/adapt.ts';
+import { schemaToRows, relationRowsByType, SchemaAdaptError } from '../src/db/schema/adapt.ts';
 import type { ContentTypeSchema } from '../src/db/schema/model.ts';
 
 /**
@@ -25,12 +25,11 @@ test('committed article.json parses, round-trips, and adapts to expected meta ro
   // Canonical serialize round-trips with no loss.
   assert.deepEqual(parseSchema(stringifySchema(schema)), schema);
 
-  const { ct, fieldRows, relationRows } = schemaToRows(schema);
+  const { ct, fieldRows } = schemaToRows(schema);
   assert.equal(ct.api_id, 'article');
   assert.equal(ct.table_name, 'ct_article');
   assert.equal(ct.draft_publish, false);
   assert.equal(ct.i18n, false);
-  assert.equal(relationRows.length, 0);
 
   assert.deepEqual(fieldRows.map((r) => r.name), ['title', 'body', 'status', 'views', 'rating', 'active', 'publishedAt']);
   // sort is the array index (the byte-identical projection order).
@@ -76,12 +75,37 @@ test('loadSchemaDir: empty for a missing dir, sorted load, stem===apiId guard', 
   }
 });
 
-test('schemaToRows rejects relation-bearing schemas (deferred to a later slice)', () => {
-  const withRel: ContentTypeSchema = {
+test('relationRowsByType synthesizes owner + inverse rows across the two types', () => {
+  const post: ContentTypeSchema = {
     id: 'ct_p',
     apiId: 'post',
     fields: [{ id: 'f_t', name: 'title', type: 'string', options: { nullable: true } }],
-    relations: [{ id: 'rel_a', field: 'author', kind: 'manyToOne', target: 'user' }],
+    relations: [{ id: 'rel_a', field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' }],
   };
-  assert.throws(() => schemaToRows(withRel), SchemaAdaptError);
+  const writer: ContentTypeSchema = { id: 'ct_w', apiId: 'writer', fields: [] };
+  const rels = relationRowsByType([post, writer]);
+
+  const owner = rels.get('ct_p')!;
+  assert.equal(owner.length, 1);
+  assert.equal(owner[0]!.field_name, 'author');
+  assert.equal(owner[0]!.is_owner, true);
+  assert.equal(owner[0]!.kind, 'manyToOne');
+  assert.equal(owner[0]!.target_api_id, 'writer');
+
+  const inverse = rels.get('ct_w')!;
+  assert.equal(inverse.length, 1);
+  assert.equal(inverse[0]!.field_name, 'posts');
+  assert.equal(inverse[0]!.is_owner, false);
+  assert.equal(inverse[0]!.kind, 'oneToMany'); // inverse of manyToOne
+  assert.equal(inverse[0]!.link_table, owner[0]!.link_table); // both sides share ONE link table
+});
+
+test('relationRowsByType fails LOUD on a dangling relation target', () => {
+  const post: ContentTypeSchema = {
+    id: 'ct_p',
+    apiId: 'post',
+    fields: [],
+    relations: [{ id: 'rel_a', field: 'author', kind: 'manyToOne', target: 'ghost' }],
+  };
+  assert.throws(() => relationRowsByType([post]), SchemaAdaptError);
 });
