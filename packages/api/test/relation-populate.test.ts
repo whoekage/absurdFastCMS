@@ -1,14 +1,16 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { createContentType, addRelation } from '../src/db/content-type.repository.ts';
 import { Registry } from '../src/db/registry.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
+import { deriveLinkTableName } from '../src/db/ddl.ts';
+import type { ContentTypeSchema } from '../src/db/schema/model.ts';
 import { buildEngine } from '../src/db/engine.loader.ts';
 import { Engine } from '../src/store/engine.ts';
 import { CursorCodec } from '../src/store/cursor.codec.ts';
 import { handleRequest } from '../src/http/read.router.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { cleanCatalog, rawField } from './helpers.ts';
+import { cleanCatalog, ct, rawField } from './helpers.ts';
 
 /**
  * RELATIONS SLICE 5 — POPULATE EXECUTION, end-to-end against a REAL Postgres (no mocks).
@@ -48,8 +50,13 @@ async function insertEdge(link: string, ownerPk: number, relatedPk: number): Pro
   await sql.unsafe(`INSERT INTO "${link}" (owner_id, related_id) VALUES ($1, $2)`, [ownerPk, relatedPk]);
 }
 
-async function boot(): Promise<Engine> {
-  return buildEngine(sql, await Registry.build(sql), { cursorCodec: new CursorCodec('relpop-secret') });
+/** Materialize the ct_ + link tables from in-code IR (files-first, zero meta). */
+async function applySchemas(schemas: ContentTypeSchema[]): Promise<void> {
+  await migrate(sql, schemas, { allowDestructive: true });
+}
+
+async function boot(schemas: ContentTypeSchema[]): Promise<Engine> {
+  return buildEngine(sql, Registry.fromSchemas(schemas), { cursorCodec: new CursorCodec('relpop-secret') });
 }
 
 function get(engine: Engine, path: string, query = ''): { status: number; body: Buffer } {
@@ -71,14 +78,17 @@ function recordOf(engine: Engine, type: string, id: number): Record<string, unkn
 // --- 1. to-one OBJECT ---------------------------------------------------------------------------
 
 test('to-one (manyToOne) populate nests a single OBJECT', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('book', 'author');
   const a1 = await insertRow('ct_author', 'name', 'Le Guin');
   const b1 = await insertRow('ct_book', 'title', 'The Dispossessed');
-  await insertEdge(rel.link_table, b1, a1);
+  await insertEdge(link, b1, a1);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const authorRec = recordOf(engine, 'author', a1);
   const bookRec = recordOf(engine, 'book', b1);
 
@@ -94,13 +104,21 @@ test('to-one (manyToOne) populate nests a single OBJECT', async () => {
 // --- 2. to-one NULL (manyToOne with no edge, and oneToOne with no edge) --------------------------
 
 test('to-one populate with no edge emits null (key present), both manyToOne and oneToOne', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
-  await addRelation(sql, 'book', { field: 'editor', kind: 'oneToOne', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({
+      apiId: 'book',
+      fields: [{ name: 'title', cmsType: 'string' }],
+      relations: [
+        { field: 'author', kind: 'manyToOne', target: 'author' },
+        { field: 'editor', kind: 'oneToOne', target: 'author' },
+      ],
+    }),
+  ];
+  await applySchemas(schemas);
   const b1 = await insertRow('ct_book', 'title', 'Orphan'); // no edges at all
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const bookRec = recordOf(engine, 'book', b1);
 
   const res = get(engine, '/book', 'populate[0]=author&populate[1]=editor');
@@ -119,17 +137,20 @@ test('to-one populate with no edge emits null (key present), both manyToOne and 
 // --- 3. to-many ARRAY (oneToMany + manyToMany) --------------------------------------------------
 
 test('to-many populate nests an ARRAY (oneToMany and manyToMany), members in edge-insertion order', async () => {
-  await createContentType(sql, { apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const relM2M = await addRelation(sql, 'book', { field: 'tags', kind: 'manyToMany', target: 'tag' });
+  const schemas = [
+    ct({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
+  ];
+  await applySchemas(schemas);
+  const linkT = deriveLinkTableName('book', 'tags');
   const t1 = await insertRow('ct_tag', 'label', 'scifi');
   const t2 = await insertRow('ct_tag', 'label', 'classic');
   const b1 = await insertRow('ct_book', 'title', 'Dune');
   // Insert edges in a known order so CSR/insertion order is deterministic: t1 then t2.
-  await insertEdge(relM2M.link_table, b1, t1);
-  await insertEdge(relM2M.link_table, b1, t2);
+  await insertEdge(linkT, b1, t1);
+  await insertEdge(linkT, b1, t2);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const bookRec = recordOf(engine, 'book', b1);
   const tag1 = recordOf(engine, 'tag', t1);
   const tag2 = recordOf(engine, 'tag', t2);
@@ -142,16 +163,19 @@ test('to-many populate nests an ARRAY (oneToMany and manyToMany), members in edg
 
   // oneToMany variant: author has many books.
   await cleanCatalog(sql);
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const relO2M = await addRelation(sql, 'author', { field: 'books', kind: 'oneToMany', target: 'book' });
+  const schemasB = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'books', kind: 'oneToMany', target: 'book' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] }),
+  ];
+  await applySchemas(schemasB);
+  const linkO = deriveLinkTableName('author', 'books');
   const a1 = await insertRow('ct_author', 'name', 'Herbert');
   const bk1 = await insertRow('ct_book', 'title', 'Dune');
   const bk2 = await insertRow('ct_book', 'title', 'Messiah');
-  await insertEdge(relO2M.link_table, a1, bk1);
-  await insertEdge(relO2M.link_table, a1, bk2);
+  await insertEdge(linkO, a1, bk1);
+  await insertEdge(linkO, a1, bk2);
 
-  const e2 = await boot();
+  const e2 = await boot(schemasB);
   const authorRec = recordOf(e2, 'author', a1);
   const bookRec1 = recordOf(e2, 'book', bk1);
   const bookRec2 = recordOf(e2, 'book', bk2);
@@ -162,12 +186,14 @@ test('to-many populate nests an ARRAY (oneToMany and manyToMany), members in edg
 // --- 4. to-many EMPTY -> [] ----------------------------------------------------------------------
 
 test('to-many populate with zero edges emits []', async () => {
-  await createContentType(sql, { apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  await addRelation(sql, 'book', { field: 'tags', kind: 'manyToMany', target: 'tag' });
+  const schemas = [
+    ct({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
+  ];
+  await applySchemas(schemas);
   const b1 = await insertRow('ct_book', 'title', 'Untagged');
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const bookRec = recordOf(engine, 'book', b1);
   const res = get(engine, '/book', 'populate=tags');
   const env = parsed(res.body) as { data: Record<string, unknown>[] };
@@ -180,17 +206,20 @@ test('to-many populate with zero edges emits []', async () => {
 // --- 5. two-way via the INVERSE field -----------------------------------------------------------
 
 test('two-way: populate via the inverse field gives an ARRAY (inverse kind); owner field gives an OBJECT', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
   // book.author manyToOne; inverse author.books -> oneToMany (to-many array).
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('book', 'author');
   const a1 = await insertRow('ct_author', 'name', 'Asimov');
   const b1 = await insertRow('ct_book', 'title', 'Foundation');
   const b2 = await insertRow('ct_book', 'title', 'Robots');
-  await insertEdge(rel.link_table, b1, a1);
-  await insertEdge(rel.link_table, b2, a1);
+  await insertEdge(link, b1, a1);
+  await insertEdge(link, b2, a1);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const authorRec = recordOf(engine, 'author', a1);
   const bookRec1 = recordOf(engine, 'book', b1);
   const bookRec2 = recordOf(engine, 'book', b2);
@@ -214,16 +243,19 @@ test('two-way: populate via the inverse field gives an ARRAY (inverse kind); own
 // --- 6. depth-2 nested --------------------------------------------------------------------------
 
 test('depth-2 nested populate: author -> books (array) each book -> author (object)', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('book', 'author');
   const a1 = await insertRow('ct_author', 'name', 'Tolkien');
   const b1 = await insertRow('ct_book', 'title', 'Hobbit');
   const b2 = await insertRow('ct_book', 'title', 'LOTR');
-  await insertEdge(rel.link_table, b1, a1);
-  await insertEdge(rel.link_table, b2, a1);
+  await insertEdge(link, b1, a1);
+  await insertEdge(link, b2, a1);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const authorRec = recordOf(engine, 'author', a1);
   const bookRec1 = recordOf(engine, 'book', b1);
   const bookRec2 = recordOf(engine, 'book', b2);
@@ -243,14 +275,17 @@ test('depth-2 nested populate: author -> books (array) each book -> author (obje
 // --- 7. depth-cap frontier ----------------------------------------------------------------------
 
 test('depth-cap: a 3-hop request stops at the cap; the depth-3 object equals the frozen related slice', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('book', 'author');
   const a1 = await insertRow('ct_author', 'name', 'Clarke');
   const b1 = await insertRow('ct_book', 'title', '2001');
-  await insertEdge(rel.link_table, b1, a1);
+  await insertEdge(link, b1, a1);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const authorRec = recordOf(engine, 'author', a1);
   const bookRec = recordOf(engine, 'book', b1);
 
@@ -282,16 +317,18 @@ test('depth-cap: a 3-hop request stops at the cap; the depth-3 object equals the
 // --- 8. self-referential terminate --------------------------------------------------------------
 
 test('self-referential populate terminates by the depth cap (no throw, no hang)', async () => {
-  await createContentType(sql, { apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }] });
-  await addRelation(sql, 'category', { field: 'parent', kind: 'manyToOne', target: 'category' });
+  const schemas = [
+    ct({ apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'category' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('category', 'parent');
   const root = await insertRow('ct_category', 'slug', 'root');
   const mid = await insertRow('ct_category', 'slug', 'mid');
   const leaf = await insertRow('ct_category', 'slug', 'leaf');
-  const rel = (await sql<{ link_table: string }[]>`SELECT link_table FROM content_type_relations WHERE field_name='parent'`)[0]!;
-  await insertEdge(rel.link_table, mid, root);
-  await insertEdge(rel.link_table, leaf, mid);
+  await insertEdge(link, mid, root);
+  await insertEdge(link, leaf, mid);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const rootRec = recordOf(engine, 'category', root);
   const midRec = recordOf(engine, 'category', mid);
 
@@ -308,14 +345,17 @@ test('self-referential populate terminates by the depth cap (no throw, no hang)'
 // --- 9. 2-type cycle terminate ------------------------------------------------------------------
 
 test('2-type cycle A->B->A populate is finite (innermost at the frontier)', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('book', 'author');
   const a1 = await insertRow('ct_author', 'name', 'Cyclic');
   const b1 = await insertRow('ct_book', 'title', 'Loop');
-  await insertEdge(rel.link_table, b1, a1);
+  await insertEdge(link, b1, a1);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const authorRec = recordOf(engine, 'author', a1);
   const bookRec = recordOf(engine, 'book', b1);
 
@@ -332,18 +372,28 @@ test('2-type cycle A->B->A populate is finite (innermost at the frontier)', asyn
 // --- 10. populate=* -----------------------------------------------------------------------------
 
 test('populate=* expands all declared relations (depth-1); equals explicit naming; relation-less type unchanged + cached', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const relA = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
-  const relT = await addRelation(sql, 'book', { field: 'tags', kind: 'manyToMany', target: 'tag' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    ct({
+      apiId: 'book',
+      fields: [{ name: 'title', cmsType: 'string' }],
+      relations: [
+        { field: 'author', kind: 'manyToOne', target: 'author' },
+        { field: 'tags', kind: 'manyToMany', target: 'tag' },
+      ],
+    }),
+  ];
+  await applySchemas(schemas);
+  const linkA = deriveLinkTableName('book', 'author');
+  const linkT = deriveLinkTableName('book', 'tags');
   const a1 = await insertRow('ct_author', 'name', 'X');
   const t1 = await insertRow('ct_tag', 'label', 'y');
   const b1 = await insertRow('ct_book', 'title', 'Z');
-  await insertEdge(relA.link_table, b1, a1);
-  await insertEdge(relT.link_table, b1, t1);
+  await insertEdge(linkA, b1, a1);
+  await insertEdge(linkT, b1, t1);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const star = get(engine, '/book', 'populate=*');
   const explicit = get(engine, '/book', 'populate[0]=author&populate[1]=tags');
   assert.equal(star.status, 200);
@@ -351,9 +401,10 @@ test('populate=* expands all declared relations (depth-1); equals explicit namin
 
   // Relation-less type: populate=* yields an empty effective plan -> byte-identical to no-populate AND cached.
   await cleanCatalog(sql);
-  await createContentType(sql, { apiId: 'note', fields: [{ name: 'text', cmsType: 'string' }] });
+  const schemasB = [ct({ apiId: 'note', fields: [{ name: 'text', cmsType: 'string' }] })];
+  await applySchemas(schemasB);
   await insertRow('ct_note', 'text', 'hi');
-  const e2 = await boot();
+  const e2 = await boot(schemasB);
   const noPop = get(e2, '/note', '');
   const starPop = get(e2, '/note', 'populate=*');
   assert.ok(noPop.body.equals(starPop.body), 'populate=* on a relation-less type is byte-identical to no-populate');
@@ -365,13 +416,15 @@ test('populate=* expands all declared relations (depth-1); equals explicit namin
 // --- 11. unknown populate -> 400 ----------------------------------------------------------------
 
 test('unknown populate name -> 400 (top-level, nested, and a scalar field name)', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+  ];
+  await applySchemas(schemas);
   await insertRow('ct_author', 'name', 'a');
   await insertRow('ct_book', 'title', 'b');
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   assert.equal(get(engine, '/book', 'populate=bogus').status, 400, 'unknown top-level relation');
   assert.equal(get(engine, '/book', 'populate[author][populate][bogus]').status, 400, 'unknown nested relation');
   assert.equal(get(engine, '/book', 'populate=title').status, 400, 'scalar field name in populate');
@@ -380,19 +433,22 @@ test('unknown populate name -> 400 (top-level, nested, and a scalar field name)'
 // --- 12. populate + relation filter + sort + offset ---------------------------------------------
 
 test('populate composed with a relation filter + sort + offset: owner page/meta unchanged, related set FULL', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('book', 'author');
   const aHit = await insertRow('ct_author', 'name', 'hit');
   const ids: number[] = [];
   for (let i = 0; i < 5; i++) {
     const b = await insertRow('ct_book', 'title', `b${i}`);
-    await insertEdge(rel.link_table, b, aHit);
+    await insertEdge(link, b, aHit);
     ids.push(b);
   }
   await insertRow('ct_book', 'title', 'nomatch'); // no edge
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const baseQ = 'filters[author][name][$eq]=hit&sort=id:desc&pagination[start]=1&pagination[limit]=2';
   const withoutPop = get(engine, '/book', baseQ);
   const withPop = get(engine, '/book', baseQ + '&populate=author');
@@ -412,18 +468,21 @@ test('populate composed with a relation filter + sort + offset: owner page/meta 
 // --- 13. populate + keyset pagination -----------------------------------------------------------
 
 test('populate composed with owner-level keyset pagination: nested data correct, order = keyset order', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('book', 'author');
   const a1 = await insertRow('ct_author', 'name', 'auth');
   const ids: number[] = [];
   for (let i = 0; i < 5; i++) {
     const b = await insertRow('ct_book', 'title', `b${i}`);
-    await insertEdge(rel.link_table, b, a1);
+    await insertEdge(link, b, a1);
     ids.push(b);
   }
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const authorRec = recordOf(engine, 'author', a1);
 
   const collected: number[] = [];
@@ -446,16 +505,19 @@ test('populate composed with owner-level keyset pagination: nested data correct,
 // --- 14. i64/decimal/json related scalar byte-exact ---------------------------------------------
 
 test('i64/decimal/json in a related row survive byte-exact through populate (spliced verbatim)', async () => {
-  await createContentType(sql, {
-    apiId: 'metric',
-    fields: [
-      { name: 'big', cmsType: 'biginteger' },
-      { name: 'amount', cmsType: 'decimal', options: { precision: 18, scale: 4 } },
-      { name: 'blob', cmsType: 'json' },
-    ],
-  });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'metric', kind: 'manyToOne', target: 'metric' });
+  const schemas = [
+    ct({
+      apiId: 'metric',
+      fields: [
+        { name: 'big', cmsType: 'biginteger' },
+        { name: 'amount', cmsType: 'decimal', options: { precision: 18, scale: 4 } },
+        { name: 'blob', cmsType: 'json' },
+      ],
+    }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'metric', kind: 'manyToOne', target: 'metric' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('book', 'metric');
 
   // A bigint beyond 2^53 + a json object with key order + a fractional decimal.
   const bigVal = '9223372036854775123';
@@ -466,9 +528,9 @@ test('i64/decimal/json in a related row survive byte-exact through populate (spl
   );
   const mId = m!.id;
   const b1 = await insertRow('ct_book', 'title', 'withMetric');
-  await insertEdge(rel.link_table, b1, mId);
+  await insertEdge(link, b1, mId);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const bookRec = recordOf(engine, 'book', b1);
   // The related metric's STANDALONE single-item slice (the frozen bytes that must be spliced verbatim).
   const metricSingle = get(engine, `/metric/${mId}`).body.toString('utf8');
@@ -506,21 +568,23 @@ function serializeBook(bookRec: Record<string, unknown>, metricRawSlice: string)
 // --- 15. respondById populate -------------------------------------------------------------------
 
 test('respondById honors populate; self-referential single-item terminates and matches the list frame', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    ct({ apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'category' }] }),
+  ];
+  await applySchemas(schemas);
+  const linkBA = deriveLinkTableName('book', 'author');
   const a1 = await insertRow('ct_author', 'name', 'Solo');
   const b1 = await insertRow('ct_book', 'title', 'OneBook');
-  await insertEdge(rel.link_table, b1, a1);
+  await insertEdge(linkBA, b1, a1);
 
-  await createContentType(sql, { apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }] });
-  await addRelation(sql, 'category', { field: 'parent', kind: 'manyToOne', target: 'category' });
+  const linkCP = deriveLinkTableName('category', 'parent');
   const root = await insertRow('ct_category', 'slug', 'root');
   const child = await insertRow('ct_category', 'slug', 'child');
-  const crel = (await sql<{ link_table: string }[]>`SELECT link_table FROM content_type_relations WHERE field_name='parent'`)[0]!;
-  await insertEdge(crel.link_table, child, root);
+  await insertEdge(linkCP, child, root);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const authorRec = recordOf(engine, 'author', a1);
   const bookRec = recordOf(engine, 'book', b1);
 
@@ -548,12 +612,14 @@ test('respondById honors populate; self-referential single-item terminates and m
 // --- 16. non-populated byte-identical (the frozen fast path) ------------------------------------
 
 test('a NON-populated request is byte-identical to before this slice and is cached', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+  ];
+  await applySchemas(schemas);
   for (let i = 0; i < 4; i++) await insertRow('ct_book', 'title', `t${i}`);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const q = 'sort=id:desc&pagination[start]=1&pagination[limit]=2';
   const first = get(engine, '/book', q);
   assert.equal(first.status, 200);
@@ -575,12 +641,14 @@ test('a NON-populated request is byte-identical to before this slice and is cach
 // --- 17. populate= empty ------------------------------------------------------------------------
 
 test('populate= (empty) is byte-identical to no-populate and cached', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+  ];
+  await applySchemas(schemas);
   await insertRow('ct_book', 'title', 'x');
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const noPop = get(engine, '/book', '');
   const emptyPop = get(engine, '/book', 'populate=');
   const commaPop = get(engine, '/book', 'populate=,');
@@ -594,14 +662,17 @@ test('populate= (empty) is byte-identical to no-populate and cached', async () =
 // --- 18. a NON-EMPTY populated response is NOT cached -------------------------------------------
 
 test('a non-empty populated response is NOT cached (no cache hit on identical repeat)', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('book', 'author');
   const a1 = await insertRow('ct_author', 'name', 'Stale');
   const b1 = await insertRow('ct_book', 'title', 'Book');
-  await insertEdge(rel.link_table, b1, a1);
+  await insertEdge(link, b1, a1);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const first = get(engine, '/book', 'populate=author');
   assert.equal(first.status, 200);
   // Slice 5 cache-correctness invariant: a populated response depends on the TARGET type's bytes that
@@ -616,31 +687,29 @@ test('a non-empty populated response is NOT cached (no cache hit on identical re
 // --- 19. fail-soft to-one with >1 edge ----------------------------------------------------------
 
 test('to-one with >1 edge fail-softly emits the FIRST related object (not an array, no 500)', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  // manyToOne link table enforces UNIQUE(owner_id); a oneToMany owner side does NOT (an owner can have
-  // many edges). Declare the book.author as the INVERSE of author.books(oneToMany): then book.author is
-  // manyToOne (to-one) but we reach it via... no — simplest: directly insert two edges into a link table
-  // whose owner side is to-one. Use oneToOne where the link enforces UNIQUE only via index we bypass by
-  // inserting two rows on the related side. Instead: build a to-one (manyToOne) and insert two edges
-  // for one owner — possible because manyToOne UNIQUE is on owner_id; inserting two DIFFERENT owners is
-  // normal. To get >1 edge for ONE owner we use a self/oneToMany owner reached through the to-one field.
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
+  // manyToOne link table enforces UNIQUE(owner_id); a second edge for the SAME owner is rejected by the DB,
+  // so the fail-soft to-one branch is dead-defensive. We still probe a second edge to document the intent.
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('book', 'author');
   const a1 = await insertRow('ct_author', 'name', 'First');
   const a2 = await insertRow('ct_author', 'name', 'Second');
   const b1 = await insertRow('ct_book', 'title', 'Multi');
-  await insertEdge(rel.link_table, b1, a1);
+  await insertEdge(link, b1, a1);
   // A second edge for the SAME owner violates the to-one contract; the link table for manyToOne has
   // UNIQUE(owner_id), so this INSERT is expected to FAIL — if it does, the constraint is the guarantee
   // and the fail-soft branch is unreachable (documented dead-defensive). Probe it:
   let secondEdgeRejected = false;
   try {
-    await insertEdge(rel.link_table, b1, a2);
+    await insertEdge(link, b1, a2);
   } catch {
     secondEdgeRejected = true;
   }
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const a1Rec = recordOf(engine, 'author', a1);
   const res = get(engine, '/book', 'populate=author');
   assert.equal(res.status, 200, 'no 500 on a to-one populate');
@@ -657,17 +726,20 @@ test('to-one with >1 edge fail-softly emits the FIRST related object (not an arr
 
 test('inverse cardinality flips: oneToMany owner -> inverse field is a to-one OBJECT/null; manyToMany inverse stays an ARRAY', async () => {
   // OWNER declares author.books = oneToMany; inverse book.author = manyToOne (to-one OBJECT via inverse).
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'author', { field: 'books', kind: 'oneToMany', target: 'book', inverseField: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'books', kind: 'oneToMany', target: 'book', inverseField: 'author' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('author', 'books');
   const a1 = await insertRow('ct_author', 'name', 'Owner');
   const b1 = await insertRow('ct_book', 'title', 'B1');
   const b2 = await insertRow('ct_book', 'title', 'B2');
   const b3 = await insertRow('ct_book', 'title', 'Orphan'); // no author edge
-  await insertEdge(rel.link_table, a1, b1);
-  await insertEdge(rel.link_table, a1, b2);
+  await insertEdge(link, a1, b1);
+  await insertEdge(link, a1, b2);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const authorRec = recordOf(engine, 'author', a1);
   const bookRec1 = recordOf(engine, 'book', b1);
   const bookRec2 = recordOf(engine, 'book', b2);
@@ -686,14 +758,17 @@ test('inverse cardinality flips: oneToMany owner -> inverse field is a to-one OB
 
   // manyToMany two-way: inverse stays a to-many ARRAY on both sides.
   await cleanCatalog(sql);
-  await createContentType(sql, { apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'post', fields: [{ name: 'title', cmsType: 'string' }] });
-  const m2m = await addRelation(sql, 'post', { field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'posts' });
+  const schemasB = [
+    ct({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    ct({ apiId: 'post', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'posts' }] }),
+  ];
+  await applySchemas(schemasB);
+  const linkM = deriveLinkTableName('post', 'tags');
   const p1 = await insertRow('ct_post', 'title', 'P1');
   const tg1 = await insertRow('ct_tag', 'label', 'T1');
-  await insertEdge(m2m.link_table, p1, tg1);
+  await insertEdge(linkM, p1, tg1);
 
-  const e2 = await boot();
+  const e2 = await boot(schemasB);
   const postRec = recordOf(e2, 'post', p1);
   const tagRec = recordOf(e2, 'tag', tg1);
   const fwd = get(e2, '/post', 'populate=tags');
@@ -705,14 +780,17 @@ test('inverse cardinality flips: oneToMany owner -> inverse field is a to-one OB
 // --- 21. duplicate populate names de-dupe + merge children -------------------------------------
 
 test('duplicate populate names de-dupe to a single key, merging sub-plans', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+  ];
+  await applySchemas(schemas);
+  const link = deriveLinkTableName('book', 'author');
   const a1 = await insertRow('ct_author', 'name', 'Dup');
   const b1 = await insertRow('ct_book', 'title', 'Single');
-  await insertEdge(rel.link_table, b1, a1);
+  await insertEdge(link, b1, a1);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   // populate=author,author -> ONE author key, de-duped (still a single object, not nested twice).
   const dup = get(engine, '/book', 'populate=author,author');
   assert.equal(dup.status, 200);
@@ -733,11 +811,13 @@ test('duplicate populate names de-dupe to a single key, merging sub-plans', asyn
 // --- 22. over-deep populate query key -> 400 (no RangeError/500) -------------------------------
 
 test('pathologically deep populate nesting -> clean 400 (not a stack-overflow 500)', async () => {
-  await createContentType(sql, { apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }] });
-  await addRelation(sql, 'category', { field: 'parent', kind: 'manyToOne', target: 'category' });
+  const schemas = [
+    ct({ apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'category' }] }),
+  ];
+  await applySchemas(schemas);
   await insertRow('ct_category', 'slug', 'root');
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   // Build a deeply nested populate query key: populate[parent][populate][parent][populate]...[parent].
   let key = 'populate';
   for (let i = 0; i < 2000; i++) key += '[parent][populate]';

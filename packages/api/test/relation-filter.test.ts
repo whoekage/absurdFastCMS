@@ -1,8 +1,10 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { createContentType, addRelation } from '../src/db/content-type.repository.ts';
 import { Registry } from '../src/db/registry.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
+import { deriveLinkTableName } from '../src/db/ddl.ts';
+import { mintId, type ContentTypeSchema } from '../src/db/schema/model.ts';
 import { buildEngine, rebuildType } from '../src/db/engine.loader.ts';
 import { Engine } from '../src/store/engine.ts';
 import { CursorCodec } from '../src/store/cursor.codec.ts';
@@ -10,7 +12,7 @@ import { Table } from '../src/store/table.ts';
 import { queryKey } from '../src/store/response.cache.ts';
 import { handleRequest } from '../src/http/read.router.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { cleanCatalog } from './helpers.ts';
+import { cleanCatalog, ct } from './helpers.ts';
 
 /**
  * RELATIONS SLICE 4 — RELATIONAL EXISTS FILTERING, end-to-end against a REAL Postgres (no mocks).
@@ -52,9 +54,14 @@ async function insertEdge(link: string, ownerPk: number, relatedPk: number): Pro
   await sql.unsafe(`INSERT INTO "${link}" (owner_id, related_id) VALUES ($1, $2)`, [ownerPk, relatedPk]);
 }
 
-async function boot(): Promise<Engine> {
+/** Materialize the ct_ + link tables from in-code IR (files-first, zero meta). */
+async function setupCatalog(schemas: ContentTypeSchema[]): Promise<void> {
+  await migrate(sql, schemas, { allowDestructive: true });
+}
+
+async function boot(schemas: ContentTypeSchema[]): Promise<Engine> {
   // Wire a cursor codec so the keyset (seek) tests have a working codec; harmless for offset tests.
-  return buildEngine(sql, await Registry.build(sql), { cursorCodec: new CursorCodec('relfilter-secret') });
+  return buildEngine(sql, Registry.fromSchemas(schemas), { cursorCodec: new CursorCodec('relfilter-secret') });
 }
 
 /** Run a GET /:type list query through the pure request core. Returns the CoreResponse. */
@@ -87,10 +94,12 @@ const KINDS = ['oneToOne', 'oneToMany', 'manyToOne', 'manyToMany'] as const;
 
 for (const kind of KINDS) {
   test(`single-hop EXISTS one-way (${kind}): owners with a related name=target`, async () => {
-    await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-    await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-    const rel = await addRelation(sql, 'book', { field: 'authors', kind, target: 'author' });
-    const link = rel.link_table;
+    const schemas = [
+      ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+      ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind, target: 'author' }] }),
+    ];
+    await setupCatalog(schemas);
+    const link = deriveLinkTableName('book', 'authors');
 
     // Per-kind constraints: related_id is UNIQUE for oneToOne/oneToMany (a related belongs to one
     // owner); owner_id is UNIQUE for oneToOne/manyToOne (an owner has one related). Seed a legal
@@ -113,7 +122,7 @@ for (const kind of KINDS) {
     if (multiRelated) await addEdge(b1, aMissB); // b1 has two relateds; still matches via 'hit'
     await addEdge(b2, aMissA); // b2 has only a non-matching related
 
-    const engine = await boot();
+    const engine = await boot(schemas);
 
     // ORACLE: owners with >=1 related author whose name === 'hit'.
     const authorName = new Map<number, string>([[aHit, 'hit'], [aMissA, 'miss'], [aMissB, 'miss']]);
@@ -129,10 +138,12 @@ for (const kind of KINDS) {
 // --- single-hop via the INVERSE field (two-way) -------------------------------------------------
 
 test('single-hop via the INVERSE field resolves to the partner type', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
 
   const a1 = await insertRow('ct_author', 'name', 'a1');
   const a2 = await insertRow('ct_author', 'name', 'a2');
@@ -143,7 +154,7 @@ test('single-hop via the INVERSE field resolves to the partner type', async () =
   await insertEdge(link, bX, a1);
   await insertEdge(link, bY, a2);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   // Filter AUTHORS by their books' title (the inverse field `books` -> target type `book`).
   // ORACLE (transposed adjacency): authors whose books include title 'X'.
@@ -167,11 +178,14 @@ test('single-hop via the INVERSE field resolves to the partner type', async () =
 // --- deep 2-hop ---------------------------------------------------------------------------------
 
 test('deep 2-hop EXISTS: book -> author -> category', async () => {
-  await createContentType(sql, { apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const relAC = await addRelation(sql, 'author', { field: 'category', kind: 'manyToOne', target: 'category' });
-  const relBA = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }] }),
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'category', kind: 'manyToOne', target: 'category' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
+  const linkAC = deriveLinkTableName('author', 'category');
+  const linkBA = deriveLinkTableName('book', 'author');
 
   const cFoo = await insertRow('ct_category', 'slug', 'foo');
   const cBar = await insertRow('ct_category', 'slug', 'bar');
@@ -183,13 +197,13 @@ test('deep 2-hop EXISTS: book -> author -> category', async () => {
   const b3 = await insertRow('ct_book', 'title', 'b3'); // -> a3 (none)
   const b4 = await insertRow('ct_book', 'title', 'b4'); // -> no author
 
-  await insertEdge(relAC.link_table, a1, cFoo);
-  await insertEdge(relAC.link_table, a2, cBar);
-  await insertEdge(relBA.link_table, b1, a1);
-  await insertEdge(relBA.link_table, b2, a2);
-  await insertEdge(relBA.link_table, b3, a3);
+  await insertEdge(linkAC, a1, cFoo);
+  await insertEdge(linkAC, a2, cBar);
+  await insertEdge(linkBA, b1, a1);
+  await insertEdge(linkBA, b2, a2);
+  await insertEdge(linkBA, b3, a3);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   // ORACLE composed hop-by-hop in JS: books whose author has a category with slug 'foo'.
   const catSlug = new Map<number, string>([[cFoo, 'foo'], [cBar, 'bar']]);
@@ -220,10 +234,12 @@ test('deep 2-hop EXISTS: book -> author -> category', async () => {
 // --- $or mixing relation + scalar ---------------------------------------------------------------
 
 test('$or mixing a scalar leaf and a relation leaf (union)', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
 
   const aHit = await insertRow('ct_author', 'name', 'hit');
   const aMiss = await insertRow('ct_author', 'name', 'miss');
@@ -235,7 +251,7 @@ test('$or mixing a scalar leaf and a relation leaf (union)', async () => {
   await insertEdge(link, b4, aHit);
   await insertEdge(link, b3, aMiss);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   const title = new Map<number, string>([[b1, 'keep'], [b2, 'drop'], [b3, 'drop'], [b4, 'keep']]);
   const adj = new Map<number, number[]>([[b1, []], [b2, [aHit]], [b3, [aMiss]], [b4, [aHit]]]);
@@ -251,10 +267,12 @@ test('$or mixing a scalar leaf and a relation leaf (union)', async () => {
 // --- logical combinators INSIDE a relation sub-filter -------------------------------------------
 
 test('relation sub-filter led by $or parses and matches (logical combinator inside the relation)', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
 
   const aX = await insertRow('ct_author', 'name', 'X');
   const aY = await insertRow('ct_author', 'name', 'Y');
@@ -267,7 +285,7 @@ test('relation sub-filter led by $or parses and matches (logical combinator insi
   await insertEdge(link, b2, aY);
   await insertEdge(link, b3, aZ);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   const nameById = new Map<number, string>([[aX, 'X'], [aY, 'Y'], [aZ, 'Z']]);
   const adj = new Map<number, number[]>([[b1, [aX]], [b2, [aY]], [b3, [aZ]], [b4, []]]);
@@ -285,10 +303,12 @@ test('relation sub-filter led by $or parses and matches (logical combinator insi
 });
 
 test('$not INSIDE a relation sub-filter = EXISTS a related row NOT matching (inside-out)', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
 
   const aHit = await insertRow('ct_author', 'name', 'hit');
   const aOther = await insertRow('ct_author', 'name', 'other');
@@ -301,7 +321,7 @@ test('$not INSIDE a relation sub-filter = EXISTS a related row NOT matching (ins
   await insertEdge(link, bMixed, aOther);
   await insertEdge(link, bOnlyOther, aOther);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   const nameById = new Map<number, string>([[aHit, 'hit'], [aOther, 'other']]);
   const adj = new Map<number, number[]>([
@@ -324,12 +344,14 @@ test('$not INSIDE a relation sub-filter = EXISTS a related row NOT matching (ins
 // --- manyToOne shared related row (EXISTS fan-out) ----------------------------------------------
 
 test('manyToOne: two owners pointing to the SAME related row both match (shared-related EXISTS)', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
   // manyToOne: owner_id is UNIQUE (each book has one author) but related_id MAY repeat (one author,
   // many books) — the defining shared-related case.
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'author');
 
   const aShared = await insertRow('ct_author', 'name', 'shared');
   const aOther = await insertRow('ct_author', 'name', 'other');
@@ -340,7 +362,7 @@ test('manyToOne: two owners pointing to the SAME related row both match (shared-
   await insertEdge(link, b2, aShared); // legal: owner_id unique, related_id repeats
   await insertEdge(link, b3, aOther);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   const nameById = new Map<number, string>([[aShared, 'shared'], [aOther, 'other']]);
   const adj = new Map<number, number[]>([[b1, [aShared]], [b2, [aShared]], [b3, [aOther]]]);
@@ -355,10 +377,12 @@ test('manyToOne: two owners pointing to the SAME related row both match (shared-
 // --- $not over a relation leaf (zero-edge owners included) ---------------------------------------
 
 test('$not over a relation leaf includes zero-edge owners; excluded without $not', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
 
   const aHit = await insertRow('ct_author', 'name', 'hit');
   const aMiss = await insertRow('ct_author', 'name', 'miss');
@@ -368,7 +392,7 @@ test('$not over a relation leaf includes zero-edge owners; excluded without $not
   await insertEdge(link, bWith, aHit);
   await insertEdge(link, bOther, aMiss);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   const adj = new Map<number, number[]>([[bWith, [aHit]], [bOther, [aMiss]], [bZero, []]]);
   const all = [bWith, bOther, bZero];
@@ -388,10 +412,12 @@ test('$not over a relation leaf includes zero-edge owners; excluded without $not
 // --- relation filter + sort + offset pagination -------------------------------------------------
 
 test('relation filter + sort + offset pagination on the OWNER', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
 
   const aHit = await insertRow('ct_author', 'name', 'hit');
   const matching: number[] = [];
@@ -403,7 +429,7 @@ test('relation filter + sort + offset pagination on the OWNER', async () => {
   // some non-matching owners interleaved
   for (let i = 0; i < 3; i++) await insertRow('ct_book', 'title', `n${i}`);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   // ORACLE: matching owners sorted by id DESC, page slice [start=2, limit=3].
   const orderedDesc = sortedNums(matching).reverse();
@@ -419,10 +445,12 @@ test('relation filter + sort + offset pagination on the OWNER', async () => {
 // --- relation filter + keyset pagination --------------------------------------------------------
 
 test('relation filter + keyset pagination: pages union to the full EXISTS set, withCount correct', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
 
   const aHit = await insertRow('ct_author', 'name', 'hit');
   const matching: number[] = [];
@@ -433,7 +461,7 @@ test('relation filter + keyset pagination: pages union to the full EXISTS set, w
   }
   await insertRow('ct_book', 'title', 'n0'); // non-matching
 
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   // Walk keyset pages of size 2 (forward), collecting ids in order.
   const collected: number[] = [];
@@ -457,10 +485,12 @@ test('relation filter + keyset pagination: pages union to the full EXISTS set, w
 });
 
 test('a keyset cursor minted under relation filter A is rejected under filter B', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
   const aA = await insertRow('ct_author', 'name', 'A');
   const aB = await insertRow('ct_author', 'name', 'B');
   for (let i = 0; i < 4; i++) {
@@ -468,7 +498,7 @@ test('a keyset cursor minted under relation filter A is rejected under filter B'
     await insertEdge(link, b, aA);
     await insertEdge(link, b, aB);
   }
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   const first = get(engine, 'book', 'filters[authors][name][$eq]=A&sort=id:asc&pagination[cursor]=&pagination[pageSize]=2');
   const env = JSON.parse(first.body.toString('utf8')) as { meta: { pagination: { nextCursor: string } } };
@@ -483,14 +513,17 @@ test('a keyset cursor minted under relation filter A is rejected under filter B'
 // --- zero-match + empty / zero-edge relation ----------------------------------------------------
 
 test('zero-match relation filter returns an empty, well-formed envelope', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
   const a1 = await insertRow('ct_author', 'name', 'a1');
   const b1 = await insertRow('ct_book', 'title', 'b1');
-  await insertEdge(rel.link_table, b1, a1);
+  await insertEdge(link, b1, a1);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const res = get(engine, 'book', 'filters[authors][name][$eq]=nobody');
   assert.equal(res.status, 200);
   assert.deepEqual(idsOf(res.body), [], 'no matches');
@@ -498,14 +531,16 @@ test('zero-match relation filter returns an empty, well-formed envelope', async 
 });
 
 test('relation with rows but ZERO edges: positive [], $not all owners', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
   await insertRow('ct_author', 'name', 'a1');
   const b1 = await insertRow('ct_book', 'title', 'b1');
   const b2 = await insertRow('ct_book', 'title', 'b2'); // no edges anywhere
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const pos = get(engine, 'book', 'filters[authors][name][$eq]=a1');
   assert.deepEqual(idsOf(pos.body), [], 'positive empty (no edges)');
   const not = get(engine, 'book', 'filters[$not][authors][name][$eq]=a1');
@@ -515,13 +550,16 @@ test('relation with rows but ZERO edges: positive [], $not all owners', async ()
 // --- word-boundary sizing + $and (probe true/false byte-identical) ------------------------------
 
 test('tiny-lead probe BAILS on a relation child: probeHits stays 0, byte-identical on/off, oracle-correct', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, {
-    apiId: 'book',
-    fields: [{ name: 'title', cmsType: 'string' }, { name: 'tag', cmsType: 'string' }],
-  });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({
+      apiId: 'book',
+      fields: [{ name: 'title', cmsType: 'string' }, { name: 'tag', cmsType: 'string' }],
+      relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }],
+    }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
 
   const aHit = await insertRow('ct_author', 'name', 'hit');
   const aMiss = await insertRow('ct_author', 'name', 'miss');
@@ -543,7 +581,7 @@ test('tiny-lead probe BAILS on a relation child: probeHits stays 0, byte-identic
     adj.set(b, [a]);
   }
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const table = engine.table('book');
   // An eq index on `title` is what makes `title=lead` a cheap-exact lead for the probe planner.
   table.createEqIndex('title');
@@ -585,20 +623,23 @@ test('tiny-lead probe BAILS on a relation child: probeHits stays 0, byte-identic
 // --- output shape unchanged (no nested data leaks: slice 5 must NOT appear) ---------------------
 
 test('relation-FILTERED response returns owner scalars ONLY (no nested related data)', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, {
-    apiId: 'book',
-    fields: [{ name: 'title', cmsType: 'string' }, { name: 'pages', cmsType: 'integer' }],
-  });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({
+      apiId: 'book',
+      fields: [{ name: 'title', cmsType: 'string' }, { name: 'pages', cmsType: 'integer' }],
+      relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }],
+    }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
   const aHit = await insertRow('ct_author', 'name', 'hit');
   const b1 = await sql.unsafe<{ id: number }[]>(
     `INSERT INTO ct_book (title, pages) VALUES ($1, $2) RETURNING id`, ['b1', '123'],
   ).then((r) => r[0]!.id);
   await insertEdge(link, b1, aHit);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   // A relation-FILTERED list (goes through the resolver path).
   const res = get(engine, 'book', 'filters[authors][name][$eq]=hit');
@@ -630,12 +671,14 @@ test('relation-FILTERED response returns owner scalars ONLY (no nested related d
 // --- validation 400s ----------------------------------------------------------------------------
 
 test('validation: unknown sub-field, unknown op, op-shaped/bare relation, unknown top key', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
   await insertRow('ct_author', 'name', 'a1');
   await insertRow('ct_book', 'title', 'b1');
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   assert.equal(get(engine, 'book', 'filters[authors][nope][$eq]=x').status, 400, 'unknown sub-field');
   assert.equal(get(engine, 'book', 'filters[authors][name][$bogus]=x').status, 400, 'unknown operator');
@@ -648,16 +691,18 @@ test('validation: unknown sub-field, unknown op, op-shaped/bare relation, unknow
 // --- depth cap ----------------------------------------------------------------------------------
 
 test('depth cap: 3-hop self-referential parses; 4-hop -> 400 (no hang)', async () => {
-  await createContentType(sql, { apiId: 'comment', fields: [{ name: 'body', cmsType: 'string' }] });
-  await addRelation(sql, 'comment', { field: 'parent', kind: 'manyToOne', target: 'comment', inverseField: 'children' });
+  const schemas = [
+    ct({ apiId: 'comment', fields: [{ name: 'body', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'comment', inverseField: 'children' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('comment', 'parent');
   const root = await insertRow('ct_comment', 'body', 'root');
   const mid = await insertRow('ct_comment', 'body', 'mid');
   const leaf = await insertRow('ct_comment', 'body', 'leaf');
-  const rel = (await sql<{ link_table: string }[]>`SELECT link_table FROM content_type_relations WHERE field_name='parent'`)[0]!;
-  await insertEdge(rel.link_table, mid, root); // mid.parent = root
-  await insertEdge(rel.link_table, leaf, mid); // leaf.parent = mid
+  await insertEdge(link, mid, root); // mid.parent = root
+  await insertEdge(link, leaf, mid); // leaf.parent = mid
 
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   // 2 hops: comment.parent.parent.body — leaf -> mid -> root (body=root). Parses + resolves.
   const ok2 = get(engine, 'comment', 'filters[parent][parent][body][$eq]=root');
@@ -692,16 +737,18 @@ test('queryKey: identical relation filters collide, different ones do not', () =
 });
 
 test('relation-filtered responses BYPASS the cache: byte-identical repeats, TARGET-only write reflected', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
   const aHit = await insertRow('ct_author', 'name', 'hit');
   const b1 = await insertRow('ct_book', 'title', 'b1');
   const b2 = await insertRow('ct_book', 'title', 'b2'); // exists now, ZERO author edges (the future target of the write)
   await insertEdge(link, b1, aHit);
 
-  const registry = await Registry.build(sql);
+  const registry = Registry.fromSchemas(schemas);
   const engine = await buildEngine(sql, registry, { cursorCodec: new CursorCodec('relfilter-secret') });
 
   const q = 'filters[authors][name][$eq]=hit';
@@ -738,16 +785,20 @@ test('relation-filtered responses BYPASS the cache: byte-identical repeats, TARG
 
 test('non-relational filtered+sorted+paginated query is byte-identical with vs without a relation declared', async () => {
   // Engine A: no relation declared.
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
+  const bookCt = ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
+  const bookOnly = [bookCt];
+  await setupCatalog(bookOnly);
   for (let i = 0; i < 6; i++) await insertRow('ct_book', 'title', `t${i}`);
-  const engineA = await boot();
+  const engineA = await boot(bookOnly);
   const q = 'filters[title][$ne]=t0&sort=id:desc&pagination[start]=1&pagination[limit]=2';
   const bytesA = get(engineA, 'book', q).body;
 
-  // Engine B: add an author type + a relation on book, same book data, same query.
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  const engineB = await boot();
+  // Engine B: add an author type + a relation on book. Reuse the SAME book schema (stable id) so migrate's
+  // diff only ADDS author + the link table — book rows survive, same query, same data.
+  const authorCt = ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
+  const withRel = [{ ...bookCt, relations: [{ id: mintId('rel'), field: 'authors', kind: 'manyToMany' as const, target: 'author' }] }, authorCt];
+  await setupCatalog(withRel);
+  const engineB = await boot(withRel);
   const bytesB = get(engineB, 'book', q).body;
 
   assert.ok(bytesA.equals(bytesB), 'a scalar query is byte-identical whether or not a relation is declared');
@@ -766,13 +817,16 @@ test('standalone Table.scanTree on a relation leaf throws without a resolver; re
 
   // The same shape resolves end-to-end through the Engine (covered by the kind tests above) — assert here
   // that a resolver supplied to scanTree is honored.
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setupCatalog(schemas);
+  const link = deriveLinkTableName('book', 'authors');
   const aHit = await insertRow('ct_author', 'name', 'hit');
   const b1 = await insertRow('ct_book', 'title', 'b1');
-  await insertEdge(rel.link_table, b1, aHit);
-  const engine = await boot();
+  await insertEdge(link, b1, aHit);
+  const engine = await boot(schemas);
   const res = get(engine, 'book', 'filters[authors][name][$eq]=hit');
   assert.deepEqual(idsOf(res.body), [b1], 'engine-supplied resolver resolves the leaf');
 });

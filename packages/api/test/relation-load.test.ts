@@ -1,14 +1,15 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { createContentType, addRelation, dropContentType } from '../src/db/content-type.repository.ts';
 import { Registry } from '../src/db/registry.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
+import { mintId, type ContentTypeSchema } from '../src/db/schema/model.ts';
 import { buildEngine, rebuildType, loadAllRelations, loadType } from '../src/db/engine.loader.ts';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { Engine } from '../src/store/engine.ts';
 import { Bitset } from '../src/store/bitset.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { cleanCatalog } from './helpers.ts';
+import { cleanCatalog, ct } from './helpers.ts';
 
 /**
  * RELATIONS SLICE 3 — loading relation EDGES from the link tables into in-memory CSR {@link Relation}
@@ -47,9 +48,19 @@ async function insertEdge(link: string, ownerPk: number, relatedPk: number): Pro
   await sql.unsafe(`INSERT INTO "${link}" (owner_id, related_id) VALUES ($1, $2)`, [ownerPk, relatedPk]);
 }
 
-/** Build the engine straight from the live catalog. */
-async function boot(): Promise<Engine> {
-  return buildEngine(sql, await Registry.build(sql));
+/** Materialize the ct_ + link tables from in-code IR (files-first, zero meta). */
+async function setup(schemas: ContentTypeSchema[]): Promise<void> {
+  await migrate(sql, schemas, { allowDestructive: true });
+}
+
+/** The deterministic link-table name for a declared relation, read off the built registry. */
+function linkOf(registry: Registry, type: string, field: string): string {
+  return registry.get(type)!.relationsByField.get(field)!.linkTable;
+}
+
+/** Build the engine from the given files-first schemas. */
+async function boot(schemas: ContentTypeSchema[]): Promise<Engine> {
+  return buildEngine(sql, Registry.fromSchemas(schemas));
 }
 
 /** Map a Postgres PK -> dense row for a type (AFTER the engine is built/rebuilt). */
@@ -81,10 +92,13 @@ const KINDS = ['oneToOne', 'oneToMany', 'manyToOne', 'manyToMany'] as const;
 
 for (const kind of KINDS) {
   test(`${kind} one-way: forward CSR matches the seeded adjacency; no inverse`, async () => {
-    await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-    await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-    const rel = await addRelation(sql, 'book', { field: 'authors', kind, target: 'author' });
-    const link = rel.link_table;
+    const schemas = [
+      ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+      ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind, target: 'author' }] }),
+    ];
+    await setup(schemas);
+    const registry = Registry.fromSchemas(schemas);
+    const link = linkOf(registry, 'book', 'authors');
 
     // For oneToMany/oneToOne the related side is UNIQUE; for manyToOne/manyToMany an owner may have many.
     // Seed a per-kind-legal adjacency: book b1 -> a1 (+ a2 when the kind allows multiple relateds).
@@ -101,7 +115,7 @@ for (const kind of KINDS) {
     if (multiRelated) await insertEdge(link, b1, a2);
     if (sharedRelatedOk) await insertEdge(link, b2, a1);
 
-    const engine = await boot();
+    const engine = await boot(schemas);
     const r = engine.relation('book', 'authors');
     assert.ok(r, 'forward relation present');
     assert.equal(engine.relation('author', 'authors'), undefined, 'no inverse under owner field on target');
@@ -121,10 +135,13 @@ for (const kind of KINDS) {
 
 for (const kind of KINDS) {
   test(`${kind} two-way: inverse is the transpose with swapped endpoints`, async () => {
-    await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-    await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-    const rel = await addRelation(sql, 'book', { field: 'authors', kind, target: 'author', inverseField: 'books' });
-    const link = rel.link_table;
+    const schemas = [
+      ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+      ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind, target: 'author', inverseField: 'books' }] }),
+    ];
+    await setup(schemas);
+    const registry = Registry.fromSchemas(schemas);
+    const link = linkOf(registry, 'book', 'authors');
 
     // Asymmetric seed: b1 -> a1 ONLY (so an orientation bug is caught — forward != inverse shape).
     const a1 = await insertRow('ct_author', 'name', 'a1');
@@ -132,7 +149,7 @@ for (const kind of KINDS) {
     const b1 = await insertRow('ct_book', 'title', 'b1');
     await insertEdge(link, b1, a1);
 
-    const engine = await boot();
+    const engine = await boot(schemas);
     const fwd = engine.relation('book', 'authors')!;
     const inv = engine.relation('author', 'books')!;
     assert.ok(fwd, 'forward present');
@@ -154,17 +171,18 @@ for (const kind of KINDS) {
 // --- self-referential two-way -------------------------------------------------------------------
 
 test('self-referential two-way: parent/children resolve against the SAME table, asymmetric', async () => {
-  await createContentType(sql, { apiId: 'comment', fields: [{ name: 'body', cmsType: 'text' }] });
   // parent is manyToOne (a child has one parent); children is the inverse.
-  const rel = await addRelation(sql, 'comment', { field: 'parent', kind: 'manyToOne', target: 'comment', inverseField: 'children' });
-  const link = rel.link_table;
+  const schemas = [ct({ apiId: 'comment', fields: [{ name: 'body', cmsType: 'text' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'comment', inverseField: 'children' }] })];
+  await setup(schemas);
+  const registry = Registry.fromSchemas(schemas);
+  const link = linkOf(registry, 'comment', 'parent');
 
   const root = await insertRow('ct_comment', 'body', 'root');
   const child = await insertRow('ct_comment', 'body', 'child');
   // child's parent is root: owner=child, related=root (owner side is the "parent" field on the child).
   await insertEdge(link, child, root);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const parent = engine.relation('comment', 'parent')!;
   const children = engine.relation('comment', 'children')!;
   assert.ok(parent && children);
@@ -183,13 +201,15 @@ test('self-referential two-way: parent/children resolve against the SAME table, 
 // --- zero-edge ----------------------------------------------------------------------------------
 
 test('zero-edge relation is a PRESENT, valid, empty Relation (not undefined)', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+  ];
+  await setup(schemas);
   await insertRow('ct_author', 'name', 'a1');
   await insertRow('ct_book', 'title', 'b1'); // rows exist; NO link edges
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const fwd = engine.relation('book', 'authors')!;
   const inv = engine.relation('author', 'books')!;
   assert.ok(fwd, 'present even with zero edges');
@@ -199,15 +219,18 @@ test('zero-edge relation is a PRESENT, valid, empty Relation (not undefined)', a
 });
 
 test('mixed: one owner has edges, one has none', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setup(schemas);
+  const link = linkOf(Registry.fromSchemas(schemas), 'book', 'authors');
   const a1 = await insertRow('ct_author', 'name', 'a1');
   const b1 = await insertRow('ct_book', 'title', 'b1');
   const b2 = await insertRow('ct_book', 'title', 'b2'); // no edges
-  await insertEdge(rel.link_table, b1, a1);
+  await insertEdge(link, b1, a1);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const r = engine.relation('book', 'authors')!;
   assert.deepEqual(r.relatedRows(dense(engine, 'book', b1)), [dense(engine, 'author', a1)]);
   assert.deepEqual(r.relatedRows(dense(engine, 'book', b2)), []);
@@ -216,15 +239,17 @@ test('mixed: one owner has edges, one has none', async () => {
 // --- write-then-rebuild against NEW dense rows --------------------------------------------------
 
 test('rebuild of the OWNER type leaves the relation + inverse correct against the NEW dense rows', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+  ];
+  await setup(schemas);
+  const registry = Registry.fromSchemas(schemas);
+  const link = linkOf(registry, 'book', 'authors');
   const a1 = await insertRow('ct_author', 'name', 'a1');
   const b1 = await insertRow('ct_book', 'title', 'b1');
   await insertEdge(link, b1, a1);
 
-  const registry = await Registry.build(sql);
   const engine = await buildEngine(sql, registry);
 
   // A fresh write: new book + new edge.
@@ -245,15 +270,17 @@ test('rebuild of the OWNER type leaves the relation + inverse correct against th
 });
 
 test('rebuild of the TARGET type leaves the relation + inverse correct against the NEW dense rows', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+  ];
+  await setup(schemas);
+  const registry = Registry.fromSchemas(schemas);
+  const link = linkOf(registry, 'book', 'authors');
   const a1 = await insertRow('ct_author', 'name', 'a1');
   const b1 = await insertRow('ct_book', 'title', 'b1');
   await insertEdge(link, b1, a1);
 
-  const registry = await Registry.build(sql);
   const engine = await buildEngine(sql, registry);
 
   // Write to the TARGET (author) type: a new author + a new edge from b1 to it.
@@ -274,11 +301,13 @@ test('rebuild of the TARGET type leaves the relation + inverse correct against t
 // --- dangling-edge skip -------------------------------------------------------------------------
 
 test('a dangling link edge (owner PK absent from the loaded snapshot) is SKIPPED, valid edges intact', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
   // manyToMany so the unique constraint never blocks our two edges.
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setup(schemas);
+  const link = linkOf(Registry.fromSchemas(schemas), 'book', 'authors');
   const a1 = await insertRow('ct_author', 'name', 'a1');
   const b1 = await insertRow('ct_book', 'title', 'b1');
   const bGone = await insertRow('ct_book', 'title', 'gone');
@@ -299,7 +328,7 @@ test('a dangling link edge (owner PK absent from the loaded snapshot) is SKIPPED
   await sql.unsafe(`DELETE FROM ct_book WHERE id = $1`, [bGone]);
   assert.equal((await sql.unsafe(`SELECT 1 FROM "${link}" WHERE owner_id = $1`, [bGone])).length, 1, 'dangling link row still present');
 
-  const engine = await boot(); // must NOT throw
+  const engine = await boot(schemas); // must NOT throw
   const r = engine.relation('book', 'authors')!;
   assert.ok(r);
   // Only the valid edge survives; the dangling one was skipped.
@@ -308,10 +337,12 @@ test('a dangling link edge (owner PK absent from the loaded snapshot) is SKIPPED
 });
 
 test('a dangling RELATED edge (related PK absent from the loaded snapshot) is SKIPPED, valid edges intact', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+  ];
+  await setup(schemas);
+  const link = linkOf(Registry.fromSchemas(schemas), 'book', 'authors');
   const a1 = await insertRow('ct_author', 'name', 'a1');
   const aGone = await insertRow('ct_author', 'name', 'gone');
   const b1 = await insertRow('ct_book', 'title', 'b1');
@@ -331,7 +362,7 @@ test('a dangling RELATED edge (related PK absent from the loaded snapshot) is SK
   await sql.unsafe(`DELETE FROM ct_author WHERE id = $1`, [aGone]);
   assert.equal((await sql.unsafe(`SELECT 1 FROM "${link}" WHERE related_id = $1`, [aGone])).length, 1, 'dangling link row still present');
 
-  const engine = await boot(); // must NOT throw
+  const engine = await boot(schemas); // must NOT throw
   const r = engine.relation('book', 'authors')!;
   assert.ok(r);
   assert.deepEqual(r.relatedRows(dense(engine, 'book', b1)), [dense(engine, 'author', a1)]);
@@ -339,10 +370,12 @@ test('a dangling RELATED edge (related PK absent from the loaded snapshot) is SK
 });
 
 test('a dangling edge on a TWO-WAY relation is skipped on BOTH forward AND inverse', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+  ];
+  await setup(schemas);
+  const link = linkOf(Registry.fromSchemas(schemas), 'book', 'authors');
   const a1 = await insertRow('ct_author', 'name', 'a1');
   const b1 = await insertRow('ct_book', 'title', 'b1');
   const bGone = await insertRow('ct_book', 'title', 'gone');
@@ -359,7 +392,7 @@ test('a dangling edge on a TWO-WAY relation is skipped on BOTH forward AND inver
   await sql.unsafe(`ALTER TABLE "${link}" DROP CONSTRAINT "${fk[0]!.conname}"`);
   await sql.unsafe(`DELETE FROM ct_book WHERE id = $1`, [bGone]);
 
-  const engine = await boot(); // must NOT throw
+  const engine = await boot(schemas); // must NOT throw
   const fwd = engine.relation('book', 'authors')!;
   const inv = engine.relation('author', 'books')!;
   assert.ok(fwd && inv);
@@ -377,13 +410,15 @@ test('a dangling edge on a TWO-WAY relation is skipped on BOTH forward AND inver
 // --- endpoint-missing defensive skip ------------------------------------------------------------
 
 test('loadAllRelations skips (never throws) when an endpoint Table is absent from the engine', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+  ];
+  await setup(schemas);
   await insertRow('ct_author', 'name', 'a1');
   await insertRow('ct_book', 'title', 'b1');
 
-  const registry = await Registry.build(sql);
+  const registry = Registry.fromSchemas(schemas);
   // Build an engine that is INTENTIONALLY missing the target endpoint: load only the owner type, leaving
   // 'author' absent. This simulates a transient engine/registry membership skew during a drop.
   const engine = new Engine();
@@ -398,7 +433,7 @@ test('loadAllRelations skips (never throws) when an endpoint Table is absent fro
 // --- empty catalog ------------------------------------------------------------------------------
 
 test('empty catalog: buildEngine succeeds, every relation lookup is undefined, a no-op rebuild is fine', async () => {
-  const registry = await Registry.build(sql);
+  const registry = Registry.fromSchemas([]);
   const engine = await buildEngine(sql, registry);
   assert.equal(engine.relation('nope', 'x'), undefined);
   // Re-running phase-2 on an empty engine is a clean no-op.
@@ -409,14 +444,17 @@ test('empty catalog: buildEngine succeeds, every relation lookup is undefined, a
 // --- dropType purge -----------------------------------------------------------------------------
 
 test('dropType purges every relation referencing the dropped type (forward + inverse on the partner)', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+  ];
+  await setup(schemas);
+  const link = linkOf(Registry.fromSchemas(schemas), 'book', 'authors');
   const a1 = await insertRow('ct_author', 'name', 'a1');
   const b1 = await insertRow('ct_book', 'title', 'b1');
-  await insertEdge(rel.link_table, b1, a1);
+  await insertEdge(link, b1, a1);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   assert.ok(engine.relation('book', 'authors'));
   assert.ok(engine.relation('author', 'books'));
 
@@ -430,17 +468,28 @@ test('dropType purges every relation referencing the dropped type (forward + inv
 // --- multiple owns / multiple targets-of --------------------------------------------------------
 
 test('one owner with two relations: both retrievable independently', async () => {
-  await createContentType(sql, { apiId: 'person', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const r1 = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'person' });
-  const r2 = await addRelation(sql, 'book', { field: 'editor', kind: 'manyToOne', target: 'person' });
+  const schemas = [
+    ct({ apiId: 'person', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({
+      apiId: 'book',
+      fields: [{ name: 'title', cmsType: 'string' }],
+      relations: [
+        { field: 'author', kind: 'manyToOne', target: 'person' },
+        { field: 'editor', kind: 'manyToOne', target: 'person' },
+      ],
+    }),
+  ];
+  await setup(schemas);
+  const registry = Registry.fromSchemas(schemas);
+  const linkAuthor = linkOf(registry, 'book', 'author');
+  const linkEditor = linkOf(registry, 'book', 'editor');
   const p1 = await insertRow('ct_person', 'name', 'p1');
   const p2 = await insertRow('ct_person', 'name', 'p2');
   const b1 = await insertRow('ct_book', 'title', 'b1');
-  await insertEdge(r1.link_table, b1, p1);
-  await insertEdge(r2.link_table, b1, p2);
+  await insertEdge(linkAuthor, b1, p1);
+  await insertEdge(linkEditor, b1, p2);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const author = engine.relation('book', 'author')!;
   const editor = engine.relation('book', 'editor')!;
   assert.ok(author && editor);
@@ -450,18 +499,22 @@ test('one owner with two relations: both retrievable independently', async () =>
 });
 
 test('two distinct owner types both two-way-targeting one type: both inverses independently retrievable', async () => {
-  await createContentType(sql, { apiId: 'tag', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'article', fields: [{ name: 'headline', cmsType: 'string' }] });
-  const rBook = await addRelation(sql, 'book', { field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'books' });
-  const rArt = await addRelation(sql, 'article', { field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'articles' });
+  const schemas = [
+    ct({ apiId: 'tag', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'books' }] }),
+    ct({ apiId: 'article', fields: [{ name: 'headline', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'articles' }] }),
+  ];
+  await setup(schemas);
+  const registry = Registry.fromSchemas(schemas);
+  const linkBook = linkOf(registry, 'book', 'tags');
+  const linkArticle = linkOf(registry, 'article', 'tags');
   const t1 = await insertRow('ct_tag', 'name', 't1');
   const b1 = await insertRow('ct_book', 'title', 'b1');
   const ar1 = await insertRow('ct_article', 'headline', 'ar1');
-  await insertEdge(rBook.link_table, b1, t1);
-  await insertEdge(rArt.link_table, ar1, t1);
+  await insertEdge(linkBook, b1, t1);
+  await insertEdge(linkArticle, ar1, t1);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   const tagBooks = engine.relation('tag', 'books')!;
   const tagArticles = engine.relation('tag', 'articles')!;
   assert.ok(tagBooks && tagArticles, 'both inverses present under distinct fields on tag');
@@ -475,22 +528,28 @@ test('two distinct owner types both two-way-targeting one type: both inverses in
 // --- unpopulated read path unchanged ------------------------------------------------------------
 
 test('declaring a relation does NOT change the unpopulated read bytes or schemaVersion', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
+  const authorCt = ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
+  const bookCt = ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
+  const noRel = [authorCt, bookCt];
+  await setup(noRel);
   await insertRow('ct_author', 'name', 'a1');
   const b1 = await insertRow('ct_book', 'title', 'b1');
 
-  const before = await boot();
+  const before = await boot(noRel);
   const beforeBytes = Buffer.from(before.respond('book'));
   const beforeVer = before.schemaVersion('book');
   const beforeById = before.respondById('book', b1)!;
 
-  // Add a relation + edge, re-boot.
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
+  // Add a relation + edge, re-boot (the relation is declared only in this second catalog). Reuse the SAME
+  // book schema (stable id/fields) so migrate's diff is exactly "add a relation", not drop+recreate the type.
+  const bookWithRel: ContentTypeSchema = { ...bookCt, relations: [{ id: mintId('rel'), field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] };
+  const withRel = [authorCt, bookWithRel];
+  await migrate(sql, withRel, { allowDestructive: true });
+  const link = linkOf(Registry.fromSchemas(withRel), 'book', 'authors');
   const a1pk = (await sql.unsafe<{ id: number }[]>(`SELECT id FROM ct_author LIMIT 1`))[0]!.id;
-  await insertEdge(rel.link_table, b1, a1pk);
+  await insertEdge(link, b1, a1pk);
 
-  const after = await boot();
+  const after = await boot(withRel);
   assert.ok(Buffer.from(after.respond('book')).equals(beforeBytes), 'list response byte-identical');
   assert.equal(after.schemaVersion('book'), beforeVer, 'schemaVersion unchanged by relation load');
   assert.ok(after.respondById('book', b1)!.equals(beforeById), 'single response byte-identical');
@@ -499,14 +558,17 @@ test('declaring a relation does NOT change the unpopulated read bytes or schemaV
 });
 
 test('loadAllRelations on an ALREADY-serving engine leaves respond/respondById bytes + schemaVersion untouched', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+  ];
+  await setup(schemas);
+  const registry = Registry.fromSchemas(schemas);
+  const link = linkOf(registry, 'book', 'authors');
   const a1 = await insertRow('ct_author', 'name', 'a1');
   const b1 = await insertRow('ct_book', 'title', 'b1');
 
   // Boot ONCE and serve from this very engine; capture the unpopulated bytes + cursor sig BEFORE any edge.
-  const registry = await Registry.build(sql);
   const engine = await buildEngine(sql, registry);
   const liveBytes = Buffer.from(engine.respond('book'));
   const liveVer = engine.schemaVersion('book');
@@ -514,7 +576,7 @@ test('loadAllRelations on an ALREADY-serving engine leaves respond/respondById b
   assert.equal(engine.relation('book', 'authors')!.edgeCount, 0, 'no edges yet');
 
   // Insert an edge in Postgres, then re-derive relations on the SAME live engine (the per-write refresh).
-  await insertEdge(rel.link_table, b1, a1);
+  await insertEdge(link, b1, a1);
   await loadAllRelations(sql, engine, registry);
 
   // The relation now reflects the new edge...
@@ -527,18 +589,21 @@ test('loadAllRelations on an ALREADY-serving engine leaves respond/respondById b
 
 // --- production boot path -----------------------------------------------------------------------
 
-test('PostgresStore.loadWithRegistry wires relations on the server boot path', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
+test('PostgresStore.loadFromSchemas wires relations on the server boot path', async () => {
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+  ];
+  await setup(schemas);
+  const link = linkOf(Registry.fromSchemas(schemas), 'book', 'authors');
   const a1 = await insertRow('ct_author', 'name', 'a1');
   const b1 = await insertRow('ct_book', 'title', 'b1');
-  await insertEdge(rel.link_table, b1, a1);
+  await insertEdge(link, b1, a1);
 
   const store = new PostgresStore(sql);
-  const { engine } = await store.loadWithRegistry();
+  const { engine } = await store.loadFromSchemas(schemas);
   const r = engine.relation('book', 'authors')!;
-  assert.ok(r, 'relation loaded via the production loadWithRegistry path');
+  assert.ok(r, 'relation loaded via the production loadFromSchemas path');
   assert.deepEqual(r.relatedRows(dense(engine, 'book', b1)), [dense(engine, 'author', a1)]);
   assert.ok(engine.relation('author', 'books'), 'inverse loaded too');
 });
@@ -546,10 +611,13 @@ test('PostgresStore.loadWithRegistry wires relations on the server boot path', a
 // --- boot vs boot-then-rebuild parity -----------------------------------------------------------
 
 test('boot vs boot-then-rebuild parity: identical adjacency for identical data', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
-  const link = rel.link_table;
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+  ];
+  await setup(schemas);
+  const registry = Registry.fromSchemas(schemas);
+  const link = linkOf(registry, 'book', 'authors');
   const a1 = await insertRow('ct_author', 'name', 'a1');
   const a2 = await insertRow('ct_author', 'name', 'a2');
   const b1 = await insertRow('ct_book', 'title', 'b1');
@@ -559,10 +627,9 @@ test('boot vs boot-then-rebuild parity: identical adjacency for identical data',
   await insertEdge(link, b2, a1);
 
   // Fresh boot.
-  const fresh = await boot();
+  const fresh = await boot(schemas);
 
   // Boot then rebuild book (no DB change) -> the shared routine must land on the SAME adjacency.
-  const registry = await Registry.build(sql);
   const rebuilt = await buildEngine(sql, registry);
   await rebuildType(sql, rebuilt, registry.get('book')!, registry);
 
@@ -579,18 +646,22 @@ test('boot vs boot-then-rebuild parity: identical adjacency for identical data',
 // --- dropContentType end-to-end (DB drop + engine drop purge) -----------------------------------
 
 test('dropContentType then dropType: catalog + engine relation store both clean', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
-  await addRelation(sql, 'book', { field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+  ];
+  await setup(schemas);
 
-  const engine = await boot();
+  const engine = await boot(schemas);
   assert.ok(engine.relation('book', 'authors'));
 
-  await dropContentType(sql, 'book'); // owner drop removes link + meta (incl. inverse on author)
+  // Declarative drop: re-migrate to the author-only catalog -> diff drops ct_book + link + the inverse on author.
+  const authorOnly = [schemas[0]!];
+  await migrate(sql, authorOnly, { allowDestructive: true });
   engine.dropType('book');
 
   // A fresh boot reflects the DB drop: author has no relations now.
-  const rebooted = await boot();
+  const rebooted = await boot(authorOnly);
   assert.equal(rebooted.relation('author', 'books'), undefined, 'inverse gone after owner DB drop');
   assert.equal(rebooted.has('book'), false);
 });
