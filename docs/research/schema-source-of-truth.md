@@ -347,10 +347,17 @@ ONE migrate (rename+add+retype atomic, data preserved, topological order), trans
 or failing op applies NOTHING — no partial), idempotency + the full lifecycle, relations (link tables +
 edges survive unrelated migrations; drop keeps endpoint rows).
 
-Two engine/harness fixes the sweep forced:
+Three engine/harness fixes the sweep forced:
 - **diff ordering:** `dropField` now precedes field renames/adds within a migrate, so dropping `legacy` +
   renaming `current`→`legacy` (or dropping `headline` + adding a new `headline`) in ONE migrate works
   (previously collided with the not-yet-dropped column). 
+- **enum value-set change (FIXED):** the `retypeField` apply now treats enum involvement as a CHECK swap —
+  drop the old `<table>_<col>_check` (discovered via `pg_constraint`), alter the varchar type ONLY on a
+  category change or a GROW (never a shrink, which would truncate in-use values), then add the new CHECK with
+  the next value-set (`compileAddCheck`/`compileDropConstraint` in `ddl.ts`). ADD a member → grown + insertable;
+  REMOVE an unused member → enforced; REMOVE an in-use member → the new CHECK is validated against the live row,
+  fails, and the whole migrate rolls back (old CHECK restored, data intact). Pinned by 3 tests in
+  `migrate-edge-retype.test.ts`.
 - **test harness:** `cleanCatalog` now sweeps `*_lnk` link tables by name (the files-first migrate writes no
   meta, and `DROP ct_x CASCADE` only drops the FK, not the link table) — they lingered across tests.
 
@@ -358,10 +365,6 @@ KNOWN LIMITATIONS found (data is SAFE in all — they reject/roll back, never co
 unsupported; each is pinned by a passing test asserting the current behaviour):
 1. **field-name SWAP in one migrate** (rename A→B AND B→A): rejected (Postgres 42701) + atomic rollback.
    Needs intermediate temp-name staging. Rare; two-step rename works today.
-2. **enum value-set change** (add/remove a member): classified `rewrite` + gated, but the apply emits only
-   `ALTER COLUMN TYPE` and does NOT rebuild the CHECK — removing an in-use member errors + rolls back; adding
-   one would leave the value un-insertable. Fix = drop+re-add the CHECK with the new value-set in the retype
-   apply. (Enum evolution is common → worth a focused fix.)
-3. **lossy shrink on ack** (varchar shorten / decimal scale reduce): once `allowDestructive` is given, PG
+2. **lossy shrink on ack** (varchar shorten / decimal scale reduce): once `allowDestructive` is given, PG
    truncates/rounds silently rather than failing loud on rows that would lose information. A data-loss
    surface distinct from the rollback path — arguably acceptable (it was acked) but worth a pre-flight check.

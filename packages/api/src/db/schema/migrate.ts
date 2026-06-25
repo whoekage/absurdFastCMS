@@ -9,6 +9,8 @@ import {
   compileRenameTable,
   compileSetColumnNotNull,
   compileAlterColumnType,
+  compileAddCheck,
+  compileDropConstraint,
   compileDropColumn,
   compileDropTable,
   compileCreateLinkTable,
@@ -110,6 +112,17 @@ function run(tx: Sql, q: CompiledQuery): Promise<unknown> {
   return tx.unsafe(q.sql, q.parameters as ParameterOrJSON<never>[]);
 }
 
+/** Drop every CHECK constraint that references `col` on `tableName` (the enum value-set CHECK), by its real
+ *  name discovered from the catalog — robust to PG's auto-naming/truncation, no name assumption. */
+async function dropColumnChecks(tx: Sql, tableName: string, col: string): Promise<void> {
+  const rows = await tx<{ conname: string }[]>`
+    SELECT con.conname FROM pg_constraint con
+    WHERE con.conrelid = ${tableName}::regclass AND con.contype = 'c'
+      AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey) AND a.attname = ${col})
+  `;
+  for (const { conname } of rows) await run(tx, compileDropConstraint(tableName, conname));
+}
+
 /** Apply ONE change via the compile-only ddl builders. Throws for a deferred op (rolls back the whole tx). */
 async function applyOne(tx: Sql, c: Change): Promise<void> {
   switch (c.kind) {
@@ -132,9 +145,29 @@ async function applyOne(tx: Sql, c: Change): Promise<void> {
       validateFieldName(c.to); // defense-in-depth: the new name becomes a SQL identifier.
       await run(tx, compileRenameColumn(deriveTableName(c.apiId), c.from, c.to));
       return;
-    case 'retypeField':
-      await run(tx, compileAlterColumnType(deriveTableName(c.apiId), c.name, c.to));
+    case 'retypeField': {
+      const tbl = deriveTableName(c.apiId);
+      const fromEnum = Array.isArray(c.from.params['values']);
+      const toEnum = Array.isArray(c.to.params['values']);
+      if (!fromEnum && !toEnum) {
+        // Plain non-enum retype (int->bigint, varchar resize, decimal): the column-type cast.
+        await run(tx, compileAlterColumnType(tbl, c.name, c.to));
+        return;
+      }
+      // Enum membership lives in a CHECK, not the column type, so an enum value-set change is a CHECK SWAP —
+      // never a lossy ALTER TYPE that would shrink the varchar (which truncated an in-use member before).
+      // Drop the old CHECK; ALTER the base type only when the category changes (enum<->non-enum); add the
+      // new CHECK (it VALIDATES existing rows -> a row using a removed member fails the ADD -> tx rollback,
+      // data intact — you cannot remove an in-use member; adding a member always succeeds).
+      if (fromEnum) await dropColumnChecks(tx, tbl, c.name);
+      // ALTER the base type when the CATEGORY changes (enum<->non-enum), OR when an enum->enum GROWS its
+      // varchar (a new longer member needs room). NEVER shrink an enum's varchar — the CHECK is the real
+      // constraint, and a shrink would truncate an in-use value.
+      const grows = fromEnum && toEnum && Number(c.to.params['length'] ?? 0) > Number(c.from.params['length'] ?? 0);
+      if ((fromEnum !== toEnum && c.from.pgType !== c.to.pgType) || grows) await run(tx, compileAlterColumnType(tbl, c.name, c.to));
+      if (toEnum) await run(tx, compileAddCheck(tbl, c.name, c.to.params['values'] as string[]));
       return;
+    }
     case 'setFieldNullable':
       // c.to === true means the column becomes NULLABLE => NOT NULL is dropped.
       await run(tx, compileSetColumnNotNull(deriveTableName(c.apiId), c.name, !c.to));

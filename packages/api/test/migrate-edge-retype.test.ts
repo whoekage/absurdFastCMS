@@ -96,7 +96,7 @@ test('varchar SHRINK (1024 -> 256): gated; acked cast TRUNCATES (lossy) but fitt
   assert.equal(rows[1]?.title.length, 256); // over-long row truncated to the new ceiling
 });
 
-test('enumeration ADD a member: gated; acked cast keeps existing rows (but CHECK is NOT rebuilt)', async () => {
+test('enumeration ADD a member: gated; acked rebuilds the CHECK so the NEW member is insertable (FIXED)', async () => {
   await migrate(sql, [ct('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live'], nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (state) VALUES ('draft'), ('live')`);
 
@@ -106,37 +106,38 @@ test('enumeration ADD a member: gated; acked cast keeps existing rows (but CHECK
 
   const r = await migrate(sql, added, { allowDestructive: true });
   assert.deepEqual(r.applied.map((c) => c.kind), ['retypeField']);
-  // Existing rows survived the (no-op varchar->varchar) cast.
-  const rows = await sql<{ state: string }[]>`SELECT state FROM ct_thing ORDER BY state`;
-  assert.deepEqual(rows.map((x) => x.state), ['draft', 'live']);
-
-  // SUSPECTED BUG: compileAlterColumnType emits only ALTER TYPE ... USING, never rebuilding the CHECK.
-  // The original CHECK (state IN ('draft','live')) is still in force, so the freshly-added member
-  // 'archived' is REJECTED — the migration "succeeded" but the new enum member is unusable.
-  await assert.rejects(
-    () => sql.unsafe(`INSERT INTO ct_thing (state) VALUES ('archived')`),
-    /violates check constraint/i,
-    'EXPECTED-FAIL if the bug is fixed: the added enum member should be insertable after the migration',
-  );
+  // Existing rows intact + the CHECK was rebuilt (and the varchar grown for 'archived') so the new member inserts.
+  assert.deepEqual((await sql<{ state: string }[]>`SELECT state FROM ct_thing ORDER BY state`).map((x) => x.state), ['draft', 'live']);
+  await sql.unsafe(`INSERT INTO ct_thing (state) VALUES ('archived')`);
+  const [c1] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM ct_thing WHERE state = 'archived'`;
+  assert.equal(c1?.n, 1, 'the added enum member is now insertable (CHECK rebuilt)');
 });
 
-test('enumeration REMOVE a member: gated; acked migration does NOT enforce the removal (stale CHECK)', async () => {
+test('enumeration REMOVE an UNUSED member: acked rebuilds the CHECK; the removed member is now REJECTED (FIXED)', async () => {
   await migrate(sql, [ct('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live', 'archived'], nullable: true })])]);
-  await sql.unsafe(`INSERT INTO ct_thing (state) VALUES ('draft'), ('archived')`);
+  await sql.unsafe(`INSERT INTO ct_thing (state) VALUES ('draft'), ('live')`); // NO row uses 'archived'
 
-  // Removing 'archived' is a value-set change -> rewrite -> data-dependent -> gated.
   const removed = [ct('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live'], nullable: true })])];
-  await assert.rejects(migrate(sql, removed), MigrationBlockedError);
+  const r = await migrate(sql, removed, { allowDestructive: true });
+  assert.deepEqual(r.applied.map((c) => c.kind), ['retypeField']);
+  assert.deepEqual((await sql<{ state: string }[]>`SELECT state FROM ct_thing ORDER BY state`).map((x) => x.state), ['draft', 'live']); // data intact
+  // FIXED: the new CHECK enforces the removal — 'archived' is no longer accepted.
+  await assert.rejects(() => sql.unsafe(`INSERT INTO ct_thing (state) VALUES ('archived')`), /violates check constraint/i);
+});
 
-  // KNOWN GAP (found by this edge-case sweep): migrate's retypeField emits ONLY `ALTER COLUMN ... TYPE`
-  // and does NOT rebuild the enum CHECK. Removing a member an existing row still uses ('archived') fails at
-  // apply (the old CHECK is re-validated against the removed value during the rewrite) and the WHOLE
-  // migration ROLLS BACK — data is SAFE (no partial), but enum value-set evolution is not yet supported.
-  // (Symmetrically, ADDING a member would "succeed" yet the new value stays un-insertable under the old
-  // CHECK.) Proper fix = drop+re-add the CHECK with the new value-set in the retype apply. Pinned here.
+test('enumeration REMOVE an IN-USE member: correctly REJECTED (cannot remove a member a row uses); rolls back', async () => {
+  await migrate(sql, [ct('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live', 'archived'], nullable: true })])]);
+  await sql.unsafe(`INSERT INTO ct_thing (state) VALUES ('draft'), ('archived')`); // a row USES 'archived'
+
+  const removed = [ct('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live'], nullable: true })])];
+  await assert.rejects(migrate(sql, removed), MigrationBlockedError); // gated
+  // Acked: the rebuilt CHECK (draft,live) is VALIDATED against the 'archived' row -> ADD CONSTRAINT fails ->
+  // the WHOLE migration rolls back. Data intact + the original CHECK is restored (so 'archived' still valid,
+  // 'bogus' still rejected) — proving no partial apply and no corruption.
   await assert.rejects(migrate(sql, removed, { allowDestructive: true }));
-  const rows = await sql<{ state: string }[]>`SELECT state FROM ct_thing ORDER BY state`;
-  assert.deepEqual(rows.map((x) => x.state), ['archived', 'draft'], 'rolled back — both rows intact, no partial apply');
+  assert.deepEqual((await sql<{ state: string }[]>`SELECT state FROM ct_thing ORDER BY state`).map((x) => x.state), ['archived', 'draft']);
+  await sql.unsafe(`INSERT INTO ct_thing (state) VALUES ('archived')`); // old CHECK restored by the rollback
+  await assert.rejects(() => sql.unsafe(`INSERT INTO ct_thing (state) VALUES ('bogus')`), /violates check constraint/i);
 });
 
 test('decimal precision/scale CHANGE (10,2 -> 12,4): gated; acked cast re-scales the stored value', async () => {

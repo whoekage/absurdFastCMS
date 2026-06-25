@@ -451,6 +451,23 @@ export function compileAlterColumnType(tableName: string, name: string, resolved
   return stmt.compile(compiler);
 }
 
+/**
+ * ALTER TABLE ... ADD CHECK (col IN (members)) — the enum value-set CHECK, members as SAFE escaped
+ * literals via `sql.lit` (mirrors the column-level check in {@link compileCreateTable}). Unnamed, so PG
+ * auto-names it `<table>_<col>_check` — the same form {@link dropColumnChecks}'s lookup finds by column.
+ */
+export function compileAddCheck(tableName: string, name: string, values: readonly string[]): CompiledQuery {
+  const members = values.map((v) => sql.lit(v));
+  const stmt = sql`alter table ${sql.raw(quoteIdent(tableName))} add check (${sql.ref(name)} in (${sql.join(members)}))`;
+  return stmt.compile(compiler);
+}
+
+/** ALTER TABLE ... DROP CONSTRAINT — used to drop an enum's old CHECK (name discovered at runtime). */
+export function compileDropConstraint(tableName: string, constraint: string): CompiledQuery {
+  const stmt = sql`alter table ${sql.raw(quoteIdent(tableName))} drop constraint ${sql.raw(quoteIdent(constraint))}`;
+  return stmt.compile(compiler);
+}
+
 /** DROP TABLE (RESTRICT by default). */
 export function compileDropTable(tableName: string): CompiledQuery {
   return compiler.schema.dropTable(tableName).compile();
