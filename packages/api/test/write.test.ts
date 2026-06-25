@@ -1,12 +1,10 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { seedArticleIfAbsent } from '../src/http/server.ts';
-import { createContentType } from '../src/db/content-type.repository.ts';
 import type { ListenToken } from '../src/http/uws.adapter.ts';
 import type { Engine } from '../src/store/engine.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { startTestServer } from './helpers.ts';
+import { startTestServerFromSchemas, ARTICLE_SCHEMA } from './helpers.ts';
 
 /**
  * WRITE-PATH SLICE — POST/PUT/DELETE end-to-end over a REAL uWS server backed by a REAL Postgres
@@ -33,12 +31,12 @@ async function seedRows(): Promise<void> {
 before(async () => {
   db = await createFileDatabase('wr');
   sql = db.sql;
-  await seedArticleIfAbsent(sql);
-  // A SECOND content-type to prove per-type cache isolation on an article write.
-  await createContentType(sql, { apiId: 'widget', fields: [{ name: 'label', cmsType: 'string', options: { nullable: false } }] });
-  await sql`INSERT INTO ct_widget (label) VALUES ('w1')`;
-  await seedRows();
-  const server = await startTestServer(sql);
+  // A SECOND content-type (widget) to prove per-type cache isolation on an article write.
+  const widget: import('../src/db/schema/model.ts').ContentTypeSchema = { id: 'ct_widget', apiId: 'widget', fields: [{ id: 'f_label', name: 'label', type: 'string', options: { nullable: false } }] };
+  const blank: import('../src/db/schema/model.ts').ContentTypeSchema = { id: 'ct_blank', apiId: 'blank', fields: [] }; // system-fields-only
+  const server = await startTestServerFromSchemas(sql, [ARTICLE_SCHEMA, widget, blank], {
+    seed: async () => { await sql`INSERT INTO ct_widget (label) VALUES ('w1')`; await seedRows(); },
+  });
   engine = server.engine;
   close = server.close;
   token = server.token;
@@ -153,28 +151,20 @@ test('POST with an over-length string -> a clean 400 (length guard, not a PG 220
 });
 
 test('system-fields-only content-type: POST {} -> 201 via DEFAULT VALUES, GET sees it, DELETE removes it', async () => {
-  await createContentType(sql, { apiId: 'blank', fields: [] });
-  // Rebuild a server over a registry that includes `blank` (fresh load picks up the new type).
-  const server = await startTestServer(sql);
-  const tk = server.token;
-  const b = server.base;
-  try {
-    const res = await fetch(`${b}/blank`, j({}));
-    const payload = await res.json();
-    assert.equal(res.status, 201, JSON.stringify(payload));
-    const created = payload.data;
-    assert.deepEqual(Object.keys(created).sort(), ['created_at', 'id', 'updated_at']);
-    assert.equal(typeof created.id, 'number');
+  // `blank` (no user fields) is seeded in before(); use the running server.
+  const res = await fetch(`${base}/blank`, j({}));
+  const payload = await res.json();
+  assert.equal(res.status, 201, JSON.stringify(payload));
+  const created = payload.data;
+  assert.deepEqual(Object.keys(created).sort(), ['created_at', 'id', 'updated_at']);
+  assert.equal(typeof created.id, 'number');
 
-    const got = await (await fetch(`${b}/blank/${created.id}`)).json();
-    assert.deepEqual(got.data, created);
+  const got = await (await fetch(`${base}/blank/${created.id}`)).json();
+  assert.deepEqual(got.data, created);
 
-    const del = await fetch(`${b}/blank/${created.id}`, { method: 'DELETE' });
-    assert.equal(del.status, 200);
-    assert.equal((await fetch(`${b}/blank/${created.id}`)).status, 404);
-  } finally {
-    server.close(tk);
-  }
+  const del = await fetch(`${base}/blank/${created.id}`, { method: 'DELETE' });
+  assert.equal(del.status, 200);
+  assert.equal((await fetch(`${base}/blank/${created.id}`)).status, 404);
 });
 
 test('the rebuild path warms the type indexes (no dirty index after a write)', async () => {

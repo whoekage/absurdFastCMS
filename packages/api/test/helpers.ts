@@ -3,7 +3,9 @@ import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer } from '../src/http/uws.adapter.ts';
 import { loadTypes } from '../src/db/schema/load.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
 import { HookRegistry } from '../src/db/schema/hooks.ts';
+import type { ContentTypeSchema, ComponentSchema } from '../src/db/schema/model.ts';
 import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
 import { buildAuth } from '../src/auth/auth.ts';
 import { SessionCache } from '../src/auth/session.cache.ts';
@@ -180,6 +182,41 @@ export async function startTestServerFromFilesWithAuth(
 
   return { base, close: server.close, token, applyEdit: server.applyEdit!, sessionCache, rbac, signUp, userIdOf, grantRole };
 }
+
+/**
+ * The files-first replacement for the meta-path `createContentType(...) + startTestServer(...)` setup:
+ * `migrate()` materializes the `ct_*` tables (+ writes `_schema_applied`) with ZERO meta, then the engine is
+ * built via `loadFromSchemas`. Tests pass their content-type IR (and optional in-memory components) directly.
+ */
+export async function startTestServerFromSchemas(
+  sql: Sql,
+  schemas: ContentTypeSchema[],
+  opts: { components?: ComponentSchema[]; seed?: () => Promise<void> } = {},
+): Promise<{ base: string; close: (token: unknown) => void; token: unknown; engine: Engine; registry: Registry }> {
+  await migrate(sql, schemas, { allowDestructive: true }); // CREATE TABLE ct_* + reconcile the snapshot
+  if (opts.seed) await opts.seed(); // insert fixture rows AFTER the tables exist, BEFORE the engine streams them
+  const store = new PostgresStore(sql);
+  const { engine, registry } = await store.loadFromSchemas(schemas, opts.components ?? []);
+  const server = createServer(engine, store, registry);
+  const port = await freePort();
+  const token = await server.listen(port);
+  return { base: `http://127.0.0.1:${port}`, close: server.close, token, engine, registry };
+}
+
+/** The `article` demo type as a files-first IR (mirrors the old `ARTICLE_SEED_FIELDS`) — a shared test fixture. */
+export const ARTICLE_SCHEMA: ContentTypeSchema = {
+  id: 'ct_article',
+  apiId: 'article',
+  fields: [
+    { id: 'f_title', name: 'title', type: 'string', options: { length: 512, nullable: true } },
+    { id: 'f_body', name: 'body', type: 'text', options: { nullable: false } },
+    { id: 'f_status', name: 'status', type: 'enumeration', options: { values: ['draft', 'published', 'archived'], nullable: false } },
+    { id: 'f_views', name: 'views', type: 'integer', options: { nullable: true } },
+    { id: 'f_rating', name: 'rating', type: 'float', options: { nullable: true } },
+    { id: 'f_active', name: 'active', type: 'boolean', options: { nullable: false } },
+    { id: 'f_publishedAt', name: 'publishedAt', type: 'datetime', options: { nullable: false } },
+  ],
+};
 
 /** Re-export so a test's teardown can close the shared auth instance. */
 export { closeAuth };
