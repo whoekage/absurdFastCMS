@@ -7,9 +7,11 @@ import { rebuildType } from '../db/engine.loader.ts';
 import { handleRequest, errorResponse, JSON_CT, type CoreResponse } from './read.router.ts';
 import { handleWrite, type WriteContext } from './write.handler.ts';
 import { HookRegistry } from '../db/schema/hooks.ts';
-import { applySchemaEdit, type ContentTypeDraft, type SchemaEditResult } from '../compose/builder.ts';
+import { applySchemaEdit, applySchemaDelete, previewSchemaEdit, BuilderValidationError, BuilderNotFoundError, type ContentTypeDraft, type SchemaEditResult } from '../compose/builder.ts';
 import { swapFromIR } from '../db/engine.swap.ts';
 import { loadTypes } from '../db/schema/load.ts';
+import { readAppliedSchemas, MigrationBlockedError, MigrationDataLossError, MigrationUnsupportedError } from '../db/schema/migrate.ts';
+import { SchemaDiffError } from '../db/schema/diff.ts';
 import { handleContentTypeRequest, type ContentTypeContext } from './content-type.controller.ts';
 import { handleComponentTypeRequest, type ComponentTypeContext } from './component-type.controller.ts';
 import { handleUpload, handleListFiles, handleGetFile, handleDeleteFile, type FileContext, type ParsedUpload } from './upload.handler.ts';
@@ -156,6 +158,23 @@ function readBody(res: uWS.HttpResponse, onDone: (body: Buffer | null) => void):
 function corkSend(res: uWS.HttpResponse, aborted: () => boolean, result: CoreResponse): void {
   if (aborted()) return;
   res.cork(() => writeResponse(res, result));
+}
+
+/** A Builder JSON response (the uniform envelope shape). `applied`/`blocked` default to [] so the SPA never
+ *  branches on status to learn "nothing changed". */
+function builderJson(status: number, fields: Record<string, unknown>, headers?: Record<string, string>): CoreResponse {
+  const body = Buffer.from(JSON.stringify(fields), 'utf8');
+  return headers ? { status, contentType: JSON_CT, body, headers } : { status, contentType: JSON_CT, body };
+}
+
+/** Map a Builder/migrate throw to its HTTP status + envelope. A blocked-by-lint case is a RETURN, not here. */
+function builderError(e: unknown): CoreResponse {
+  if (e instanceof BuilderNotFoundError) return builderJson(404, { ok: false, error: e.message });
+  if (e instanceof BuilderValidationError || e instanceof SchemaDiffError) return builderJson(422, { ok: false, error: e.message });
+  if (e instanceof MigrationBlockedError) return builderJson(409, { ok: false, blocked: e.blocked, error: 'requires allowDestructive' });
+  if (e instanceof MigrationDataLossError) return builderJson(422, { ok: false, error: e.message, table: e.table, column: e.column, affected: e.affected });
+  if (e instanceof MigrationUnsupportedError) return builderJson(422, { ok: false, error: e.message });
+  return builderJson(500, { ok: false, error: 'internal error' }); // never leak an arbitrary message
 }
 
 /**
@@ -896,23 +915,101 @@ export function createServer(
         await swapFromIR(sql, live, result.next, result.applied!, new HookRegistry(nextHooks));
         return result;
       };
-      // GATED HTTP entry (builder.manage). Body = ContentTypeDraft (+ optional allowDestructive). Maps the
-      // three migrate error classes to 4xx; a blocked edit → 409 with the blocked[] list.
-      app.post('/builder', (res, req) => {
+      // DELETE drives the SAME swap site (the dropType change feeds swapFromIR).
+      const applyDeleteFn = async (apiId: string): Promise<SchemaEditResult> => {
+        const result = await applySchemaDelete(sql, dir, apiId);
+        if (!result.ok || result.next === undefined || (result.applied?.length ?? 0) === 0) return result;
+        const { hooks: nextHooks } = await loadTypes(dir);
+        await swapFromIR(sql, live, result.next, result.applied!, new HookRegistry(nextHooks));
+        return result;
+      };
+      // The S5 success-envelope for an apply (PUT/DELETE). `applied`/`blocked` always present.
+      const okEnvelope = (r: SchemaEditResult): CoreResponse =>
+        r.ok
+          ? builderJson(200, { ok: true, applied: r.applied ?? [], blocked: [], live: true, ...(r.schema !== undefined ? { schema: r.schema } : {}) })
+          : builderJson(409, { ok: false, applied: [], blocked: r.blocked ?? [], error: 'requires allowDestructive' });
+
+      // ---- BUILDER ROUTE SURFACE (design §1). GET reads are PUBLIC (like the legacy GET); mutations gated. ----
+
+      // GET list — the applied catalog (with ids, so a client can echo them for ownership-safe edits).
+      app.get('/builder/content-types', (res) => {
+        let aborted = false;
+        res.onAborted(() => { aborted = true; }); // uWS: an async responder MUST attach this synchronously.
+        void (async () => {
+          try {
+            const schemas = await readAppliedSchemas(store.sql);
+            corkSend(res, () => aborted, builderJson(200, { ok: true, schemas }));
+          } catch {
+            corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' }));
+          }
+        })();
+      });
+
+      // GET one — 404 when absent; else the single schema WITH ids.
+      app.get('/builder/content-types/:apiId', (res, req) => {
+        const apiId = req.getParameter(0) ?? '';
+        let aborted = false;
+        res.onAborted(() => { aborted = true; });
+        void (async () => {
+          try {
+            const schema = (await readAppliedSchemas(store.sql)).find((s) => s.apiId === apiId);
+            corkSend(res, () => aborted, schema === undefined
+              ? builderJson(404, { ok: false, error: `content-type "${apiId}" does not exist` })
+              : builderJson(200, { ok: true, schema }));
+          } catch {
+            corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' }));
+          }
+        })();
+      });
+
+      // POST preview — dry-run: resolve + pre-flight + lint + codegen, NO write, NO migrate. GATED.
+      app.post('/builder/content-types/:apiId/preview', (res, req) => {
+        const apiId = req.getParameter(0) ?? '';
         gate(res, req, 'builder.manage', true, (raw, aborted) => {
           const parsed = parseBody(raw);
           if (!parsed.ok) return corkSend(res, aborted, parsed.error);
           const body = parsed.body as { allowDestructive?: boolean } & ContentTypeDraft;
+          if (body.apiId !== apiId) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.apiId must equal the path apiId' }));
           void (async () => {
             let result: CoreResponse;
             try {
-              const r = await applyEditFn!(body, { allowDestructive: body.allowDestructive === true });
-              result = r.ok
-                ? { status: 200, contentType: JSON_CT, body: Buffer.from(JSON.stringify({ ok: true, applied: r.applied ?? [], schema: r.schema })) }
-                : { status: 409, contentType: JSON_CT, body: Buffer.from(JSON.stringify({ ok: false, blocked: r.blocked ?? [] })) };
-            } catch (e) {
-              result = errorResponse(400, e instanceof Error ? e.message : 'schema edit failed');
-            }
+              const p = await previewSchemaEdit(store.sql, body, { allowDestructive: body.allowDestructive === true });
+              result = builderJson(200, { ok: p.ok, applied: p.changes, blocked: p.blocked, schema: p.schema, generatedSource: p.generatedSource });
+            } catch (e) { result = builderError(e); }
+            corkSend(res, aborted, result);
+          })();
+        });
+      });
+
+      // PUT upsert — create / update / apiId-rename → applyEdit → live swap. GATED.
+      app.put('/builder/content-types/:apiId', (res, req) => {
+        const apiId = req.getParameter(0) ?? '';
+        gate(res, req, 'builder.manage', true, (raw, aborted) => {
+          const parsed = parseBody(raw);
+          if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+          const body = parsed.body as { allowDestructive?: boolean } & ContentTypeDraft;
+          if (body.apiId !== apiId) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.apiId must equal the path apiId' }));
+          void (async () => {
+            let result: CoreResponse;
+            try { result = okEnvelope(await applyEditFn!(body, { allowDestructive: body.allowDestructive === true })); }
+            catch (e) { result = builderError(e); }
+            corkSend(res, aborted, result);
+          })();
+        });
+      });
+
+      // DELETE — drop a whole type (always destructive → require allowDestructive). GATED.
+      app.del('/builder/content-types/:apiId', (res, req) => {
+        const apiId = req.getParameter(0) ?? '';
+        gate(res, req, 'builder.manage', true, (raw, aborted) => {
+          const parsed = parseBody(raw);
+          if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+          const body = parsed.body as { allowDestructive?: boolean };
+          if (body.allowDestructive !== true) return corkSend(res, aborted, builderJson(409, { ok: false, applied: [], blocked: [], error: 'requires allowDestructive' }));
+          void (async () => {
+            let result: CoreResponse;
+            try { result = okEnvelope(await applyDeleteFn(apiId)); }
+            catch (e) { result = builderError(e); }
             corkSend(res, aborted, result);
           })();
         });
