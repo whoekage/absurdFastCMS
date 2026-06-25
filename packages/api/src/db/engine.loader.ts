@@ -69,7 +69,7 @@ function coerceRow(plan: ColumnDescriptor[], dbRow: Record<string, unknown>): Re
  * ct_ table type-aware-coercing each column, then warm the indexes ONCE. Shared by {@link loadType}
  * (boot) and {@link rebuildType} (per-write fast path). Empty type yields a valid 0-row pair.
  */
-async function buildDetached(sql: Sql, def: ContentTypeDef): Promise<DetachedTable> {
+export async function buildDetached(sql: Sql, def: ContentTypeDef): Promise<DetachedTable> {
   assertTableName(def.tableName);
   const detached = new DetachedTable(def.fieldDefs);
   const t: Table = detached.table;

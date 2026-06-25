@@ -38,6 +38,8 @@ export interface SchemaEditResult {
   applied?: readonly Change[];
   /** ok=true: the resolved schema (with minted ids) that was written. */
   schema?: ContentTypeSchema;
+  /** ok=true: the FULL desired catalog (applied-minus-apiId + the edit) the S4 swap rebuilds the engine from. */
+  next?: ContentTypeSchema[];
 }
 
 /** Mint ids for the type + any field/relation lacking one; existing ids are preserved (rename-safety). */
@@ -89,5 +91,5 @@ export async function applySchemaEdit(
     throw err;
   }
   await rename(tmp, target); // commit succeeded — flip the source of truth into place
-  return { ok: true, applied: result.applied, schema };
+  return { ok: true, applied: result.applied, schema, next };
 }

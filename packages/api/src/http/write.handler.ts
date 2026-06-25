@@ -58,9 +58,10 @@ export interface WriteContext {
   publishClock(): Date;
   /**
    * Content lifecycle hooks. `before*` run INSIDE the write tx (transform/veto → rollback); `after*` run
-   * AFTER {@link rebuild} (post-commit side-effects). Absent on a read-only / hookless server.
+   * AFTER {@link rebuild} (post-commit side-effects). Absent on a read-only / hookless server. Read via a
+   * LIVE getter in the uWS adapter (S4), so the key is always present but may be `undefined`.
    */
-  hooks?: HookRegistry;
+  hooks?: HookRegistry | undefined;
 }
 
 export interface WriteRequest {

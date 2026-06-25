@@ -2,6 +2,8 @@ import net from 'node:net';
 import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer } from '../src/http/uws.adapter.ts';
+import { loadTypes } from '../src/db/schema/load.ts';
+import { HookRegistry } from '../src/db/schema/hooks.ts';
 import type { Engine } from '../src/store/engine.ts';
 import type { Registry } from '../src/db/registry.ts';
 
@@ -93,4 +95,27 @@ export async function startTestServer(
   const port = await freePort();
   const token = await server.listen(port);
   return { base: `http://127.0.0.1:${port}`, close: server.close, token, engine, registry };
+}
+
+/**
+ * FILES-FIRST test server (S4): build engine+registry from `entitiesDir`'s files and wire the Builder so
+ * `applyEdit` makes a schema change LIVE in-process. Asserting via HTTP GET against `base` is the contract —
+ * never re-`loadTypes` the edited file (ESM-cached) nor read the returned engine ref after a swap.
+ */
+export async function startTestServerFromFiles(
+  sql: Sql,
+  entitiesDir: string,
+): Promise<{
+  base: string;
+  close: (token: unknown) => void;
+  token: unknown;
+  applyEdit: NonNullable<ReturnType<typeof createServer>['applyEdit']>;
+}> {
+  const store = new PostgresStore(sql);
+  const { schemas, hooks } = await loadTypes(entitiesDir);
+  const { engine, registry } = await store.loadFromSchemas(schemas);
+  const server = createServer(engine, store, registry, undefined, undefined, undefined, undefined, undefined, new HookRegistry(hooks), entitiesDir);
+  const port = await freePort();
+  const token = await server.listen(port);
+  return { base: `http://127.0.0.1:${port}`, close: server.close, token, applyEdit: server.applyEdit! };
 }

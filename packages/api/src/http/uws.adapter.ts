@@ -6,7 +6,10 @@ import type { PostgresStore } from '../db/postgres.store.ts';
 import { rebuildType } from '../db/engine.loader.ts';
 import { handleRequest, errorResponse, JSON_CT, type CoreResponse } from './read.router.ts';
 import { handleWrite, type WriteContext } from './write.handler.ts';
-import type { HookRegistry } from '../db/schema/hooks.ts';
+import { HookRegistry } from '../db/schema/hooks.ts';
+import { applySchemaEdit, type ContentTypeDraft, type SchemaEditResult } from '../compose/builder.ts';
+import { swapFromIR } from '../db/engine.swap.ts';
+import { loadTypes } from '../db/schema/load.ts';
 import { handleContentTypeRequest, type ContentTypeContext } from './content-type.controller.ts';
 import { handleComponentTypeRequest, type ComponentTypeContext } from './component-type.controller.ts';
 import { handleUpload, handleListFiles, handleGetFile, handleDeleteFile, type FileContext, type ParsedUpload } from './upload.handler.ts';
@@ -63,6 +66,12 @@ export interface UwsServer {
   listen(port: number): Promise<ListenToken>;
   /** Close a previously-returned listen-socket token. */
   close(token: ListenToken): void;
+  /**
+   * S4: apply a files-first schema edit and make it LIVE in-process (write file + migrate + atomic engine
+   * swap), WITHOUT a restart. Present only when the Builder is wired (store + registry + `entitiesDir`).
+   * Throws on a migrate failure (last-good keeps serving); a blocked/no-op edit returns without swapping.
+   */
+  applyEdit?(draft: ContentTypeDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult>;
 }
 
 /** Full HTTP status lines for the statuses the core can emit. */
@@ -372,6 +381,7 @@ export function createServer(
   rbac?: RbacRegistry,
   teamView?: TeamView,
   hooks?: HookRegistry,
+  entitiesDir?: string,
 ): UwsServer {
   const app = uWS.App();
   // S1 (Builder live-reload): the SINGLE mutable cell every schema-reading route closure reads through.
@@ -791,6 +801,11 @@ export function createServer(
     writeResponse(res, handleRequest(live.engine, { method, path: `/${type}/${id}`, query }));
   });
 
+  // S4: the files-first Builder apply+swap, exposed on the returned server. Wired only when `entitiesDir`
+  // is present (a read-only/legacy server leaves it undefined → the legacy meta routes stay live).
+  let applyEditFn: UwsServer['applyEdit'];
+  const builderActive = store !== undefined && registry !== undefined && entitiesDir !== undefined;
+
   // WRITES (only when a store + registry are supplied): commit to Postgres, then rebuild ONLY the
   // written type's RAM storage in place (per-type rebuild + per-type cache invalidation).
   if (store && registry) {
@@ -809,8 +824,11 @@ export function createServer(
       },
       // Publish clock: real wall-clock by default; tests inject a fixed Date for deterministic fixtures.
       publishClock,
-      // Only set when present (exactOptionalPropertyTypes forbids an explicit `undefined` on an optional key).
-      ...(hooks !== undefined ? { hooks } : {}),
+      // S4: read hooks through the LIVE cell (a getter, not a by-value capture) so a schema-edit swap that
+      // installs a new type's hooks.ts is seen by the write path immediately. Always present, possibly undefined.
+      get hooks() {
+        return live.hooks;
+      },
     };
     // CONTENT-TYPE BUILDER (runtime DDL over HTTP) — registered BEFORE the data `/:type` routes. The
     // `/content-types` prefix can never shadow a real type: '-' is not a legal api_id char, so no
@@ -824,6 +842,10 @@ export function createServer(
     // stack-allocated), then gate('builder.manage') buffers the body + applies the 401/403 split, and on
     // success parses + dispatches the existing core. GET stays public (no gate).
     const ctMutate = (method: string, opts: CtRouteOpts) => (res: uWS.HttpResponse, req: uWS.HttpRequest): void => {
+      // S4/S12 cutover: when the files-first Builder is active, the legacy meta-based mutation path is DEAD
+      // (it wrote the meta tables + mutated the registry out-of-band of `_schema_applied`/the files — a
+      // divergent source of truth). Return 410 Gone pointing at /builder; the GET projection stays live.
+      if (builderActive) return writeJson(res, 410, { error: 'content-type mutation moved to POST /builder' });
       const apiId = opts.hasApiId ? (req.getParameter(0) ?? '') : undefined;
       const fieldName = opts.hasName ? (req.getParameter(1) ?? '') : undefined;
       gate(res, req, 'builder.manage', true, (raw, aborted) => {
@@ -848,6 +870,47 @@ export function createServer(
     app.post('/content-types/:apiId/fields', ctMutate('POST', { hasApiId: true, sub: 'fields' }));
     app.put('/content-types/:apiId/fields/:name', ctMutate('PUT', { hasApiId: true, sub: 'fields', hasName: true }));
     app.del('/content-types/:apiId/fields/:name', ctMutate('DELETE', { hasApiId: true, sub: 'fields', hasName: true }));
+
+    // S4 FILES-FIRST BUILDER — apply a whole-type edit + make it LIVE in-process (no restart). Wired only
+    // when `entitiesDir` is present. applySchemaEdit writes the file + migrates atomically; on success the
+    // engine is rebuilt incrementally from the returned `next` IR and the live cell is swapped. A blocked /
+    // no-op edit does NOT swap; a migrate failure THROWS (last-good keeps serving).
+    if (entitiesDir !== undefined) {
+      const dir = entitiesDir;
+      const sql = store.sql;
+      applyEditFn = async (draft, opts) => {
+        const result = await applySchemaEdit(sql, dir, draft, opts ?? {});
+        if (!result.ok || result.next === undefined || (result.applied?.length ?? 0) === 0) return result; // blocked / no-op → no swap
+        // Re-load hooks so a NEW type's hooks.ts is merged. ESM-cache invariant (documented): a NEW path is
+        // imported fresh; an EDIT to an existing type's schema.ts does not change its (cached) hooks.ts; an
+        // out-of-band hooks.ts edit is not live-reloaded (needs a restart). Rebuilding the Map each edit is
+        // cheap — a Builder edit is a rare admin action, not a hot path.
+        const { hooks: nextHooks } = await loadTypes(dir);
+        await swapFromIR(sql, live, result.next, result.applied!, new HookRegistry(nextHooks));
+        return result;
+      };
+      // GATED HTTP entry (builder.manage). Body = ContentTypeDraft (+ optional allowDestructive). Maps the
+      // three migrate error classes to 4xx; a blocked edit → 409 with the blocked[] list.
+      app.post('/builder', (res, req) => {
+        gate(res, req, 'builder.manage', true, (raw, aborted) => {
+          const parsed = parseBody(raw);
+          if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+          const body = parsed.body as { allowDestructive?: boolean } & ContentTypeDraft;
+          void (async () => {
+            let result: CoreResponse;
+            try {
+              const r = await applyEditFn!(body, { allowDestructive: body.allowDestructive === true });
+              result = r.ok
+                ? { status: 200, contentType: JSON_CT, body: Buffer.from(JSON.stringify({ ok: true, applied: r.applied ?? [], schema: r.schema })) }
+                : { status: 409, contentType: JSON_CT, body: Buffer.from(JSON.stringify({ ok: false, blocked: r.blocked ?? [] })) };
+            } catch (e) {
+              result = errorResponse(400, e instanceof Error ? e.message : 'schema edit failed');
+            }
+            corkSend(res, aborted, result);
+          })();
+        });
+      });
+    }
 
     // be-05 COMPONENT-TYPE BUILDER (meta-only runtime schema over HTTP). Same `/component-types` literal-
     // prefix safety as `/content-types` ('-' is illegal in an api_id). No engine sync (components have no
@@ -1414,5 +1477,7 @@ export function createServer(
     close(token: ListenToken): void {
       if (token) uWS.us_listen_socket_close(token as uWS.us_listen_socket);
     },
+    // exactOptionalPropertyTypes: only set the key when the Builder is wired (a read-only/legacy server omits it).
+    ...(applyEditFn ? { applyEdit: applyEditFn } : {}),
   };
 }
