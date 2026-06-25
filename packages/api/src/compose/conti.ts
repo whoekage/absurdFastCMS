@@ -1,8 +1,8 @@
 import path from 'node:path';
 import { runMigrations } from '../db/migration.runner.ts';
 import { PostgresStore } from '../db/postgres.store.ts';
-import { seedFromSchemas } from '../db/seed.ts';
 import { loadTypes } from '../db/schema/load.ts';
+import { reconcileBoot } from './boot-reconcile.ts';
 import { HookRegistry } from '../db/schema/hooks.ts';
 import { createServer, type ListenToken } from '../http/uws.adapter.ts';
 import { CursorCodec } from '../store/cursor.codec.ts';
@@ -83,12 +83,13 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     await runMigrations(config.database.url);
     store = new PostgresStore(config.database.url);
     // CODE-FIRST source of truth: import the project's committed entities/<apiId>/schema.ts modules at the
-    // EDGE (loadTypes → the IR), materialize any missing ct_ table from them (the bridge until `conti
-    // migrate` owns this), then build the registry FROM them (not the meta tables). Default to <cwd>/entities.
+    // EDGE (loadTypes → the IR). The S3 boot guard then shapes the DB to a CONSISTENT IR before the served
+    // engine reads it — migrate-forward (files ahead) / recover-forward (files behind, the S2 crash window) /
+    // clean — superseding the old unconditional create-if-absent seed. Default to <cwd>/entities.
     const entitiesDir = config.entities?.dir ?? path.join(process.cwd(), 'entities');
-    const { schemas, hooks } = await loadTypes(entitiesDir);
+    const { schemas: filesIR, hooks: filesHooks } = await loadTypes(entitiesDir);
+    const { schemas, hooks } = await reconcileBoot(store.sql, entitiesDir, filesIR, filesHooks);
     const hookRegistry = new HookRegistry(hooks);
-    await seedFromSchemas(store.sql, schemas);
     // Keyset cursor codec (HMAC over the configured secret) wired once at the composition root.
     const { engine, registry } = await store.loadFromSchemas(schemas, { cursorCodec: new CursorCodec(config.cursor.secret) });
 

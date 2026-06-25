@@ -18,6 +18,9 @@ export { runMigrate, runMigrateLint } from './compose/migrate.ts';
 // Visual-Builder server side: apply a schema edit (mint ids → gate → write entities/<apiId>/schema.ts → migrate).
 export { applySchemaEdit } from './compose/builder.ts';
 export type { ContentTypeDraft, SchemaEditResult } from './compose/builder.ts';
+// S3 boot reconciliation guard (heals the S2 crash window / forward edits at boot).
+export { reconcileBoot, SchemaReconcileHaltError } from './compose/boot-reconcile.ts';
+export type { ReconcileResult } from './compose/boot-reconcile.ts';
 export { MigrationBlockedError, describeChange } from './db/schema/migrate.ts';
 export type { MigrateResult } from './db/schema/migrate.ts';
 export type { Change } from './db/schema/diff.ts';

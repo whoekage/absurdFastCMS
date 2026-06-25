@@ -342,6 +342,18 @@ export function planRenameSteps(renames: readonly { from: string; to: string; fi
   return steps;
 }
 
+/**
+ * Seed/overwrite the applied snapshot to EXACTLY `schemas` WITHOUT any DDL — used by the S3 boot guard to
+ * BACKFILL `_schema_applied` after a baseline seed materialized the tables out-of-band (so the next boot's
+ * diff is empty). Reuses the same upsert as a migrate's reconcile, in its own tx.
+ */
+export async function writeAppliedSnapshot(sql: Sql, schemas: ContentTypeSchema[]): Promise<void> {
+  await ensureAppliedTable(sql);
+  await sql.begin(async (tx) => {
+    await reconcileApplied(tx as unknown as Sql, schemas);
+  });
+}
+
 /** Apply the change-set + reconcile the applied snapshot in ONE serialized transaction (all-or-nothing). */
 async function applyChangeSet(sql: Sql, cs: ChangeSet, next: ContentTypeSchema[]): Promise<void> {
   // Pre-plan per-table column renames into a collision-safe step sequence (handles the field-name SWAP /
