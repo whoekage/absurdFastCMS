@@ -18,10 +18,10 @@ import {
   encodeEntry,
   isLosslessBigDecode,
   assertNoNumberCoercion,
-  type ContentTypeDefinition,
+  type ModuleDefinition,
 } from '../src/index.ts';
 
-/** A content-type exercising every lossy-prone wire type. */
+/** A module exercising every lossy-prone wire type. */
 const WIRE_FIELDS = [
   { name: 'big', cmsType: 'biginteger' as const },
   { name: 'price', cmsType: 'decimal' as const, options: { precision: 12, scale: 2 } },
@@ -41,7 +41,7 @@ test('biginteger > 2^53 round-trips lossless as a string; BigInt opt-in is exact
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
-      const def = await client.contentTypes.get(apiId);
+      const def = await client.modules.get(apiId);
 
       const created = await client.create(apiId, {
         big: HUGE,
@@ -84,7 +84,7 @@ test('decimal keeps its fixed scale as a string and is never widened', async () 
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
-      const def = await client.contentTypes.get(apiId);
+      const def = await client.modules.get(apiId);
 
       const created = await client.create(apiId, {
         big: '1',
@@ -115,7 +115,7 @@ test('json round-trips byte-exact (nested values)', async () => {
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
-      const def = await client.contentTypes.get(apiId);
+      const def = await client.modules.get(apiId);
 
       const payload = { s: 'héllo', n: 3.14, arr: [1, 2, { deep: true }], nul: null, o: { x: { y: 'z' } } };
       const created = await client.create(apiId, {
@@ -142,7 +142,7 @@ test('date/datetime arrive as ISO strings; { dates: true } yields a Date', async
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
-      const def = await client.contentTypes.get(apiId);
+      const def = await client.modules.get(apiId);
 
       const at = new Date(Date.UTC(2026, 5, 18, 9, 30, 0));
       const created = await client.create(apiId, {
@@ -174,7 +174,7 @@ test('encodeEntry lowers Date -> ISO and bigint -> string; the api accepts the b
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
-      const def = await client.contentTypes.get(apiId);
+      const def = await client.modules.get(apiId);
 
       const at = new Date(Date.UTC(2026, 5, 18, 0, 0, 0));
       const body = encodeEntry(def, {
@@ -206,7 +206,7 @@ test('listDecoded / findOneDecoded apply decodeEntry with a supplied def', async
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
-      const def: ContentTypeDefinition = await client.contentTypes.get(apiId);
+      const def: ModuleDefinition = await client.modules.get(apiId);
 
       const created = await client.create(apiId, {
         big: HUGE,

@@ -5,13 +5,13 @@
 // ⚠️ HAND-WRITTEN ON PURPOSE — never `import ... from '@conti/api'`. The api package pulls
 // postgres.js / uWebSockets.js into the module graph; importing its types would drag those into a
 // browser bundle. These declarations are kept byte-faithful to the api shapes by READING the api
-// source (type.catalog.ts, content-type.controller.ts#projectDef, engine.ts pagination meta), not by
+// source (type.catalog.ts, module.controller.ts#projectDef, engine.ts pagination meta), not by
 // importing it. When the api contract changes, update these here.
 
 // === 1.1 — cms_type, field options, field spec =================================================
 
 /**
- * The closed set of CMS field types a user may define on a content-type field. Mirror of
+ * The closed set of CMS field types a user may define on a module field. Mirror of
  * `CmsType` in `@conti/api` (packages/api/src/db/type.catalog.ts). `media` (be-04) IS here — a
  * reference to an uploaded asset in the `files` library (single int4 id / multiple jsonb id array; see
  * {@link FileAsset} + `client.upload`). Relation / component / dynamiczone are NOT here.
@@ -46,7 +46,7 @@ export type CmsType =
  *   dynamiczone          — an ordered ARRAY of instances tagged `__component`, from an allowed-set
  *                          ({@link FieldOptions.components}).
  *   relation             — be-05b: an INLINE id ref (or array of ids, via {@link FieldOptions.multiple}) to a
- *                          TARGET content-type ({@link FieldOptions.target}), resolved on read. This is
+ *                          TARGET module ({@link FieldOptions.target}), resolved on read. This is
  *                          ONLY valid INSIDE a component (it has no top-level form). It is SEMANTICALLY
  *                          DISTINCT from a top-level (be-01) {@link RelationKind}: an inline ref is stored
  *                          by-value in the component json (NO link table, NO inverse side, NOT independently
@@ -82,7 +82,7 @@ export interface FieldOptions {
   /** be-05 `dynamiczone` only: the allowed component-type api_ids (the zone's allowed-set). */
   components?: string[];
   /**
-   * be-05b `relation` (INSIDE a component) only: the TARGET content-type api_id an inline ref points at.
+   * be-05b `relation` (INSIDE a component) only: the TARGET module api_id an inline ref points at.
    * `multiple` (reused from above) selects single-id vs array-of-ids cardinality. The target must already
    * exist (checked at component-type definition). Distinct from a top-level (be-01) link-table relation.
    */
@@ -91,7 +91,7 @@ export interface FieldOptions {
 
 /**
  * A field the caller wants to define: the user name, its cms_type, and per-type options. Mirror of
- * `FieldSpec` in the api content-type repository — the body shape for create / add-field requests. A
+ * `FieldSpec` in the api module repository — the body shape for create / add-field requests. A
  * `cmsType` may be a scalar {@link CmsType} OR a be-05 {@link ComponentFieldKind} (in which case
  * `options.component` / `options.components` names the referenced component-type(s)).
  */
@@ -107,11 +107,11 @@ export interface FieldSpec {
   localized?: boolean;
 }
 
-// === 1.2 — content-type definition (the `projectDef` shape) ====================================
+// === 1.2 — module definition (the `projectDef` shape) ====================================
 
 /**
- * A single field as PROJECTED by the api's content-type builder (`projectDef` in
- * packages/api/src/http/content-type.controller.ts). This is the ONE public JSON shape every 2xx
+ * A single field as PROJECTED by the api's module builder (`projectDef` in
+ * packages/api/src/http/module.controller.ts). This is the ONE public JSON shape every 2xx
  * builder body uses — physical detail (tableName / pg_type / content_type_id / default_value) never
  * leaks. The optional keys appear only when present on the field (e.g. `enumValues` for enumeration,
  * `scale`/`precision` for decimal, `length` for varchar-backed types).
@@ -173,7 +173,7 @@ export interface FieldDefinition {
 export type RelationKind = 'oneToOne' | 'oneToMany' | 'manyToOne' | 'manyToMany';
 
 /**
- * One relation as PROJECTED by the api's content-type builder (`projectDef` relations entry). Physical
+ * One relation as PROJECTED by the api's module builder (`projectDef` relations entry). Physical
  * detail (the link-table name, content_type_id) never leaks. `owner` is true on the side that emitted
  * the link-table DDL; `inverseField` is present ONLY for a two-way relation (the partner field on the
  * target). A one-way relation omits `inverseField`.
@@ -182,7 +182,7 @@ export interface RelationDefinition {
   /** The relation field / API key on THIS side. */
   field: string;
   kind: RelationKind;
-  /** The target content-type api_id (may equal `apiId` for a self-referential relation). */
+  /** The target module api_id (may equal `apiId` for a self-referential relation). */
   target: string;
   /** true => this side owns the link table (emitted its DDL); false => the inverse side. */
   owner: boolean;
@@ -191,12 +191,12 @@ export interface RelationDefinition {
 }
 
 /**
- * A content-type as projected by the builder: its api_id, ordered fields (system id/created_at/
+ * A module as projected by the builder: its api_id, ordered fields (system id/created_at/
  * updated_at first, then user fields), and declared relations (in `sort` order). `relations` is ALWAYS
  * present — a scalar-only type returns `relations: []` (no shape drift). Returned by every 2xx builder
  * route.
  */
-export interface ContentTypeDefinition {
+export interface ModuleDefinition {
   apiId: string;
   fields: FieldDefinition[];
   relations: RelationDefinition[];
@@ -235,7 +235,7 @@ export type JsonValue = unknown;
 // === 1.3 — response envelope ===================================================================
 
 /**
- * One entry (row) of a content-type. The SDK does not know the column set of a runtime-defined type
+ * One entry (row) of a module. The SDK does not know the column set of a runtime-defined type
  * at compile time, so the default entry is an open record; callers may pass a concrete `T`.
  */
 export type Entry = Record<string, unknown>;
@@ -383,20 +383,20 @@ export interface FileListParams {
   limit?: number;
 }
 
-// === 6 — content-type builder inputs ===========================================================
+// === 6 — module builder inputs ===========================================================
 //
-// The request body shapes for the content-type builder routes (Slice 6). Mirror of the body shapes
-// the api's content-type controller reads (packages/api/src/http/content-type.controller.ts) +
-// validates via the content-type repository (createContentType / addField / renameField /
-// changeFieldType). The RESPONSE of every 2xx builder route is a {@link ContentTypeDefinition}
+// The request body shapes for the module builder routes (Slice 6). Mirror of the body shapes
+// the api's module controller reads (packages/api/src/http/module.controller.ts) +
+// validates via the module repository (createModule / addField / renameField /
+// changeFieldType). The RESPONSE of every 2xx builder route is a {@link ModuleDefinition}
 // (the `projectDef` shape) — except a type DROP, which returns {@link DropResult}.
 
 /**
- * The body for `contentTypes.create` — `POST /content-types`. The `apiId` + every field name are
+ * The body for `modules.create` — `POST /modules`. The `apiId` + every field name are
  * validated server-side (allowlist + 63-byte + reserved-name gate) BEFORE any DDL. The stored api_id
- * is canonicalised by the repo and reflected back on the returned {@link ContentTypeDefinition}.
+ * is canonicalised by the repo and reflected back on the returned {@link ModuleDefinition}.
  */
-export interface CreateContentTypeInput {
+export interface CreateModuleInput {
   apiId: string;
   fields: FieldSpec[];
   /**
@@ -423,7 +423,7 @@ export interface CreateContentTypeInput {
 }
 
 /**
- * The body for `contentTypes.addRelation` — `POST /content-types/:apiId/relations`. Declares ONE
+ * The body for `modules.addRelation` — `POST /modules/:apiId/relations`. Declares ONE
  * relation on the owner (`:apiId`). `inverseField` PRESENT => two-way (adds the partner field on the
  * target, no extra DDL); ABSENT => one-way. `target` may equal `:apiId` (self-referential); for a
  * two-way self relation `field` must differ from `inverseField`. The owner ct_ table must already exist;
@@ -433,14 +433,14 @@ export interface DeclareRelationInput {
   /** The relation field / API key on the owner. */
   field: string;
   kind: RelationKind;
-  /** The target content-type api_id (may equal `:apiId` for a self-reference). */
+  /** The target module api_id (may equal `:apiId` for a self-reference). */
   target: string;
   /** The partner field on the target — supply to make the relation two-way. */
   inverseField?: string;
 }
 
 /**
- * The body for `contentTypes.updateField` — `PUT /content-types/:apiId/fields/:name`. At least one of
+ * The body for `modules.updateField` — `PUT /modules/:apiId/fields/:name`. At least one of
  * `newName` / `cmsType` must be supplied (an all-empty change is a 400). The server applies a rename
  * FIRST, then a type change on the new name (two atomic txns); `options` accompanies a `cmsType` change
  * (e.g. enum `values`, decimal `precision`/`scale`).
@@ -454,7 +454,7 @@ export interface UpdateFieldInput {
   options?: FieldOptions;
 }
 
-/** The response of a content-type DROP (`DELETE /content-types/:apiId`): the dropped api_id + a flag. */
+/** The response of a module DROP (`DELETE /modules/:apiId`): the dropped api_id + a flag. */
 export interface DropResult {
   apiId: string;
   dropped: true;
@@ -463,13 +463,13 @@ export interface DropResult {
 // === be-05 — component types ====================================================================
 //
 // A COMPONENT type is a reusable field group with NO physical table and NO engine presence — pure meta.
-// A content type (or another component) attaches it via a `component` / `component-repeatable` /
+// A module (or another component) attaches it via a `component` / `component-repeatable` /
 // `dynamiczone` field. Mirror of the api component-type controller (projectComponentDef) + the component
 // repository create body.
 
 /**
  * A component type as projected by the component builder (`projectComponentDef`): its api_id + ordered
- * fields. A component field carries the SAME conditional metadata keys as a content-type field
+ * fields. A component field carries the SAME conditional metadata keys as a module field
  * ({@link FieldDefinition}) MINUS the system/relation/i18n keys (a component has none): `enumValues` /
  * `length` / `scale` / `precision` for scalars, `multiple` for media, `component` / `components` for a
  * nested component / dynamic-zone field. Returned by every 2xx component-builder route (except a drop).
@@ -494,7 +494,7 @@ export interface ComponentFieldDefinition {
   component?: string;
   /** be-05 `dynamiczone` allowed-set. */
   components?: string[];
-  /** be-05b `relation` ref target content-type api_id (inline ref; resolved on read). */
+  /** be-05b `relation` ref target module api_id (inline ref; resolved on read). */
   target?: string;
 }
 

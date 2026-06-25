@@ -1,7 +1,7 @@
 // @conti/sdk — WIRE FIDELITY: schema-aware value (de)serialization (Slice 7).
 //
 // PURE module — NO client dependency. These functions map between the wire JSON shapes the api emits
-// and richer JS values, driven by a {@link ContentTypeDefinition} (the `projectDef` shape from Slice 1).
+// and richer JS values, driven by a {@link ModuleDefinition} (the `projectDef` shape from Slice 1).
 // The client (Slice 4) optionally composes them; nothing here imports the client.
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -23,7 +23,7 @@
 // it stays the lossless wire string. See {@link assertNoNumberCoercion} for the pinned invariant.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-import type { CmsType, ContentTypeDefinition, Entry } from './types.ts';
+import type { CmsType, ModuleDefinition, Entry } from './types.ts';
 
 // === 7.1 — decode options =======================================================================
 
@@ -100,7 +100,7 @@ function normalizeIntString(s: string): string {
  * {@link CmsType}); it is skipped here so its value passes through {@link decodeValue}'s unknown-type
  * passthrough verbatim (the inline component tree is already-parsed JSON — no scalar decode applies).
  */
-function fieldTypeIndex(def: ContentTypeDefinition): Map<string, CmsType> {
+function fieldTypeIndex(def: ModuleDefinition): Map<string, CmsType> {
   const idx = new Map<string, CmsType>();
   const scalar = new Set<string>(['string', 'text', 'email', 'uid', 'enumeration', 'integer', 'biginteger', 'float', 'decimal', 'boolean', 'date', 'datetime', 'time', 'json', 'array', 'uuid', 'media']);
   for (const f of def.fields) if (scalar.has(f.cmsType)) idx.set(f.name, f.cmsType as CmsType);
@@ -145,7 +145,7 @@ export function decodeValue(cmsType: CmsType, value: unknown, opts: DecodeOption
 }
 
 /**
- * 7.1 — Map a RAW wire entry into typed values per a {@link ContentTypeDefinition}.
+ * 7.1 — Map a RAW wire entry into typed values per a {@link ModuleDefinition}.
  *
  * Defaults are LOSSLESS and conservative: `biginteger` / `decimal` STAY strings, `date` / `datetime`
  * stay ISO strings, `json` stays its parsed value. Opt in to richer JS types with
@@ -155,7 +155,7 @@ export function decodeValue(cmsType: CmsType, value: unknown, opts: DecodeOption
  * Pure: returns a NEW object, never mutates `raw`.
  */
 export function decodeEntry<T extends Entry = Entry>(
-  def: ContentTypeDefinition,
+  def: ModuleDefinition,
   raw: Entry,
   opts: DecodeOptions = {},
 ): T {
@@ -196,7 +196,7 @@ export function encodeValue(value: unknown): unknown {
  * universal Date/bigint lowering. Pure: returns a NEW object, never mutates `input`.
  */
 export function encodeEntry<T extends Record<string, unknown> = Record<string, unknown>>(
-  defOrInput: ContentTypeDefinition | T,
+  defOrInput: ModuleDefinition | T,
   maybeInput?: T,
 ): Record<string, unknown> {
   // Overload-friendly: encodeEntry(input) OR encodeEntry(def, input). The def carries no encode rules

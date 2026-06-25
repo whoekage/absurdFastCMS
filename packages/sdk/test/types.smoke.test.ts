@@ -10,7 +10,7 @@ import type {
   FieldOptions,
   FieldSpec,
   FieldDefinition,
-  ContentTypeDefinition,
+  ModuleDefinition,
   BigIntegerValue,
   DecimalValue,
   JsonValue,
@@ -24,12 +24,12 @@ import type {
 } from '@conti/sdk';
 import { isKeysetPagination } from '@conti/sdk';
 
-test('ContentTypeDefinition constructs (cmsType + field options + projected fields)', () => {
+test('ModuleDefinition constructs (cmsType + field options + projected fields)', () => {
   const cmsType: CmsType = 'enumeration';
   const options: FieldOptions = { length: 64, values: ['draft', 'published'], nullable: false };
   const spec: FieldSpec = { name: 'status', cmsType, options };
 
-  const def: ContentTypeDefinition = {
+  const def: ModuleDefinition = {
     apiId: 'article',
     fields: [
       { name: 'id', cmsType: 'integer', nullable: false, system: true },

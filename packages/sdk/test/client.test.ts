@@ -83,7 +83,7 @@ test('empty/absent query is omitted (no trailing ?)', async () => {
   assert.equal(capturedUrl, 'http://example.test/thing', 'empty query string appends no `?`');
 });
 
-test('no content-type header when there is no body', async () => {
+test('no module header when there is no body', async () => {
   let init: RequestInit | undefined;
   const recordingFetch: typeof fetch = (_input, i) => {
     init = i;
@@ -134,7 +134,7 @@ test('GET /unknown-type throws NotFoundError with status 404 and the {error} mes
         assert.ok(err instanceof NotFoundError, 'a 404 maps to NotFoundError');
         assert.ok(err instanceof ApiError, 'subclass of ApiError');
         assert.equal(err.status, 404);
-        assert.match(err.message, /unknown content-type/, 'message comes from the {error} body');
+        assert.match(err.message, /unknown module/, 'message comes from the {error} body');
         assert.deepEqual(err.body, { error: err.message }, 'raw body preserved');
         return true;
       },

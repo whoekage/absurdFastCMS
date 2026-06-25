@@ -9,11 +9,11 @@ import {
   cursorCodecFromEnv,
 } from '../../api/src/db/engine.loader.ts';
 import {
-  createContentType,
-  dropContentType,
+  createModule,
+  dropModule,
   type FieldSpec,
   type RelationSpec,
-} from '../../api/src/db/content-type.repository.ts';
+} from '../../api/src/db/module.fields.ts';
 import type { Engine } from '../../api/src/store/engine.ts';
 import type { Registry } from '../../api/src/db/registry.ts';
 
@@ -22,7 +22,7 @@ import type { Registry } from '../../api/src/db/registry.ts';
  *
  * NO MOCKS: startTestServer() clones a fresh per-file Postgres from the golden template (the api suite's
  * Testcontainers machinery, set up by test/global-setup.ts), boots a REAL @conti/api uWS server over it
- * (createServer(engine, store, registry) — store+registry enable writes AND the content-type builder),
+ * (createServer(engine, store, registry) — store+registry enable writes AND the module builder),
  * listens on an ephemeral port, and returns { baseUrl, close }. SDK tests point an AbsurdClient at
  * baseUrl and exercise the real wire. close() stops the socket and drops the per-file DB.
  *
@@ -40,7 +40,7 @@ export interface TestServer {
   sql: Sql;
   /** The live in-RAM engine the server reads from. */
   engine: Engine;
-  /** The live registry the server's content-type builder mutates. */
+  /** The live registry the server's module builder mutates. */
   registry: Registry;
 }
 
@@ -110,8 +110,8 @@ export interface TypeDef {
 }
 
 /**
- * Create a temporary content-type for a test and drop it afterwards. Commits to Postgres via the real
- * validating repository, then live-syncs the engine+registry exactly as the content-type controller does
+ * Create a temporary module for a test and drop it afterwards. Commits to Postgres via the real
+ * validating repository, then live-syncs the engine+registry exactly as the module controller does
  * (rebuildType → loadType: define + index `id` + warm), so the running server can immediately serve it.
  *
  * Usage:
@@ -127,7 +127,7 @@ export async function withType<T>(
   def: TypeDef,
   body: (apiId: string) => Promise<T>,
 ): Promise<T> {
-  const row = await createContentType(server.sql, {
+  const row = await createModule(server.sql, {
     apiId: def.apiId,
     fields: def.fields,
     ...(def.relations ? { relations: def.relations } : {}),
@@ -135,13 +135,13 @@ export async function withType<T>(
     ...(def.i18n ? { i18n: true } : {}),
   });
   const apiId = row.api_id;
-  // Live-sync RAM, mirroring content-type.controller.ts syncDefine().
+  // Live-sync RAM, mirroring module.controller.ts syncDefine().
   const built = await server.registry.rebuildType(server.sql, apiId);
   await loadType(server.sql, server.engine, built);
   try {
     return await body(apiId);
   } finally {
-    await dropContentType(server.sql, apiId);
+    await dropModule(server.sql, apiId);
     server.engine.dropType(apiId);
     server.registry.removeType(apiId);
   }

@@ -2,7 +2,7 @@
 //
 // Proves the integration harness end-to-end with NO MOCKS: startTestServer() clones a fresh per-file
 // Postgres from the golden template and boots a REAL @conti/api uWS server over it; withType() seeds the
-// canonical `article` content-type (the production ARTICLE_SEED_FIELDS spec) and live-syncs it into the
+// canonical `article` module (the production ARTICLE_SEED_FIELDS spec) and live-syncs it into the
 // running engine/registry. We then do a raw `fetch` GET against baseUrl/article (no SDK client yet — that
 // is Slice 3) and assert the real wire returns HTTP 200 with a `{ data, meta }` list envelope. close()
 // stops the listen socket and drops the per-file DB.

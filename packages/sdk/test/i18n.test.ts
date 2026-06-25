@@ -120,7 +120,7 @@ test('i18n composes with Draft & Publish (locale=fr & status=published) + projec
       assert.equal((await client.list(apiId)).data.length, 0);
 
       // The projected def exposes i18n + per-field localized.
-      const def = await client.contentTypes.get(apiId);
+      const def = await client.modules.get(apiId);
       assert.equal(def.i18n, true);
       assert.equal(def.fields.find((f) => f.name === 'title')!.localized, true);
       assert.equal(def.fields.find((f) => f.name === 'slug')!.localized, false);

@@ -137,7 +137,7 @@ test('media field is projected with cmsType + multiple flag', async () => {
       { name: 'many', cmsType: 'media', options: { multiple: true } },
     ] },
     async (apiId) => {
-      const def = await client.contentTypes.get(apiId);
+      const def = await client.modules.get(apiId);
       const single = def.fields.find((f) => f.name === 'single')!;
       const many = def.fields.find((f) => f.name === 'many')!;
       assert.equal(single.cmsType, 'media');
