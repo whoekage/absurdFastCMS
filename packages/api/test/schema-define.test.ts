@@ -11,7 +11,7 @@ import { parseSchema } from '../src/db/schema/serialize.ts';
  * back ids to the key/apiId, and that types are inferred (the compile-time block fails `tsc` if wrong).
  */
 
-const articlePath = fileURLToPath(new URL('../schema/article.json', import.meta.url));
+const articlePath = fileURLToPath(new URL('./fixtures/article.json', import.meta.url));
 
 const Article = defineType({
   id: 'ct_article',

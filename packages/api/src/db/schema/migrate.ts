@@ -15,7 +15,6 @@ import {
 } from '../ddl.ts';
 import { resolveFields } from '../content-type.repository.ts';
 import { contentTypeSchemaZ, type ContentTypeSchema } from './model.ts';
-import { loadSchemaDir } from './serialize.ts';
 import { fieldSchemaToSpec } from './adapt.ts';
 import { diff, type Change, type ChangeSet } from './diff.ts';
 
@@ -206,15 +205,17 @@ async function applyChangeSet(sql: Sql, cs: ChangeSet, next: ContentTypeSchema[]
 }
 
 /**
- * Migrate the database to match the committed `schema/` directory. Diffs the stored applied snapshot
- * against the files, gates destructive ops, and applies the rest atomically. Idempotent: a second run
- * with no file changes is a no-op. Throws {@link MigrationBlockedError} when a destructive/forbidden op is
- * present without `allowDestructive`.
+ * Migrate the database to match the desired catalog (`next`, the IR the EDGE loader produced from the
+ * `schema/*.ts` modules). Diffs the stored applied snapshot against `next`, gates destructive ops, and
+ * applies the rest atomically. Idempotent: a second run with no change is a no-op. Throws
+ * {@link MigrationBlockedError} when a destructive/forbidden op is present without `allowDestructive`.
+ *
+ * Takes the IR (not a directory) so it is decoupled from the source format — the loader lives at the edge
+ * (`compose/migrate.ts` / `createConti`), and tests drive it with IR directly.
  */
-export async function migrate(sql: Sql, schemaDir: string, opts: MigrateOptions = {}): Promise<MigrateResult> {
+export async function migrate(sql: Sql, next: ContentTypeSchema[], opts: MigrateOptions = {}): Promise<MigrateResult> {
   await ensureAppliedTable(sql);
   const prev = await readApplied(sql);
-  const next = await loadSchemaDir(schemaDir);
   const cs = diff(prev, next);
   const blocked = lint(cs, opts.allowDestructive ?? false);
   if (blocked.length > 0) throw new MigrationBlockedError(blocked);
@@ -229,12 +230,11 @@ export async function migrate(sql: Sql, schemaDir: string, opts: MigrateOptions 
  */
 export async function migrateLint(
   sql: Sql,
-  schemaDir: string,
+  next: ContentTypeSchema[],
   opts: MigrateOptions = {},
 ): Promise<{ changes: readonly Change[]; blocked: readonly Change[] }> {
   await ensureAppliedTable(sql);
   const prev = await readApplied(sql);
-  const next = await loadSchemaDir(schemaDir);
   const cs = diff(prev, next);
   return { changes: cs.changes, blocked: lint(cs, opts.allowDestructive ?? false) };
 }

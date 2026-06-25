@@ -142,24 +142,27 @@ const GITIGNORE_TEMPLATE = `node_modules
 .env
 `;
 
-// The demo content-type, files-first: `schema/<apiId>.json` is the SOURCE OF TRUTH (committed, dev-edited,
-// git-reviewed). createConti materializes it into `ct_article` + builds the registry from it at boot.
-const SCHEMA_ARTICLE_TEMPLATE = `{
-  "id": "ct_article",
-  "apiId": "article",
-  "collectionName": "ct_article",
-  "info": { "singularName": "article", "pluralName": "articles", "displayName": "Article" },
-  "options": { "draftAndPublish": false, "i18n": false },
-  "fields": [
-    { "id": "f_title", "name": "title", "type": "string", "options": { "length": 512, "nullable": true } },
-    { "id": "f_body", "name": "body", "type": "text", "options": { "nullable": false } },
-    { "id": "f_status", "name": "status", "type": "enumeration", "options": { "values": ["draft", "published", "archived"], "nullable": false } },
-    { "id": "f_views", "name": "views", "type": "integer", "options": { "nullable": true } },
-    { "id": "f_rating", "name": "rating", "type": "float", "options": { "nullable": true } },
-    { "id": "f_active", "name": "active", "type": "boolean", "options": { "nullable": false } },
-    { "id": "f_publishedAt", "name": "publishedAt", "type": "datetime", "options": { "nullable": false } }
-  ]
-}
+// The demo content-type, code-first: `schema/<apiId>.ts` is the SOURCE OF TRUTH (committed, dev-edited or
+// Builder-edited, git-reviewed). `conti migrate` applies it; createConti builds the registry from it at
+// boot; the entry type is inferred. Add lifecycle hooks alongside the fields.
+const SCHEMA_ARTICLE_TEMPLATE = `import { defineType, c } from '@conti/core';
+
+const Article = defineType({
+  id: 'ct_article',
+  options: { draftAndPublish: false, i18n: false },
+  fields: {
+    title: c.string({ id: 'f_title', max: 512, nullable: true }),
+    body: c.text({ id: 'f_body', nullable: false }),
+    status: c.enum(['draft', 'published', 'archived'], { id: 'f_status', nullable: false }),
+    views: c.integer({ id: 'f_views', nullable: true }),
+    rating: c.float({ id: 'f_rating', nullable: true }),
+    active: c.boolean({ id: 'f_active', nullable: false }),
+    publishedAt: c.datetime({ id: 'f_publishedAt', nullable: false }),
+  },
+});
+
+export default Article;
+export type Article = typeof Article;
 `;
 
 function packageJsonTemplate(name: string): string {
@@ -204,9 +207,9 @@ export async function initProject(dir: string, opts: { name?: string } = {}): Pr
     await mkdir(path.join(dir, sub), { recursive: true });
     await writeFile(path.join(dir, sub, '.gitkeep'), '');
   }
-  // schema/ ships the demo `article` type (files-first source of truth) instead of an empty .gitkeep.
+  // schema/ ships the demo `article` type (code-first source of truth) instead of an empty .gitkeep.
   await mkdir(path.join(dir, 'schema'), { recursive: true });
-  await writeFile(path.join(dir, 'schema', 'article.json'), SCHEMA_ARTICLE_TEMPLATE);
+  await writeFile(path.join(dir, 'schema', 'article.ts'), SCHEMA_ARTICLE_TEMPLATE);
   await writeFile(path.join(dir, 'conti.config.ts'), CONFIG_TEMPLATE);
   await writeFile(path.join(dir, 'bootstrap.ts'), BOOTSTRAP_TEMPLATE);
   await writeFile(path.join(dir, 'package.json'), packageJsonTemplate(name));

@@ -19,7 +19,7 @@ import { cleanCatalog } from './helpers.ts';
  * must be byte-identical — that equivalence is the proof S1 introduces no behaviour/byte regression.
  */
 
-const articlePath = fileURLToPath(new URL('../schema/article.json', import.meta.url));
+const articlePath = fileURLToPath(new URL('./fixtures/article.json', import.meta.url));
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;

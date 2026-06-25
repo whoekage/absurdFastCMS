@@ -15,7 +15,7 @@ import type { ContentTypeSchema } from '../src/db/schema/model.ts';
  * stem===apiId guard. The real meta↔file EQUIVALENCE (byte-identical defs) lives in the real-PG test.
  */
 
-const articlePath = fileURLToPath(new URL('../schema/article.json', import.meta.url));
+const articlePath = fileURLToPath(new URL('./fixtures/article.json', import.meta.url));
 
 test('committed article.json parses, round-trips, and adapts to expected meta rows', async () => {
   const schema = parseSchema(await readFile(articlePath, 'utf8'), 'article.json');

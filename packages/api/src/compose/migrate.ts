@@ -2,6 +2,7 @@ import path from 'node:path';
 import { runMigrations } from '../db/migration.runner.ts';
 import { createSql } from '../db/database.client.ts';
 import { migrate, migrateLint, type MigrateResult } from '../db/schema/migrate.ts';
+import { loadTypes } from '../db/schema/load.ts';
 import type { Change } from '../db/schema/diff.ts';
 import type { ContiConfig } from './config.ts';
 
@@ -23,9 +24,10 @@ function schemaDirOf(config: ContiConfig): string {
  */
 export async function runMigrate(config: ContiConfig, opts: { allowDestructive?: boolean } = {}): Promise<MigrateResult> {
   await runMigrations(config.database.url);
+  const schemas = await loadTypes(schemaDirOf(config));
   const sql = createSql(config.database.url);
   try {
-    return await migrate(sql, schemaDirOf(config), opts);
+    return await migrate(sql, schemas, opts);
   } finally {
     await sql.end();
   }
@@ -33,9 +35,10 @@ export async function runMigrate(config: ContiConfig, opts: { allowDestructive?:
 
 /** Compute the pending change-set + the blocked subset WITHOUT applying (the `migrate lint` command). */
 export async function runMigrateLint(config: ContiConfig): Promise<{ changes: readonly Change[]; blocked: readonly Change[] }> {
+  const schemas = await loadTypes(schemaDirOf(config));
   const sql = createSql(config.database.url);
   try {
-    return await migrateLint(sql, schemaDirOf(config));
+    return await migrateLint(sql, schemas);
   } finally {
     await sql.end();
   }
