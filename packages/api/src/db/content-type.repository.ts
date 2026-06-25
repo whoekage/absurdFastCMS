@@ -4,7 +4,7 @@ import { validateFieldName, validateDefault, DuplicateFieldError, type RelationK
 /**
  * PURE content-type field helpers + the meta ROW TYPES. After the legacy-meta teardown, the meta-write
  * operations (createContentType / addField / addRelation / dropContentType / …) and the meta-read selects
- * are GONE — files (`entities/<apiId>/schema.ts`) + `_schema_applied` are the source of truth, materialized
+ * are GONE — files (`modules/<apiId>/schema.ts`) + `_schema_applied` are the source of truth, materialized
  * by `migrate()`. What survives here is {@link resolveFields} (the field-spec → resolved-field validation,
  * reused by the files-first `schema/adapt.ts` + `schema/migrate.ts`) and the row-shape TYPES the
  * {@link Registry} / adapter still consume.

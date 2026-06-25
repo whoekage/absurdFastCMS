@@ -31,12 +31,12 @@ export interface ContiConfig {
   readonly i18n: { readonly defaultLocale: string };
   readonly debug: { readonly inspector: boolean };
   /**
-   * Files-first ENTITIES location — the project's `entities/` dir holding one FOLDER per content-type
-   * (`entities/<apiId>/schema.ts` + optional `hooks.ts`; the SOURCE OF TRUTH). Optional: when absent,
-   * {@link createConti} defaults to `<cwd>/entities`. Resolved to an absolute path by
+   * Files-first ENTITIES location — the project's `modules/` dir holding one FOLDER per content-type
+   * (`modules/<apiId>/schema.ts` + optional `hooks.ts`; the SOURCE OF TRUTH). Optional: when absent,
+   * {@link createConti} defaults to `<cwd>/modules`. Resolved to an absolute path by
    * {@link loadConfigFromEnv} (relative to the project dir = cwd), so the CLI and direct callers agree.
    */
-  readonly entities?: { readonly dir: string };
+  readonly modules?: { readonly dir: string };
 }
 
 /**
@@ -71,7 +71,7 @@ export function loadConfigFromEnv(cliPort?: string): ContiConfig {
     },
     i18n: { defaultLocale: config.defaultLocale },
     debug: { inspector: config.debugInspector },
-    // The project dir is cwd (the CLI loads conti.config.ts from there); the entities/ dir sits beside it.
-    entities: { dir: path.join(process.cwd(), 'entities') },
+    // The project dir is cwd (the CLI loads conti.config.ts from there); the modules/ dir sits beside it.
+    modules: { dir: path.join(process.cwd(), 'modules') },
   };
 }

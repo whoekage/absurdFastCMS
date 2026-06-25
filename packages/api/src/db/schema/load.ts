@@ -6,13 +6,13 @@ import { defToSchema, type TypeDef, type Hooks } from './define.ts';
 import type { Schema } from './model.ts';
 
 /**
- * The EDGE loader for the code-first source. The project's entity definitions live under `entities/`, ONE
- * FOLDER PER content-type (Strapi-style): `entities/<apiId>/schema.ts` (the {@link TypeDef}, required) +
- * `entities/<apiId>/hooks.ts` (the {@link Hooks}, optional). The apiId is the FOLDER NAME (renaming the
+ * The EDGE loader for the code-first source. The project's entity definitions live under `modules/`, ONE
+ * FOLDER PER content-type (Strapi-style): `modules/<apiId>/schema.ts` (the {@link TypeDef}, required) +
+ * `modules/<apiId>/hooks.ts` (the {@link Hooks}, optional). The apiId is the FOLDER NAME (renaming the
  * folder renames the type — the stable `id` keeps it lossless). `services.ts`/`controller.ts` (custom
  * logic) are reserved for a later release and not yet loaded.
  *
- * The reserved `entities/components/` grouping dir (component definitions) is skipped here — a content-type
+ * The reserved `modules/components/` grouping dir (component definitions) is skipped here — a content-type
  * folder is exactly a subdir that contains a `schema.ts`. Modules load via Node's native TS type-stripping
  * (no build); each resolves `@conti/core` exactly as `conti.config.ts` does. A missing dir is an EMPTY
  * catalog. Module caching is harmless: boot loads once, the CLI is a fresh process, and `migrate` takes the

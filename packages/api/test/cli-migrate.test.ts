@@ -14,7 +14,7 @@ import { tableExists } from './helpers.ts';
  * gate is exercised on IR in schema-migrate.test.ts.
  */
 
-const entitiesDir = fileURLToPath(new URL('../entities', import.meta.url));
+const modulesDir = fileURLToPath(new URL('../modules', import.meta.url));
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -24,7 +24,7 @@ before(async () => {
   db = await createFileDatabase('climigrate');
   sql = db.sql;
   process.env.DATABASE_URL = db.url; // loadConfigFromEnv reads it; the per-file harness doesn't set it
-  config = { ...loadConfigFromEnv(), database: { url: db.url }, entities: { dir: entitiesDir } };
+  config = { ...loadConfigFromEnv(), database: { url: db.url }, modules: { dir: modulesDir } };
 });
 after(async () => {
   if (sql) await sql.end();

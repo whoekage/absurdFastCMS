@@ -15,7 +15,7 @@ export type { InferType, TypeDef, BeforeHookFn, AfterHookFn, Hooks, HookContext 
 export { HookError } from './db/schema/hooks.ts';
 // Files-first schema migration (the `conti migrate` / `conti migrate lint` commands).
 export { runMigrate, runMigrateLint } from './compose/migrate.ts';
-// Visual-Builder server side: apply a schema edit (mint ids → gate → write entities/<apiId>/schema.ts → migrate).
+// Visual-Builder server side: apply a schema edit (mint ids → gate → write modules/<apiId>/schema.ts → migrate).
 export { applySchemaEdit } from './compose/builder.ts';
 export type { ModuleDraft, SchemaEditResult } from './compose/builder.ts';
 // S3 boot reconciliation guard (heals the S2 crash window / forward edits at boot).

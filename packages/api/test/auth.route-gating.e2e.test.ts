@@ -36,8 +36,8 @@ import { RbacRegistry } from '../src/auth/rbac.registry.ts';
  *     into the whole-type Builder gate (documented coverage delta — the granular sub-routes no longer exist).
  *   - `content.create|update|delete|publish` → the data write routes on `crudt`.
  *   - `media.upload` → `POST /_files/upload`.
- * `dpgate` (D&P) + `crudt` are pre-built files-first (entities fixtures + migrate) so the first HTTP sign-up
- * is still genuinely first (bootstrap stays clean), and the Builder routes register (entitiesDir present).
+ * `dpgate` (D&P) + `crudt` are pre-built files-first (modules fixtures + migrate) so the first HTTP sign-up
+ * is still genuinely first (bootstrap stays clean), and the Builder routes register (modulesDir present).
  */
 
 const genDir = fileURLToPath(new URL(`./fixtures/.gen-${process.pid}-routegating/`, import.meta.url));
@@ -102,7 +102,7 @@ before(async () => {
   sql = postgres(db.url, { max: 8, prepare: true, debug: () => { queryCount++; } });
   setAuthSql(sql);
 
-  // Pre-build dpgate (Draft & Publish) + crudt (plain) files-first: write the entities fixtures, then migrate
+  // Pre-build dpgate (Draft & Publish) + crudt (plain) files-first: write the modules fixtures, then migrate
   // them so the ct_ tables + snapshot exist. The first HTTP sign-up below is therefore still genuinely first.
   const dpgate = ct({ apiId: 'dpgate', draftPublish: true, fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }] });
   const crudt = ct({ apiId: 'crudt', fields: [{ name: 'title', cmsType: 'string' }] });
@@ -124,7 +124,7 @@ before(async () => {
 
   const { schemas, hooks } = await loadTypes(genDir);
   const { engine, registry } = await store.loadFromSchemas(schemas);
-  // positions: auth=5, sessionCache=6, rbac=7 ⇒ authEnabled; HookRegistry=9, entitiesDir=10 ⇒ builderActive.
+  // positions: auth=5, sessionCache=6, rbac=7 ⇒ authEnabled; HookRegistry=9, modulesDir=10 ⇒ builderActive.
   const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, undefined, new HookRegistry(hooks), genDir);
   token = await server.listen(port0);
   close = server.close;

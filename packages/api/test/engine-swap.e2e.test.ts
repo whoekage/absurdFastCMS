@@ -33,7 +33,7 @@ beforeEach(async () => {
   await sql`DROP TABLE IF EXISTS _schema_applied`;
   await rm(genDir, { recursive: true, force: true });
   if (srv) srv.close(srv.token);
-  srv = await startTestServerFromFiles(sql, genDir); // empty entities dir → empty engine to start
+  srv = await startTestServerFromFiles(sql, genDir); // empty modules dir → empty engine to start
 });
 after(async () => {
   if (srv) srv.close(srv.token);

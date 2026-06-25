@@ -43,7 +43,7 @@ export class SchemaReconcileHaltError extends Error {
 
 export interface ReconcileResult {
   outcome: 'clean' | 'migrated' | 'recovered-forward';
-  /** apiIds whose `entities/<apiId>/schema.ts` was regenerated from the snapshot (recover-forward). */
+  /** apiIds whose `modules/<apiId>/schema.ts` was regenerated from the snapshot (recover-forward). */
   recovered: readonly string[];
   /** The IR the served Engine MUST be built from (files after any recovery). */
   schemas: Schema[];
@@ -70,8 +70,8 @@ function isRoundTrippable(s: Schema): boolean {
 }
 
 /** Atomic same-dir flip (mirror of applySchemaEdit's temp→rename) so a crash mid-recovery never half-writes. */
-async function atomicWriteSchemaFile(entitiesDir: string, schema: Schema): Promise<void> {
-  const dir = path.join(entitiesDir, schema.apiId);
+async function atomicWriteSchemaFile(modulesDir: string, schema: Schema): Promise<void> {
+  const dir = path.join(modulesDir, schema.apiId);
   await mkdir(dir, { recursive: true });
   const target = path.join(dir, 'schema.ts');
   const tmp = `${target}.${process.pid}.recover.tmp`;
@@ -81,7 +81,7 @@ async function atomicWriteSchemaFile(entitiesDir: string, schema: Schema): Promi
 
 export async function reconcileBoot(
   sql: Sql,
-  entitiesDir: string,
+  modulesDir: string,
   filesIR: Schema[],
   filesHooks: Map<string, Hooks>,
 ): Promise<ReconcileResult> {
@@ -117,7 +117,7 @@ export async function reconcileBoot(
         );
       }
       try {
-        await atomicWriteSchemaFile(entitiesDir, s);
+        await atomicWriteSchemaFile(modulesDir, s);
       } catch (e) {
         if (e instanceof BuilderCodegenError) {
           throw new SchemaReconcileHaltError(`cannot recover-forward "${apiId}": ${e.message}`);

@@ -13,7 +13,7 @@ import type { Change } from '../db/schema/diff.ts';
  * guard (a client id is honored only if it already belongs to the addressed type — the fix that keeps a
  * rename lossless without letting a client forge a cross-type id steal), (2) PRE-FLIGHTs every emitted
  * identifier / relation target (a bad name is arbitrary-code injection into the generated schema.ts), (3)
- * GATES destructive/forbidden ops (a blocked edit changes NOTHING), and (4) writes `entities/<apiId>/
+ * GATES destructive/forbidden ops (a blocked edit changes NOTHING), and (4) writes `modules/<apiId>/
  * schema.ts` + migrates ATOMICALLY (temp-file → migrate → rename; unlink-on-throw).
  *
  * The desired full catalog (`next`) is keyed by STABLE ID, not apiId, so an apiId RENAME (same id, new
@@ -156,7 +156,7 @@ function preflightValidate(schema: Schema, next: Schema[]): void {
 
 interface ResolvedPlan {
   next: Schema[];
-  /** PUT: write `source` to the absolute `target` (`entities/<apiId>/schema.ts`) — temp → rename on commit. */
+  /** PUT: write `source` to the absolute `target` (`modules/<apiId>/schema.ts`) — temp → rename on commit. */
   write?: { target: string; source: string };
   /** DELETE: remove this source dir AFTER the migrate commits (mirror the temp-file discipline). */
   removeDir?: string;
@@ -239,18 +239,18 @@ function resolveEdit(draft: ModuleDraft, applied: Schema[]): { schema: Schema; n
  */
 export async function applySchemaEdit(
   sql: Sql,
-  entitiesDir: string,
+  modulesDir: string,
   draft: ModuleDraft,
   opts: { allowDestructive?: boolean } = {},
 ): Promise<SchemaEditResult> {
   const applied = await readApplied(sql);
   const { schema, next } = resolveEdit(draft, applied);
-  const target = path.join(entitiesDir, schema.apiId, 'schema.ts');
+  const target = path.join(modulesDir, schema.apiId, 'schema.ts');
   return applyResolvedPlan(sql, { next, write: { target, source: generateSchemaSource(schema) }, schema }, opts);
 }
 
 /** Drop a whole content-type (always destructive). Blocks if a surviving type still targets it by relation. */
-export async function applySchemaDelete(sql: Sql, entitiesDir: string, apiId: string): Promise<SchemaEditResult> {
+export async function applySchemaDelete(sql: Sql, modulesDir: string, apiId: string): Promise<SchemaEditResult> {
   const applied = await readApplied(sql);
   const target = applied.find((s) => s.apiId === apiId);
   if (target === undefined) throw new BuilderNotFoundError(`content-type "${apiId}" does not exist`);
@@ -263,7 +263,7 @@ export async function applySchemaDelete(sql: Sql, entitiesDir: string, apiId: st
     throw new BuilderValidationError(`type "${apiId}" is referenced by ${inbound.join(', ')}; remove the relation(s) first`);
   }
   const next = applied.filter((s) => s.id !== target.id);
-  return applyResolvedPlan(sql, { next, removeDir: path.join(entitiesDir, apiId) }, { allowDestructive: true });
+  return applyResolvedPlan(sql, { next, removeDir: path.join(modulesDir, apiId) }, { allowDestructive: true });
 }
 
 /** Dry-run a CREATE/UPDATE: resolve + pre-flight + lint + codegen, writing NOTHING and migrating NOTHING. */

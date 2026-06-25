@@ -4,7 +4,7 @@ import { validateFieldName, DuplicateFieldError } from './ddl.ts';
 /**
  * be-05 — PURE component-field helpers + the component ROW TYPES. After the legacy-meta teardown the
  * `component_types`/`component_type_fields` meta tables and their read/write operations are GONE: a
- * component is declared files-first in `entities/components/<apiId>.ts`, loaded by `schema/load.ts`, and
+ * component is declared files-first in `modules/components/<apiId>.ts`, loaded by `schema/load.ts`, and
  * consumed by `Registry.fromSchemas` via `schema/adapt.ts`. What survives is {@link resolveComponentFields}
  * (the field-spec → resolved-field validation the adapter reuses) and the row-shape TYPES the registry
  * consumes. A component has NO physical table, NO link table, and NO engine presence.

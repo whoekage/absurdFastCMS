@@ -82,13 +82,13 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     if (lifecycle.onBeforeStart) await lifecycle.onBeforeStart(ctx);
     await runMigrations(config.database.url);
     store = new PostgresStore(config.database.url);
-    // CODE-FIRST source of truth: import the project's committed entities/<apiId>/schema.ts modules at the
+    // CODE-FIRST source of truth: import the project's committed modules/<apiId>/schema.ts modules at the
     // EDGE (loadTypes → the IR). The S3 boot guard then shapes the DB to a CONSISTENT IR before the served
     // engine reads it — migrate-forward (files ahead) / recover-forward (files behind, the S2 crash window) /
-    // clean — superseding the old unconditional create-if-absent seed. Default to <cwd>/entities.
-    const entitiesDir = config.entities?.dir ?? path.join(process.cwd(), 'entities');
-    const { schemas: filesIR, hooks: filesHooks } = await loadTypes(entitiesDir);
-    const { schemas, hooks } = await reconcileBoot(store.sql, entitiesDir, filesIR, filesHooks);
+    // clean — superseding the old unconditional create-if-absent seed. Default to <cwd>/modules.
+    const modulesDir = config.modules?.dir ?? path.join(process.cwd(), 'modules');
+    const { schemas: filesIR, hooks: filesHooks } = await loadTypes(modulesDir);
+    const { schemas, hooks } = await reconcileBoot(store.sql, modulesDir, filesIR, filesHooks);
     const hookRegistry = new HookRegistry(hooks);
     // Keyset cursor codec (HMAC over the configured secret) wired once at the composition root.
     const { engine, registry } = await store.loadFromSchemas(schemas, [], { cursorCodec: new CursorCodec(config.cursor.secret) });
@@ -110,7 +110,7 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     await rbac.rebuild();
     await teamView.rebuild();
 
-    const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, teamView, hookRegistry, entitiesDir);
+    const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, teamView, hookRegistry, modulesDir);
     close = server.close;
     listenToken = await server.listen(config.server.port);
     const rows = engine.has('article') ? engine.rowCount('article') : 0;

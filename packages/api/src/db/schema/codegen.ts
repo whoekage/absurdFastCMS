@@ -94,7 +94,7 @@ export function generateTypes(schemas: Schema[]): string {
   return header + blocks.join('\n\n') + '\n';
 }
 
-// --- DSL SOURCE codegen (the visual Builder's writer: IR -> entities/<apiId>/schema.ts) ----------
+// --- DSL SOURCE codegen (the visual Builder's writer: IR -> modules/<apiId>/schema.ts) ----------
 
 /** A JSON-ish literal for embedding in generated source (strings double-quoted, arrays inline). */
 function lit(v: unknown): string {
@@ -138,7 +138,7 @@ function relationBuilderCall(r: RelationSchema): string {
 }
 
 /**
- * Generate the full `entities/<apiId>/schema.ts` SOURCE from the IR — the visual Builder's write artifact.
+ * Generate the full `modules/<apiId>/schema.ts` SOURCE from the IR — the visual Builder's write artifact.
  * Pure: IR in, source string out. Round-trips: loading the generated file (`loadTypes` → `defToSchema`)
  * yields an IR equal to the input. The Builder regenerates this file WHOLESALE; hooks live in the sibling
  * `hooks.ts` and are never touched.

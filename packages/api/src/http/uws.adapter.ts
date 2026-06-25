@@ -71,7 +71,7 @@ export interface UwsServer {
   close(token: ListenToken): void;
   /**
    * S4: apply a files-first schema edit and make it LIVE in-process (write file + migrate + atomic engine
-   * swap), WITHOUT a restart. Present only when the Builder is wired (store + registry + `entitiesDir`).
+   * swap), WITHOUT a restart. Present only when the Builder is wired (store + registry + `modulesDir`).
    * Throws on a migrate failure (last-good keeps serving); a blocked/no-op edit returns without swapping.
    */
   applyEdit?(draft: ModuleDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult>;
@@ -359,7 +359,7 @@ export function createServer(
   rbac?: RbacRegistry,
   teamView?: TeamView,
   hooks?: HookRegistry,
-  entitiesDir?: string,
+  modulesDir?: string,
 ): UwsServer {
   const app = uWS.App();
   // S1 (Builder live-reload): the SINGLE mutable cell every schema-reading route closure reads through.
@@ -779,7 +779,7 @@ export function createServer(
     writeResponse(res, handleRequest(live.engine, { method, path: `/${type}/${id}`, query }));
   });
 
-  // S4: the files-first Builder apply+swap, exposed on the returned server. Wired only when `entitiesDir`
+  // S4: the files-first Builder apply+swap, exposed on the returned server. Wired only when `modulesDir`
   // is present (a read-only server leaves it undefined → no Builder routes register).
   let applyEditFn: UwsServer['applyEdit'];
 
@@ -808,11 +808,11 @@ export function createServer(
       },
     };
     // S4 FILES-FIRST BUILDER — apply a whole-type edit + make it LIVE in-process (no restart). Wired only
-    // when `entitiesDir` is present. applySchemaEdit writes the file + migrates atomically; on success the
+    // when `modulesDir` is present. applySchemaEdit writes the file + migrates atomically; on success the
     // engine is rebuilt incrementally from the returned `next` IR and the live cell is swapped. A blocked /
     // no-op edit does NOT swap; a migrate failure THROWS (last-good keeps serving).
-    if (entitiesDir !== undefined) {
-      const dir = entitiesDir;
+    if (modulesDir !== undefined) {
+      const dir = modulesDir;
       const sql = store.sql;
       // S6 per-server state: the on-disk catalog version (sha256) + the single-writer mutex flag. NEVER
       // module-scope (two test servers must not share). Warm both best-effort at construction (createServer

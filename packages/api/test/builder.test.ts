@@ -11,7 +11,7 @@ import { cleanCatalog, tableExists, physicalColumns } from './helpers.ts';
 
 /**
  * Phase 5 (server side of the visual Builder) — applySchemaEdit over REAL Postgres. Proves: an edit mints
- * ids + materializes the DB (migrate) + writes entities/<apiId>/schema.ts, the written file ROUND-TRIPS
+ * ids + materializes the DB (migrate) + writes modules/<apiId>/schema.ts, the written file ROUND-TRIPS
  * back to the same IR via loadTypes (generateSchemaSource is the inverse of defToSchema), and a destructive
  * edit is GATED — nothing written, nothing applied — until allowDestructive. The gen dir lives under
  * packages/api so the generated `import '@conti/core'` resolves.

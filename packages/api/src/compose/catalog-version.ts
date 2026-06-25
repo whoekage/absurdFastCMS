@@ -4,7 +4,7 @@ import type { Schema } from '../db/schema/model.ts';
 
 /**
  * S6 — the Builder catalog VERSION (optimistic-concurrency token). It hashes the catalog ON DISK (the source
- * of truth = the `entities/*` files), NOT the `_schema_applied` snapshot: a snapshot-derived token would not
+ * of truth = the `modules/*` files), NOT the `_schema_applied` snapshot: a snapshot-derived token would not
  * advance when an operator edits a `schema.ts` out-of-band and runs `POST /builder/reload` (reload applies no
  * migrate), letting a stale `PUT` slip the 412. The hash is REORDER-INVARIANT (types sorted by id, each
  * fields/relations array sorted by id, object keys emitted in a fixed order) yet VALUE-SENSITIVE (any real
@@ -34,8 +34,8 @@ function canonicalIR(schemas: Schema[]): string {
 }
 
 /** sha256 of the canonical on-disk catalog IR (cache-busted re-read so an out-of-band edit is reflected). */
-export async function computeCatalogVersion(entitiesDir: string): Promise<string> {
-  const { schemas } = await loadTypesCacheBusted(entitiesDir, `${process.pid}:${++bustSeq}`);
+export async function computeCatalogVersion(modulesDir: string): Promise<string> {
+  const { schemas } = await loadTypesCacheBusted(modulesDir, `${process.pid}:${++bustSeq}`);
   return createHash('sha256').update(canonicalIR(schemas)).digest('hex');
 }
 

@@ -95,13 +95,13 @@ export function rawField(buf: Buffer | string, field: string): string {
 }
 
 /**
- * FILES-FIRST test server (S4): build engine+registry from `entitiesDir`'s files and wire the Builder so
+ * FILES-FIRST test server (S4): build engine+registry from `modulesDir`'s files and wire the Builder so
  * `applyEdit` makes a schema change LIVE in-process. Asserting via HTTP GET against `base` is the contract —
  * never re-`loadTypes` the edited file (ESM-cached) nor read the returned engine ref after a swap.
  */
 export async function startTestServerFromFiles(
   sql: Sql,
-  entitiesDir: string,
+  modulesDir: string,
 ): Promise<{
   base: string;
   close: (token: unknown) => void;
@@ -109,9 +109,9 @@ export async function startTestServerFromFiles(
   applyEdit: NonNullable<ReturnType<typeof createServer>['applyEdit']>;
 }> {
   const store = new PostgresStore(sql);
-  const { schemas, hooks } = await loadTypes(entitiesDir);
+  const { schemas, hooks } = await loadTypes(modulesDir);
   const { engine, registry } = await store.loadFromSchemas(schemas);
-  const server = createServer(engine, store, registry, undefined, undefined, undefined, undefined, undefined, new HookRegistry(hooks), entitiesDir);
+  const server = createServer(engine, store, registry, undefined, undefined, undefined, undefined, undefined, new HookRegistry(hooks), modulesDir);
   const port = await freePort();
   const token = await server.listen(port);
   return { base: `http://127.0.0.1:${port}`, close: server.close, token, applyEdit: server.applyEdit! };
@@ -125,7 +125,7 @@ export async function startTestServerFromFiles(
  */
 export async function startTestServerFromFilesWithAuth(
   sql: Sql,
-  entitiesDir: string,
+  modulesDir: string,
 ): Promise<{
   base: string;
   close: (token: unknown) => void;
@@ -146,10 +146,10 @@ export async function startTestServerFromFilesWithAuth(
   const rbac = new RbacRegistry(sql);
   auth = buildAuth({ baseURL: base, sessionEvictor: sessionCache, sql, rbacInvalidate: () => rbac.rebuild() });
   await rbac.rebuild();
-  const { schemas, hooks } = await loadTypes(entitiesDir);
+  const { schemas, hooks } = await loadTypes(modulesDir);
   const { engine, registry } = await store.loadFromSchemas(schemas);
-  // positions: auth=5, sessionCache=6, rbac=7 ⇒ authEnabled; HookRegistry=9, entitiesDir=10 ⇒ builderActive.
-  const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, undefined, new HookRegistry(hooks), entitiesDir);
+  // positions: auth=5, sessionCache=6, rbac=7 ⇒ authEnabled; HookRegistry=9, modulesDir=10 ⇒ builderActive.
+  const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, undefined, new HookRegistry(hooks), modulesDir);
   const token = await server.listen(port);
 
   const signUp = async (email: string): Promise<string> => {

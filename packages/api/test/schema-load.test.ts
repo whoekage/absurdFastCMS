@@ -5,15 +5,15 @@ import { fileURLToPath } from 'node:url';
 import { loadTypes } from '../src/db/schema/load.ts';
 
 /**
- * The code-first loader. Proves a real `entities/<apiId>/schema.ts` module (which imports `@conti/core`) is
+ * The code-first loader. Proves a real `modules/<apiId>/schema.ts` module (which imports `@conti/core`) is
  * dynamically imported + introspected into the IR (no build step), a missing dir is an empty catalog, and
  * a `hooks.ts` in the entity folder is paired (while `schema.ts` is the only thing loaded as a type).
  */
 
-const entitiesDir = fileURLToPath(new URL('../entities', import.meta.url));
+const modulesDir = fileURLToPath(new URL('../modules', import.meta.url));
 
-test('loadTypes imports entities/<apiId>/schema.ts modules into the IR', async () => {
-  const { schemas } = await loadTypes(entitiesDir);
+test('loadTypes imports modules/<apiId>/schema.ts modules into the IR', async () => {
+  const { schemas } = await loadTypes(modulesDir);
   const article = schemas.find((s) => s.apiId === 'article');
   assert.ok(article, 'article.ts was loaded + introspected');
   assert.equal(article!.id, 'ct_article');
@@ -22,12 +22,12 @@ test('loadTypes imports entities/<apiId>/schema.ts modules into the IR', async (
 });
 
 test('loadTypes returns an empty catalog for a missing dir', async () => {
-  const { schemas, hooks } = await loadTypes(path.join(entitiesDir, 'does-not-exist'));
+  const { schemas, hooks } = await loadTypes(path.join(modulesDir, 'does-not-exist'));
   assert.deepEqual(schemas, []);
   assert.equal(hooks.size, 0);
 });
 
-test('loadTypes pairs entities/<apiId>/hooks.ts with its schema (apiId = folder name)', async () => {
+test('loadTypes pairs modules/<apiId>/hooks.ts with its schema (apiId = folder name)', async () => {
   const dir = fileURLToPath(new URL('./fixtures/hooked', import.meta.url));
   const { schemas, hooks } = await loadTypes(dir);
   assert.deepEqual(schemas.map((s) => s.apiId), ['widget']); // folder name = apiId
