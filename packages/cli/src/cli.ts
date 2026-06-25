@@ -5,7 +5,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createConti, type ContiApp, type ContiConfig, type ServerLifecycle } from '@conti/core';
+import { createConti, runMigrate, runMigrateLint, MigrationBlockedError, describeChange, type ContiApp, type ContiConfig, type ServerLifecycle } from '@conti/core';
 
 /**
  * `@conti/cli` — the `conti` binary. It is the process entrypoint (lifted out of @conti/core, which is now
@@ -79,6 +79,43 @@ export async function runStart(cwd: string = process.cwd()): Promise<void> {
   const app = createConti(config, lifecycle);
   await app.start();
   installSignals(app);
+}
+
+/**
+ * `conti migrate [lint] [--allow-destructive]` — apply (or lint) the committed `schema/` against the DB.
+ * `lint` prints the pending change-set + which ops are blocked, applies nothing, and exits 1 if any are
+ * blocked. Plain `migrate` applies; a {@link MigrationBlockedError} (destructive/data-dependent without an
+ * ack, or a forbidden op) prints a clean message and exits 1 instead of dumping a stack.
+ */
+export async function runMigrateCommand(argv: string[], cwd: string = process.cwd()): Promise<void> {
+  loadEnv(cwd);
+  const { config } = await loadProject(cwd);
+  if (argv[3] === 'lint') {
+    const { changes, blocked } = await runMigrateLint(config);
+    if (changes.length === 0) {
+      console.log('conti migrate lint: schema is up to date');
+      return;
+    }
+    console.log(`conti migrate lint: ${changes.length} pending change(s):`);
+    for (const c of changes) console.log(`  - ${describeChange(c)} [${c.risk}]`);
+    if (blocked.length > 0) {
+      console.error(`\n${blocked.length} change(s) BLOCKED — re-run 'conti migrate --allow-destructive' to apply (forbidden ops can never apply).`);
+      process.exit(1);
+    }
+    return;
+  }
+  const allowDestructive = argv.includes('--allow-destructive');
+  try {
+    const r = await runMigrate(config, { allowDestructive });
+    console.log(r.noop ? 'conti migrate: schema is up to date' : `conti migrate: applied ${r.applied.length} change(s)`);
+  } catch (e) {
+    if (e instanceof MigrationBlockedError) {
+      console.error(e.message);
+      console.error("\nre-run with 'conti migrate --allow-destructive' to allow destructive/data-dependent changes (forbidden ops can never apply).");
+      process.exit(1);
+    }
+    throw e;
+  }
 }
 
 // ----- conti init: scaffold a thin project (the two-file contract + the standard dirs) -----
@@ -209,6 +246,9 @@ async function main(argv: string[]): Promise<void> {
     case 'dev':
       runDev();
       break;
+    case 'migrate':
+      await runMigrateCommand(process.argv);
+      break;
     case 'init': {
       const target = path.resolve(argv[3] ?? '.');
       await initProject(target);
@@ -219,7 +259,7 @@ async function main(argv: string[]): Promise<void> {
       break;
     }
     default:
-      console.error(`conti: unknown command ${JSON.stringify(cmd ?? '')}. Available: start, dev, init`);
+      console.error(`conti: unknown command ${JSON.stringify(cmd ?? '')}. Available: start, dev, init, migrate`);
       process.exit(1);
   }
 }

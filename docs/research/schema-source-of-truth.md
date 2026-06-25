@@ -154,7 +154,9 @@ prod:  deploy → conti migrate (from committed schema/) → data-preserving ALT
   (a no-change re-run is a no-op). `_schema_applied` is created on-demand like `_migrations` (no hand-written
   migration file). Real-PG tests prove: rename preserves data (the Strapi #12626/#19141 fix), rename-TYPE
   preserves data, drop blocked-without-ack, add NOT NULL + default backfills, retype gated + value carried
-  across the cast.
+  across the cast. The CLI wires `conti migrate [--allow-destructive]` + `conti migrate lint` to these via
+  the `compose/migrate.ts` wrappers (resolve config → db + schema dir, run base migrations, then the
+  files-first migrate); a blocked migration prints a clean message and exits 1.
 - **S5 — Builder rewrites schema.json + START the CONTRACT (delete the scaffolding).** The Builder's write
   target flips PG-meta → `schema/*.json` (preserving ids; mint a new id only for genuinely-new fields); dev
   edits call `conti migrate` locally. Builder routes GATED OFF in prod (env). With files now the source, the

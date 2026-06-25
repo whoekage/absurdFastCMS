@@ -9,3 +9,8 @@ export type { ContiApp, ServerLifecycle, ServerContext, StartedContext } from '.
 export { defineConfig, loadConfigFromEnv } from './compose/config.ts';
 export type { ContiConfig } from './compose/config.ts';
 export type { S3Config } from './config.ts';
+// Files-first schema migration (the `conti migrate` / `conti migrate lint` commands).
+export { runMigrate, runMigrateLint } from './compose/migrate.ts';
+export { MigrationBlockedError, describeChange } from './db/schema/migrate.ts';
+export type { MigrateResult } from './db/schema/migrate.ts';
+export type { Change } from './db/schema/diff.ts';
