@@ -116,15 +116,19 @@ export async function globalSetup(): Promise<void> {
           // `team` table + the `team.manage` permission; be-09c adds the `token.manage` permission — probe for
           // ALL of: the user table, the super-admin role, the `team` relation, the `team.manage` permission,
           // AND the `token.manage` permission. Missing any → drift → drop & rebuild from the current init.
+          // NEGATIVE sentinel (legacy-meta teardown): the init DROPPED the `content_types` meta table, so a
+          // reused golden that STILL has it is stale → drift → rebuild fresh without the meta tables.
           const t = await goldenProbe`
             SELECT to_regclass('public."user"') AS reg,
                    to_regclass('public."team"') AS team_reg,
+                   to_regclass('public."content_types"') AS legacy_meta,
                    EXISTS (SELECT 1 FROM "roles" WHERE name = 'super-admin') AS seeded,
                    EXISTS (SELECT 1 FROM "permissions" WHERE action = 'team.manage') AS team_perm,
                    EXISTS (SELECT 1 FROM "permissions" WHERE action = 'token.manage') AS token_perm
           `;
           drift = t[0]?.reg === null || t[0]?.team_reg === null || t[0]?.seeded !== true
-            || t[0]?.team_perm !== true || t[0]?.token_perm !== true;
+            || t[0]?.team_perm !== true || t[0]?.token_perm !== true
+            || t[0]?.legacy_meta !== null;
         } catch {
           drift = true;
         } finally {

@@ -9,7 +9,8 @@ import { schemaToRows, relationRowsByType, componentSchemaToRows } from './schem
 import type { ContentTypeSchema, ComponentSchema } from './schema/model.ts';
 
 /**
- * THE RAM SOURCE OF TRUTH at runtime. Built at boot from `content_types` + `content_type_fields`, the
+ * THE RAM SOURCE OF TRUTH at runtime. Built at boot from the files-first content-type schemas (via
+ * {@link Registry.fromSchemas}), the
  * {@link Registry} holds a per-type {@link ContentTypeDef} that drives EVERYTHING downstream — the
  * engine `define`, the loader's typed coercion, the body validator, and the write repo — so they can
  * never diverge from the DB schema. Every SQL identifier those modules use (table + column names)
@@ -668,20 +669,15 @@ export class Registry {
   }
 
   /**
-   * Build a registry from files-first schema OBJECTS — the PERMANENT entry. The filesystem read lives at
-   * the EDGE (`createConti`/the seed call `loadSchemaDir`); the Registry consumes schema as DATA, so
-   * per-file-DB tests can never cross-contaminate through a shared on-disk dir. Each schema → meta rows
-   * (`schemaToRows`) → the SAME `buildDef` the meta path uses, so a file-built def is byte-identical to a
-   * meta-built one (the S1 equivalence oracle). Component-type schemas are deferred to a later slice (the
-   * demo catalog has none); a relation-bearing schema fails LOUD in `schemaToRows`.
-   *
-   * Its sibling {@link Registry.build} (meta → def) is a TEMPORARY compat shim — see §7.1 "Cleanup ledger"
-   * in docs/research/schema-source-of-truth.md: `Registry.build(sql)` is deleted everywhere in S5 once the
-   * Builder writes files. New code MUST target `fromSchemas`, never `build`.
+   * Build a registry from files-first schema OBJECTS — the SOLE entry (the legacy meta-reading
+   * `Registry.build` was deleted in the legacy-meta teardown). The filesystem read lives at the EDGE
+   * (`createConti`/`loadSchemaDir`); the Registry consumes schema as DATA, so per-file-DB tests can never
+   * cross-contaminate through a shared on-disk dir. Each schema → row shapes (`schemaToRows`) → `buildDef`,
+   * and components/relations are built in cross-type passes (`componentSchemaToRows`/`relationRowsByType`).
    */
   static fromSchemas(schemas: ContentTypeSchema[], components: ComponentSchema[] = []): Registry {
     const reg = new Registry();
-    // Components FIRST (a content-type / component field can reference one) — mirrors Registry.build's order.
+    // Components FIRST (a content-type / component field can reference one).
     for (const cs of components) {
       const { cmp, fieldRows } = componentSchemaToRows(cs);
       reg.components.set(cmp.api_id, buildComponentDef(cmp, fieldRows));

@@ -32,24 +32,19 @@ export function freePort(): Promise<number> {
   });
 }
 
-/** Clean-start each test: drop every runtime per-type table + wipe the catalog (never the static `articles`). */
+/** Clean-start each test: drop every runtime per-type table + reset the files-first snapshot (the legacy
+ *  meta tables are gone — files + `_schema_applied` are the sole source of truth). */
 export async function cleanCatalog(sql: Sql): Promise<void> {
-  // Drop link tables FIRST (not ct_-prefixed; the ct_ sweep below misses them). The META path records them
-  // in content_type_relations; the FILES-FIRST migrate path writes NO meta, so ALSO sweep by the `_lnk`
-  // suffix (dropping a ct_ table CASCADE only removes the FK constraint, not the link table itself).
-  const links = await sql<{ link_table: string }[]>`SELECT DISTINCT link_table FROM content_type_relations`;
-  for (const { link_table } of links) await sql.unsafe(`DROP TABLE IF EXISTS "${link_table}" CASCADE`);
+  // Drop link tables FIRST (suffix `_lnk`; the ct_ sweep below misses them — dropping a ct_ table CASCADE
+  // only removes the FK constraint, not the link table itself). The files-first `migrate()` path writes NO
+  // meta, so the suffix sweep is the only record of them.
   const lnk = await sql<{ table_name: string }[]>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE '%\\_lnk'`;
   for (const { table_name } of lnk) await sql.unsafe(`DROP TABLE IF EXISTS "${table_name}" CASCADE`);
   const tables = await sql<{ table_name: string }[]>`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'ct\\_%'`;
   for (const { table_name } of tables) await sql.unsafe(`DROP TABLE IF EXISTS "${table_name}" CASCADE`);
-  await sql`TRUNCATE content_type_relations, content_type_fields, content_types RESTART IDENTITY CASCADE`;
-  // be-05: wipe the component catalog too (component_type_fields cascades from component_types).
-  await sql`TRUNCATE component_type_fields, component_types RESTART IDENTITY CASCADE`;
-  // Stage 1 (legacy-meta teardown): files-first tests re-`migrate()` per test, which diffs against the
-  // `_schema_applied` snapshot — so wipe it (and reset the document_id sequence) for a clean per-test start.
-  // `_schema_applied` is created lazily by `migrate()`, so IF EXISTS guards the pre-first-migrate beforeEach.
-  // The meta TRUNCATEs above stay until Stage 4 (still-unmigrated tests rely on them).
+  // Files-first tests re-`migrate()` per test, which diffs against the `_schema_applied` snapshot — so wipe
+  // it (and reset the document_id sequence) for a clean per-test start. `_schema_applied` is created lazily
+  // by `migrate()`, so IF EXISTS guards the pre-first-migrate beforeEach.
   await sql`DROP TABLE IF EXISTS _schema_applied`;
   await sql`ALTER SEQUENCE IF EXISTS document_id_seq RESTART`;
 }
