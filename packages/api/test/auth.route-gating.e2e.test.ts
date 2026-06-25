@@ -14,7 +14,7 @@ import { migrate } from '../src/db/schema/migrate.ts';
 import { loadTypes } from '../src/db/schema/load.ts';
 import { generateSchemaSource } from '../src/db/schema/codegen.ts';
 import { HookRegistry } from '../src/db/schema/hooks.ts';
-import { freePort, ct } from './helpers.ts';
+import { freePort, schema } from './helpers.ts';
 import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
 import { buildAuth } from '../src/auth/auth.ts';
 import { SessionCache } from '../src/auth/session.cache.ts';
@@ -104,8 +104,8 @@ before(async () => {
 
   // Pre-build dpgate (Draft & Publish) + crudt (plain) files-first: write the modules fixtures, then migrate
   // them so the ct_ tables + snapshot exist. The first HTTP sign-up below is therefore still genuinely first.
-  const dpgate = ct({ apiId: 'dpgate', draftPublish: true, fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }] });
-  const crudt = ct({ apiId: 'crudt', fields: [{ name: 'title', cmsType: 'string' }] });
+  const dpgate = schema({ apiId: 'dpgate', draftPublish: true, fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }] });
+  const crudt = schema({ apiId: 'crudt', fields: [{ name: 'title', cmsType: 'string' }] });
   await rm(genDir, { recursive: true, force: true });
   for (const schema of [dpgate, crudt]) {
     await mkdir(path.join(genDir, schema.apiId), { recursive: true });

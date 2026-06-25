@@ -7,7 +7,7 @@ import { insertEntry, EntryWriteError } from '../src/db/entry.repository.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
 import type { Schema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { ct } from './helpers.ts';
+import { schema } from './helpers.ts';
 
 /**
  * Pins two backstops the validator normally front-runs, against REAL Postgres (no mocks):
@@ -23,7 +23,7 @@ let gadgetSchema: Schema;
 before(async () => {
   db = await createFileDatabase('erb');
   sql = db.sql;
-  gadgetSchema = ct({ apiId: 'gadget', fields: [{ name: 'code', cmsType: 'string', options: { nullable: false } }] });
+  gadgetSchema = schema({ apiId: 'gadget', fields: [{ name: 'code', cmsType: 'string', options: { nullable: false } }] });
   await migrate(sql, [gadgetSchema], { allowDestructive: true });
   // A real UNIQUE constraint on a user column so a duplicate insert raises 23505 through the repo.
   await sql`ALTER TABLE ct_gadget ADD CONSTRAINT ct_gadget_code_uniq UNIQUE (code)`;

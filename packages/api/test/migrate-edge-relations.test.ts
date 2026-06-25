@@ -17,7 +17,7 @@ import { cleanCatalog, tableExists, physicalColumns } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;

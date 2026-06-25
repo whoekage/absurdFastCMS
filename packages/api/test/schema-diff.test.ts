@@ -13,7 +13,7 @@ import type { FieldOptions } from '../src/db/type.catalog.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[], options?: Schema['options']): Schema =>
+const schema = (id: string, apiId: string, fields: FieldSchema[], options?: Schema['options']): Schema =>
   options ? { id, apiId, fields, options } : { id, apiId, fields };
 
 const only = (cs: { changes: readonly Change[] }): Change => {
@@ -22,7 +22,7 @@ const only = (cs: { changes: readonly Change[] }): Change => {
 };
 
 // A small base type used across cases.
-const base = ct('ct_a', 'article', [
+const base = schema('ct_a', 'article', [
   f('f_title', 'title', 'string', { length: 512, nullable: true }),
   f('f_status', 'status', 'enumeration', { values: ['draft', 'published', 'archived'], nullable: false }),
   f('f_views', 'views', 'integer', { nullable: true }),
@@ -45,7 +45,7 @@ test('addType / dropType', () => {
 });
 
 test('renameType (apiId change, same id) → table rename, lossless; info/collectionName emit nothing', () => {
-  const renamed = ct('ct_a', 'post', base.fields);
+  const renamed = schema('ct_a', 'post', base.fields);
   const c = only(diff([base], [renamed]));
   assert.equal(c.kind, 'renameType');
   assert.equal(c.risk, 'safe');
@@ -58,7 +58,7 @@ test('renameType (apiId change, same id) → table rename, lossless; info/collec
 });
 
 test('renameField (same id, changed name) is the lossless headline op', () => {
-  const next = ct('ct_a', 'article', [
+  const next = schema('ct_a', 'article', [
     f('f_title', 'headline', 'string', { length: 512, nullable: true }), // same id f_title, new name
     base.fields[1]!,
     base.fields[2]!,
@@ -73,21 +73,21 @@ test('renameField (same id, changed name) is the lossless headline op', () => {
 });
 
 test('addField risk: nullable safe; NOT NULL no default data-dependent; NOT NULL with default safe', () => {
-  const nullableAdd = diff([base], [ct('ct_a', 'article', [...base.fields, f('f_note', 'note', 'text', { nullable: true })])]);
+  const nullableAdd = diff([base], [schema('ct_a', 'article', [...base.fields, f('f_note', 'note', 'text', { nullable: true })])]);
   assert.equal(only(nullableAdd).risk, 'safe');
 
-  const notNull = diff([base], [ct('ct_a', 'article', [...base.fields, f('f_flag', 'flag', 'boolean', { nullable: false })])]);
+  const notNull = diff([base], [schema('ct_a', 'article', [...base.fields, f('f_flag', 'flag', 'boolean', { nullable: false })])]);
   const nn = only(notNull);
   assert.equal(nn.kind, 'addField');
   assert.equal(nn.risk, 'data-dependent'); // existing rows would violate NOT NULL — Atlas MF103
   assert.equal((nn as Extract<Change, { kind: 'addField' }>).sort, 3);
 
-  const withDefault = diff([base], [ct('ct_a', 'article', [...base.fields, f('f_flag', 'flag', 'boolean', { nullable: false, default: false })])]);
+  const withDefault = diff([base], [schema('ct_a', 'article', [...base.fields, f('f_flag', 'flag', 'boolean', { nullable: false, default: false })])]);
   assert.equal(only(withDefault).risk, 'safe');
 });
 
 test('dropField is destructive', () => {
-  const next = ct('ct_a', 'article', [base.fields[0]!, base.fields[1]!]); // drop f_views
+  const next = schema('ct_a', 'article', [base.fields[0]!, base.fields[1]!]); // drop f_views
   const c = only(diff([base], [next]));
   assert.equal(c.kind, 'dropField');
   assert.equal(c.risk, 'destructive');
@@ -96,7 +96,7 @@ test('dropField is destructive', () => {
 
 test('retypeField: risk is derived from classifyTypeChange; enum member removal is a type change', () => {
   // integer -> biginteger (same id+name): a real resolved-type change.
-  const widen = ct('ct_a', 'article', [base.fields[0]!, base.fields[1]!, f('f_views', 'views', 'biginteger', { nullable: true })]);
+  const widen = schema('ct_a', 'article', [base.fields[0]!, base.fields[1]!, f('f_views', 'views', 'biginteger', { nullable: true })]);
   const c = only(diff([base], [widen])) as Extract<Change, { kind: 'retypeField' }>;
   assert.equal(c.kind, 'retypeField');
   assert.equal(c.name, 'views'); // unchanged name
@@ -105,29 +105,29 @@ test('retypeField: risk is derived from classifyTypeChange; enum member removal 
   assert.equal(c.risk, expectRisk);
 
   // enum member removal -> a retypeField (params.values changed). Risk is whatever the catalog classifies.
-  const enumShrink = ct('ct_a', 'article', [base.fields[0]!, f('f_status', 'status', 'enumeration', { values: ['draft', 'published'], nullable: false }), base.fields[2]!]);
+  const enumShrink = schema('ct_a', 'article', [base.fields[0]!, f('f_status', 'status', 'enumeration', { values: ['draft', 'published'], nullable: false }), base.fields[2]!]);
   const e = only(diff([base], [enumShrink]));
   assert.equal(e.kind, 'retypeField');
 });
 
 test('setFieldNullable: → NOT NULL data-dependent, → NULL safe', () => {
-  const toNotNull = ct('ct_a', 'article', [f('f_title', 'title', 'string', { length: 512, nullable: false }), base.fields[1]!, base.fields[2]!]);
+  const toNotNull = schema('ct_a', 'article', [f('f_title', 'title', 'string', { length: 512, nullable: false }), base.fields[1]!, base.fields[2]!]);
   const a = only(diff([base], [toNotNull]));
   assert.equal(a.kind, 'setFieldNullable');
   assert.equal(a.risk, 'data-dependent');
   assert.equal((a as Extract<Change, { kind: 'setFieldNullable' }>).to, false);
 
-  const toNull = ct('ct_a', 'article', [base.fields[0]!, f('f_status', 'status', 'enumeration', { values: ['draft', 'published', 'archived'], nullable: true }), base.fields[2]!]);
+  const toNull = schema('ct_a', 'article', [base.fields[0]!, f('f_status', 'status', 'enumeration', { values: ['draft', 'published', 'archived'], nullable: true }), base.fields[2]!]);
   assert.equal(only(diff([base], [toNull])).risk, 'safe');
 });
 
 test('reorderFields is wire-only and emitted ONLY on a real reorder of common fields', () => {
   // pure append must NOT emit a reorder.
-  const appended = ct('ct_a', 'article', [...base.fields, f('f_x', 'x', 'integer', { nullable: true })]);
+  const appended = schema('ct_a', 'article', [...base.fields, f('f_x', 'x', 'integer', { nullable: true })]);
   assert.ok(!diff([base], [appended]).changes.some((c) => c.kind === 'reorderFields'));
 
   // genuine swap of two existing fields → one reorderFields, wire-only.
-  const swapped = ct('ct_a', 'article', [base.fields[0]!, base.fields[2]!, base.fields[1]!]);
+  const swapped = schema('ct_a', 'article', [base.fields[0]!, base.fields[2]!, base.fields[1]!]);
   const c = only(diff([base], [swapped]));
   assert.equal(c.kind, 'reorderFields');
   assert.equal(c.risk, 'safe');
@@ -135,7 +135,7 @@ test('reorderFields is wire-only and emitted ONLY on a real reorder of common fi
 });
 
 test('rename + retype in ONE step emits BOTH ops (impossible for name-pairing differs)', () => {
-  const next = ct('ct_a', 'article', [
+  const next = schema('ct_a', 'article', [
     f('f_views', 'hits', 'biginteger', { nullable: true }), // f_views: renamed views->hits AND integer->biginteger
     base.fields[0]!,
     base.fields[1]!,
@@ -151,7 +151,7 @@ test('rename + retype in ONE step emits BOTH ops (impossible for name-pairing di
 });
 
 test('setTypeOption: ON additive (safe), OFF destructive', () => {
-  const dpOn = ct('ct_a', 'article', base.fields, { draftAndPublish: true });
+  const dpOn = schema('ct_a', 'article', base.fields, { draftAndPublish: true });
   const on = only(diff([base], [dpOn]));
   assert.equal(on.kind, 'setTypeOption');
   assert.equal(on.risk, 'safe');
@@ -192,8 +192,8 @@ test('a relation CHANGE and a rename-of-a-relation-owner are deferred (loud)', (
 });
 
 test('duplicate ids fail LOUD', () => {
-  const dupType = [base, ct('ct_a', 'other', [])];
+  const dupType = [base, schema('ct_a', 'other', [])];
   assert.throws(() => diff([], dupType), SchemaDiffError);
-  const dupField = ct('ct_b', 'b', [f('f_d', 'a', 'integer'), f('f_d', 'b', 'integer')]);
+  const dupField = schema('ct_b', 'b', [f('f_d', 'a', 'integer'), f('f_d', 'b', 'integer')]);
   assert.throws(() => diff([], [dupField]), SchemaDiffError);
 });

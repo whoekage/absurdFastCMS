@@ -17,7 +17,7 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -38,7 +38,7 @@ after(async () => {
 test('ONE migrate: rename A + add B(default) + retype C — applied atomically, ALL data preserved', async () => {
   // Seed: title (string), note (text), views (integer). Insert one real row.
   await migrate(sql, [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_n', 'note', 'text', { nullable: true }),
       f('f_v', 'views', 'integer', { nullable: true }),
@@ -49,7 +49,7 @@ test('ONE migrate: rename A + add B(default) + retype C — applied atomically, 
   // One migrate that: renames f_t title->headline, ADDS f_a active boolean NOT NULL DEFAULT false,
   // RETYPES f_v views integer->biginteger (widening). retype is data-dependent => needs the ack.
   const next = [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'headline', 'string', { nullable: true }), // rename (same id f_t)
       f('f_n', 'note', 'text', { nullable: true }),
       f('f_v', 'views', 'biginteger', { nullable: true }), // retype (same id f_v)
@@ -85,7 +85,7 @@ test('ONE migrate: rename A + add B(default) + retype C — applied atomically, 
 
 test('ONE migrate gated as a whole: a data-dependent op blocks WITHOUT ack — nothing changes', async () => {
   await migrate(sql, [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_v', 'views', 'integer', { nullable: true }),
     ]),
@@ -95,7 +95,7 @@ test('ONE migrate gated as a whole: a data-dependent op blocks WITHOUT ack — n
   // Mix a SAFE rename with a DATA-DEPENDENT retype. Without allowDestructive the whole migrate blocks,
   // and (critically) the safe rename must NOT have applied — the apply is all-or-nothing.
   const next = [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'headline', 'string', { nullable: true }), // safe rename
       f('f_v', 'views', 'biginteger', { nullable: true }), // data-dependent retype -> blocks
     ]),
@@ -111,11 +111,11 @@ test('ONE migrate gated as a whole: a data-dependent op blocks WITHOUT ack — n
 
 test('ONE migrate creates TWO new types at once — both tables exist, both take rows independently', async () => {
   const next = [
-    ct('ct_a', 'author', [
+    schema('ct_a', 'author', [
       f('f_n', 'name', 'string', { nullable: false, default: 'anon' }),
       f('f_b', 'bio', 'text', { nullable: true }),
     ]),
-    ct('ct_b', 'tag', [
+    schema('ct_b', 'tag', [
       f('f_l', 'label', 'string', { nullable: true }),
       f('f_c', 'count', 'integer', { nullable: false, default: 0 }),
     ]),
@@ -145,11 +145,11 @@ test('ONE migrate creates TWO new types at once — both tables exist, both take
 test('ONE migrate touches MULTIPLE existing types at once — each independently migrated, all data intact', async () => {
   // Two pre-existing types, each with a seeded row.
   await migrate(sql, [
-    ct('ct_a', 'author', [
+    schema('ct_a', 'author', [
       f('f_n', 'name', 'string', { nullable: true }),
       f('f_v', 'visits', 'integer', { nullable: true }),
     ]),
-    ct('ct_b', 'tag', [f('f_l', 'label', 'string', { nullable: true })]),
+    schema('ct_b', 'tag', [f('f_l', 'label', 'string', { nullable: true })]),
   ]);
   await sql.unsafe(`INSERT INTO ct_author (name, visits) VALUES ('grace', 11)`);
   await sql.unsafe(`INSERT INTO ct_tag (label) VALUES ('eng')`);
@@ -157,11 +157,11 @@ test('ONE migrate touches MULTIPLE existing types at once — each independently
   // ONE migrate: author renames name->fullname AND retypes visits->biginteger; tag adds slug(default)
   // AND renames label->title. Different op mixes across two tables, all in one atomic change-set.
   const next = [
-    ct('ct_a', 'author', [
+    schema('ct_a', 'author', [
       f('f_n', 'fullname', 'string', { nullable: true }), // rename on author
       f('f_v', 'visits', 'biginteger', { nullable: true }), // retype on author (data-dependent)
     ]),
-    ct('ct_b', 'tag', [
+    schema('ct_b', 'tag', [
       f('f_l', 'title', 'string', { nullable: true }), // rename on tag
       f('f_s', 'slug', 'string', { nullable: false, default: 'untitled' }), // add on tag
     ]),
@@ -187,8 +187,8 @@ test('ONE migrate touches MULTIPLE existing types at once — each independently
 
 test('ONE migrate touching multiple types where ONE blocks: the OTHER type is NOT partially applied', async () => {
   await migrate(sql, [
-    ct('ct_a', 'author', [f('f_n', 'name', 'string', { nullable: true }), f('f_x', 'extra', 'text', { nullable: true })]),
-    ct('ct_b', 'tag', [f('f_l', 'label', 'string', { nullable: true })]),
+    schema('ct_a', 'author', [f('f_n', 'name', 'string', { nullable: true }), f('f_x', 'extra', 'text', { nullable: true })]),
+    schema('ct_b', 'tag', [f('f_l', 'label', 'string', { nullable: true })]),
   ]);
   await sql.unsafe(`INSERT INTO ct_author (name, extra) VALUES ('keep-me', 'kept')`);
   await sql.unsafe(`INSERT INTO ct_tag (label) VALUES ('kept-tag')`);
@@ -196,8 +196,8 @@ test('ONE migrate touching multiple types where ONE blocks: the OTHER type is NO
   // author: a SAFE rename (name->handle). tag: a DESTRUCTIVE drop (label removed). Without the ack the
   // whole migrate blocks; the safe rename on the OTHER table must NOT have applied.
   const next = [
-    ct('ct_a', 'author', [f('f_n', 'handle', 'string', { nullable: true }), f('f_x', 'extra', 'text', { nullable: true })]),
-    ct('ct_b', 'tag', []), // drops f_l -> destructive
+    schema('ct_a', 'author', [f('f_n', 'handle', 'string', { nullable: true }), f('f_x', 'extra', 'text', { nullable: true })]),
+    schema('ct_b', 'tag', []), // drops f_l -> destructive
   ];
   await assert.rejects(migrate(sql, next), MigrationBlockedError);
 
@@ -213,7 +213,7 @@ test('ONE migrate touching multiple types where ONE blocks: the OTHER type is NO
 test('ROLLBACK on a failing cast: a multi-op migrate aborts mid-way, NO op partially applied', async () => {
   // views holds a non-numeric string; retyping string -> integer will fail the USING cast at apply time.
   await migrate(sql, [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_v', 'views', 'string', { nullable: true }),
     ]),
@@ -224,7 +224,7 @@ test('ROLLBACK on a failing cast: a multi-op migrate aborts mid-way, NO op parti
   // The retype is data-dependent so we must ack it; the failure then comes from Postgres at apply time,
   // which must roll back the WHOLE tx (rename + add included), leaving the table byte-identical.
   const next = [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'headline', 'string', { nullable: true }),
       f('f_v', 'views', 'integer', { nullable: true }), // string -> integer, cast fails on 'not-a-number'
       f('f_a', 'active', 'boolean', { nullable: false, default: false }),
@@ -243,7 +243,7 @@ test('ROLLBACK on a failing cast: a multi-op migrate aborts mid-way, NO op parti
   // _schema_applied must NOT have been advanced — the still-current schema re-migrates cleanly afterwards
   // (proving the snapshot was not corrupted by the rolled-back attempt).
   const recover = await migrate(sql, [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_v', 'views', 'string', { nullable: true }),
     ]),
@@ -252,16 +252,16 @@ test('ROLLBACK on a failing cast: a multi-op migrate aborts mid-way, NO op parti
 });
 
 test('ONE migrate: create a NEW type AND alter an EXISTING type together — both land, data on the old type intact', async () => {
-  await migrate(sql, [ct('ct_a', 'author', [f('f_n', 'name', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'author', [f('f_n', 'name', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_author (name) VALUES ('existing')`);
 
   // One migrate that BOTH creates ct_tag AND renames author.name->handle + adds author.bio(default).
   const next = [
-    ct('ct_a', 'author', [
+    schema('ct_a', 'author', [
       f('f_n', 'handle', 'string', { nullable: true }), // rename existing
       f('f_b', 'bio', 'text', { nullable: false, default: 'n/a' }), // add to existing
     ]),
-    ct('ct_b', 'tag', [f('f_l', 'label', 'string', { nullable: true })]), // brand-new type
+    schema('ct_b', 'tag', [f('f_l', 'label', 'string', { nullable: true })]), // brand-new type
   ];
   const r = await migrate(sql, next);
   const kinds = r.applied.map((c) => c.kind);
@@ -279,7 +279,7 @@ test('ONE migrate: create a NEW type AND alter an EXISTING type together — bot
 
 test('MANY ops, MANY rows: rename + retype + add over a multi-row table — every row preserved + backfilled', async () => {
   await migrate(sql, [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_v', 'views', 'integer', { nullable: true }),
     ]),
@@ -287,7 +287,7 @@ test('MANY ops, MANY rows: rename + retype + add over a multi-row table — ever
   await sql.unsafe(`INSERT INTO ct_thing (title, views) VALUES ('one', 1), ('two', 2), ('three', 3)`);
 
   const next = [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'headline', 'string', { nullable: true }), // rename
       f('f_v', 'views', 'biginteger', { nullable: true }), // retype widening
       f('f_a', 'archived', 'boolean', { nullable: false, default: false }), // add w/ default

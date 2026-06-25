@@ -22,7 +22,7 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -41,10 +41,10 @@ after(async () => {
 });
 
 test('DROP a field holding data is BLOCKED without ack — column AND rows survive untouched', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('keep', 'secret')`);
 
-  const dropped = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
+  const dropped = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
   await assert.rejects(migrate(sql, dropped), MigrationBlockedError);
 
   // The column must still be physically present AND still hold its bytes — gating means NOTHING changed.
@@ -55,10 +55,10 @@ test('DROP a field holding data is BLOCKED without ack — column AND rows survi
 });
 
 test('DROP a field holding data WITH allowDestructive — column gone, sibling rows preserved', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('keep', 'goodbye')`);
 
-  const dropped = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
+  const dropped = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
   const r = await migrate(sql, dropped, { allowDestructive: true });
   assert.deepEqual(r.applied.map((c) => c.kind), ['dropField']);
 
@@ -71,7 +71,7 @@ test('DROP a field holding data WITH allowDestructive — column gone, sibling r
 
 test('DROP one of SEVERAL fields keeps every OTHER column data intact (multi-row)', async () => {
   await migrate(sql, [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_n', 'note', 'text', { nullable: true }),
       f('f_v', 'views', 'integer', { nullable: true }),
@@ -83,7 +83,7 @@ test('DROP one of SEVERAL fields keeps every OTHER column data intact (multi-row
 
   // Drop only the middle field `note`; the surrounding columns + both rows must be untouched.
   const dropped = [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_v', 'views', 'integer', { nullable: true }),
       f('f_b', 'active', 'boolean', { nullable: true }),
@@ -104,13 +104,13 @@ test('DROP one of SEVERAL fields keeps every OTHER column data intact (multi-row
 
 test('DROP a whole TYPE is BLOCKED without ack — table + rows survive', async () => {
   await migrate(sql, [
-    ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })]),
-    ct('ct_b', 'gadget', [f('f_g', 'label', 'string', { nullable: true })]),
+    schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })]),
+    schema('ct_b', 'gadget', [f('f_g', 'label', 'string', { nullable: true })]),
   ]);
   await sql.unsafe(`INSERT INTO ct_gadget (label) VALUES ('alive')`);
 
   // Removing ct_b from the catalog => dropType (destructive). Without ack it must block + leave the table.
-  const onlyThing = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
+  const onlyThing = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
   await assert.rejects(migrate(sql, onlyThing), MigrationBlockedError);
 
   assert.equal(await tableExists(sql, 'ct_gadget'), true, 'table survives the block');
@@ -122,13 +122,13 @@ test('DROP a whole TYPE is BLOCKED without ack — table + rows survive', async 
 
 test('DROP a whole TYPE WITH allowDestructive — table gone, the OTHER type untouched', async () => {
   await migrate(sql, [
-    ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })]),
-    ct('ct_b', 'gadget', [f('f_g', 'label', 'string', { nullable: true })]),
+    schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })]),
+    schema('ct_b', 'gadget', [f('f_g', 'label', 'string', { nullable: true })]),
   ]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('survivor')`);
   await sql.unsafe(`INSERT INTO ct_gadget (label) VALUES ('doomed')`);
 
-  const onlyThing = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
+  const onlyThing = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
   const r = await migrate(sql, onlyThing, { allowDestructive: true });
   assert.deepEqual(r.applied.map((c) => c.kind), ['dropType']);
 
@@ -140,15 +140,15 @@ test('DROP a whole TYPE WITH allowDestructive — table gone, the OTHER type unt
 
 test('RE-ADD a dropped field comes back FRESH (empty) — no resurrection of old data', async () => {
   // 1) create with note, write data into it.
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('row', 'old-note')`);
 
   // 2) drop note (destructive, acked).
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])], { allowDestructive: true });
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])], { allowDestructive: true });
   assert.ok(!(await physicalColumns(sql, 'ct_thing')).some((c) => c.name === 'note'), 'note dropped');
 
   // 3) re-add a NEW field by the same name but a fresh id — additive (safe), no ack needed.
-  const r = await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n2', 'note', 'text', { nullable: true })])]);
+  const r = await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n2', 'note', 'text', { nullable: true })])]);
   assert.deepEqual(r.applied.map((c) => c.kind), ['addField'], 're-add is a plain ADD COLUMN');
 
   // The existing row's title is untouched; the re-added note is NULL (the old bytes are NOT resurrected).
@@ -159,14 +159,14 @@ test('RE-ADD a dropped field comes back FRESH (empty) — no resurrection of old
 
 test('DROP field + DROP type in ONE migration are BOTH gated; ack applies BOTH atomically', async () => {
   await migrate(sql, [
-    ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })]),
-    ct('ct_b', 'gadget', [f('f_g', 'label', 'string', { nullable: true })]),
+    schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })]),
+    schema('ct_b', 'gadget', [f('f_g', 'label', 'string', { nullable: true })]),
   ]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('t', 'n')`);
   await sql.unsafe(`INSERT INTO ct_gadget (label) VALUES ('g')`);
 
   // next: drop ct_thing.note AND drop the whole ct_gadget type.
-  const next = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
+  const next = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
 
   // Without ack: blocked, and NEITHER destructive op applies (both column + table still present).
   await assert.rejects(migrate(sql, next), MigrationBlockedError);
@@ -183,10 +183,10 @@ test('DROP field + DROP type in ONE migration are BOTH gated; ack applies BOTH a
 });
 
 test('after a DROP is BLOCKED, the applied-schema snapshot is unchanged (retry still blocks the SAME way)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('a', 'b')`);
 
-  const dropped = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
+  const dropped = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
 
   // First block.
   await assert.rejects(migrate(sql, dropped), MigrationBlockedError);
@@ -198,6 +198,6 @@ test('after a DROP is BLOCKED, the applied-schema snapshot is unchanged (retry s
   assert.equal(row?.note, 'b', 'data intact after repeated blocked attempts');
 
   // And a re-run of the ORIGINAL (no-drop) schema is a clean no-op — the snapshot was never corrupted.
-  const noop = await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
+  const noop = await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
   assert.equal(noop.noop, true, 'snapshot intact: original schema re-applies as a no-op');
 });

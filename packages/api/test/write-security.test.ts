@@ -6,7 +6,7 @@ import { migrate } from '../src/db/schema/migrate.ts';
 import type { Schema } from '../src/db/schema/model.ts';
 import type { ListenToken } from '../src/http/uws.adapter.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { tableExists, startTestServerFromSchemas, ct } from './helpers.ts';
+import { tableExists, startTestServerFromSchemas, schema } from './helpers.ts';
 
 /**
  * WRITE-SECURITY SLICE — injection via field name, mass-assignment, jsonb byte-exact through load+
@@ -26,7 +26,7 @@ before(async () => {
   db = await createFileDatabase('sec');
   sql = db.sql;
   schemas = [
-    ct({
+    schema({
       apiId: 'article',
       fields: [
         { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
@@ -38,7 +38,7 @@ before(async () => {
         { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
       ],
     }),
-    ct({ apiId: 'doc', fields: [{ name: 'blob', cmsType: 'json', options: { nullable: false } }] }),
+    schema({ apiId: 'doc', fields: [{ name: 'blob', cmsType: 'json', options: { nullable: false } }] }),
   ];
   const server = await startTestServerFromSchemas(sql, schemas, {
     seed: async () => { await sql`INSERT INTO ct_article (title, body, status, views, rating, active, "publishedAt") VALUES ('Seed', 'b1', 'published', 1, 1.0, true, '2021-01-01T00:00:00.000Z')`; },

@@ -6,7 +6,7 @@ import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer } from '../src/http/uws.adapter.ts';
 import { HookRegistry, HookError } from '../src/db/schema/hooks.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { freePort, ct } from './helpers.ts';
+import { freePort, schema } from './helpers.ts';
 
 /**
  * Phase 4 — content lifecycle hooks over a REAL server + Postgres. Proves the two-class model:
@@ -27,7 +27,7 @@ const afterIds: number[] = [];
 before(async () => {
   db = await createFileDatabase('hooks');
   sql = db.sql;
-  const widget = ct({
+  const widget = schema({
     apiId: 'widget',
     fields: [
       { name: 'title', cmsType: 'string', options: { nullable: true } },

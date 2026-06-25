@@ -21,7 +21,7 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -40,11 +40,11 @@ after(async () => {
 });
 
 test('integer -> biginteger: gated as data-dependent; acked cast preserves the exact value', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_v', 'views', 'integer', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_v', 'views', 'integer', { nullable: true })])]);
   // A value safely inside int4 but we also push an int4-max boundary to prove it survives the widening.
   await sql.unsafe(`INSERT INTO ct_thing (views) VALUES (2147483647), (-2147483648), (0)`);
 
-  const widened = [ct('ct_a', 'thing', [f('f_v', 'views', 'biginteger', { nullable: true })])];
+  const widened = [schema('ct_a', 'thing', [f('f_v', 'views', 'biginteger', { nullable: true })])];
   await assert.rejects(migrate(sql, widened), MigrationBlockedError);
   // The block changed nothing: still int4.
   assert.equal((await physicalColumns(sql, 'ct_thing')).find((c) => c.name === 'views')?.type, 'integer');
@@ -58,12 +58,12 @@ test('integer -> biginteger: gated as data-dependent; acked cast preserves the e
 });
 
 test('varchar GROW (512 -> 1024): metadata-only/safe, NO ack needed, data intact', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 512, nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 512, nullable: true })])]);
   const long = 'x'.repeat(512); // exactly fills the old column
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('hello'), ('${long}')`);
 
   // Widening is metadata-only -> safe: NO allowDestructive required.
-  const grown = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 1024, nullable: true })])];
+  const grown = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 1024, nullable: true })])];
   const r = await migrate(sql, grown);
   assert.deepEqual(r.applied.map((c) => c.kind), ['retypeField']);
 
@@ -74,10 +74,10 @@ test('varchar GROW (512 -> 1024): metadata-only/safe, NO ack needed, data intact
 });
 
 test('varchar SHRINK (1024 -> 256) with an OVER-LONG row: even acked, the pre-flight FAILS LOUD + rolls back (FIXED)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 1024, nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 1024, nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('short one'), ('${'y'.repeat(1024)}')`);
 
-  const shrunk = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 256, nullable: true })])];
+  const shrunk = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 256, nullable: true })])];
   // Shrink truncates -> rewrite -> data-dependent -> blocked without ack.
   await assert.rejects(migrate(sql, shrunk), MigrationBlockedError);
 
@@ -93,10 +93,10 @@ test('varchar SHRINK (1024 -> 256) with an OVER-LONG row: even acked, the pre-fl
 });
 
 test('varchar SHRINK (1024 -> 256) where ALL rows FIT: acked shrink applies cleanly, data byte-identical', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 1024, nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 1024, nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('short one'), (NULL), ('${'z'.repeat(200)}')`); // all <= 256
 
-  const shrunk = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 256, nullable: true })])];
+  const shrunk = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { length: 256, nullable: true })])];
   const r = await migrate(sql, shrunk, { allowDestructive: true }); // pre-flight finds 0 over-long -> proceeds
   assert.deepEqual(r.applied.map((c) => c.kind), ['retypeField']);
   const rows = await sql<{ title: string | null }[]>`SELECT title FROM ct_thing ORDER BY length(title) NULLS FIRST`;
@@ -106,11 +106,11 @@ test('varchar SHRINK (1024 -> 256) where ALL rows FIT: acked shrink applies clea
 });
 
 test('enumeration ADD a member: gated; acked rebuilds the CHECK so the NEW member is insertable (FIXED)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live'], nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live'], nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (state) VALUES ('draft'), ('live')`);
 
   // Adding a member changes the value-set -> classifyTypeChange = rewrite -> data-dependent -> gated.
-  const added = [ct('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live', 'archived'], nullable: true })])];
+  const added = [schema('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live', 'archived'], nullable: true })])];
   await assert.rejects(migrate(sql, added), MigrationBlockedError);
 
   const r = await migrate(sql, added, { allowDestructive: true });
@@ -123,10 +123,10 @@ test('enumeration ADD a member: gated; acked rebuilds the CHECK so the NEW membe
 });
 
 test('enumeration REMOVE an UNUSED member: acked rebuilds the CHECK; the removed member is now REJECTED (FIXED)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live', 'archived'], nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live', 'archived'], nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (state) VALUES ('draft'), ('live')`); // NO row uses 'archived'
 
-  const removed = [ct('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live'], nullable: true })])];
+  const removed = [schema('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live'], nullable: true })])];
   const r = await migrate(sql, removed, { allowDestructive: true });
   assert.deepEqual(r.applied.map((c) => c.kind), ['retypeField']);
   assert.deepEqual((await sql<{ state: string }[]>`SELECT state FROM ct_thing ORDER BY state`).map((x) => x.state), ['draft', 'live']); // data intact
@@ -135,10 +135,10 @@ test('enumeration REMOVE an UNUSED member: acked rebuilds the CHECK; the removed
 });
 
 test('enumeration REMOVE an IN-USE member: correctly REJECTED (cannot remove a member a row uses); rolls back', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live', 'archived'], nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live', 'archived'], nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (state) VALUES ('draft'), ('archived')`); // a row USES 'archived'
 
-  const removed = [ct('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live'], nullable: true })])];
+  const removed = [schema('ct_a', 'thing', [f('f_s', 'state', 'enumeration', { values: ['draft', 'live'], nullable: true })])];
   await assert.rejects(migrate(sql, removed), MigrationBlockedError); // gated
   // Acked: the rebuilt CHECK (draft,live) is VALIDATED against the 'archived' row -> ADD CONSTRAINT fails ->
   // the WHOLE migration rolls back. Data intact + the original CHECK is restored (so 'archived' still valid,
@@ -150,11 +150,11 @@ test('enumeration REMOVE an IN-USE member: correctly REJECTED (cannot remove a m
 });
 
 test('decimal precision/scale CHANGE (10,2 -> 12,4): gated; acked cast re-scales the stored value', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 2, nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 2, nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (price) VALUES (123.45), (0.10)`);
 
   // Any numeric precision/scale change is a rewrite -> data-dependent -> gated.
-  const rescaled = [ct('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 12, scale: 4, nullable: true })])];
+  const rescaled = [schema('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 12, scale: 4, nullable: true })])];
   await assert.rejects(migrate(sql, rescaled), MigrationBlockedError);
   // Block changed nothing: still numeric(10,2).
   const before = (await physicalColumns(sql, 'ct_thing')).find((c) => c.name === 'price');
@@ -168,10 +168,10 @@ test('decimal precision/scale CHANGE (10,2 -> 12,4): gated; acked cast re-scales
 });
 
 test('decimal SCALE SHRINK (10,4 -> 10,2) with a ROUNDING row: even acked, the pre-flight FAILS LOUD + rolls back (FIXED)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 4, nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 4, nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (price) VALUES (1.2345), (9.9900)`); // 1.2345 would round, 9.9900 fits
 
-  const narrowed = [ct('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 2, nullable: true })])];
+  const narrowed = [schema('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 2, nullable: true })])];
   await assert.rejects(migrate(sql, narrowed), MigrationBlockedError);
 
   // ACKED no longer rounds silently: the pre-flight finds the 1 row that would lose fractional digits.
@@ -185,10 +185,10 @@ test('decimal SCALE SHRINK (10,4 -> 10,2) with a ROUNDING row: even acked, the p
 });
 
 test('decimal SCALE SHRINK (10,4 -> 10,2) where NO value rounds: acked shrink applies cleanly', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 4, nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 4, nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (price) VALUES (1.2300), (0.5000), (NULL)`); // all exact at scale 2
 
-  const narrowed = [ct('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 2, nullable: true })])];
+  const narrowed = [schema('ct_a', 'thing', [f('f_p', 'price', 'decimal', { precision: 10, scale: 2, nullable: true })])];
   const r = await migrate(sql, narrowed, { allowDestructive: true }); // 0 rounding rows -> proceeds
   assert.deepEqual(r.applied.map((c) => c.kind), ['retypeField']);
   const rows = await sql<{ price: string | null }[]>`SELECT price FROM ct_thing ORDER BY price NULLS FIRST`;
@@ -197,7 +197,7 @@ test('decimal SCALE SHRINK (10,4 -> 10,2) where NO value rounds: acked shrink ap
 
 test('UNCASTABLE string -> integer on NON-NUMERIC rows: gated, and on apply the WHOLE tx ROLLS BACK', async () => {
   await migrate(sql, [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { length: 255, nullable: true }),
       f('f_n', 'note', 'string', { length: 255, nullable: true }),
     ]),
@@ -206,7 +206,7 @@ test('UNCASTABLE string -> integer on NON-NUMERIC rows: gated, and on apply the 
 
   // string -> integer: cms_type + pg_type + engine_type all change -> rewrite -> data-dependent -> gated.
   const retyped = [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'integer', { nullable: true }),
       f('f_n', 'note', 'string', { length: 255, nullable: true }),
     ]),
@@ -237,10 +237,10 @@ test('UNCASTABLE string -> integer on NON-NUMERIC rows: gated, and on apply the 
 });
 
 test('UNCASTABLE string -> integer SUCCEEDS when every row is numeric-looking (cast carries the value)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'code', 'string', { length: 255, nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'code', 'string', { length: 255, nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (code) VALUES ('42'), ('-7'), (NULL)`);
 
-  const retyped = [ct('ct_a', 'thing', [f('f_t', 'code', 'integer', { nullable: true })])];
+  const retyped = [schema('ct_a', 'thing', [f('f_t', 'code', 'integer', { nullable: true })])];
   await assert.rejects(migrate(sql, retyped), MigrationBlockedError); // still data-dependent -> gated
 
   const r = await migrate(sql, retyped, { allowDestructive: true });

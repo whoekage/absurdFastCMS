@@ -12,7 +12,7 @@ delete process.env.S3_BUCKET; // select the LOCAL provider for this run.
 
 const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { startTestServerFromSchemas, ct } = await import('./helpers.ts');
+const { startTestServerFromSchemas, schema } = await import('./helpers.ts');
 const { resetStorageProvider } = await import('../src/storage/index.ts');
 const { pngBytes } = await import('./storage-fixtures.ts');
 
@@ -38,21 +38,21 @@ before(async () => {
   await runMigrations(db.url);
   // Pre-build the full catalog (files-first): product (single media), gallery (multiple media), note (scalar-only).
   const schemas = [
-    ct({
+    schema({
       apiId: 'product',
       fields: [
         { name: 'title', cmsType: 'string', options: { nullable: false } },
         { name: 'cover', cmsType: 'media' },
       ],
     }),
-    ct({
+    schema({
       apiId: 'gallery',
       fields: [
         { name: 'name', cmsType: 'string', options: { nullable: false } },
         { name: 'photos', cmsType: 'media', options: { multiple: true } },
       ],
     }),
-    ct({ apiId: 'note', fields: [{ name: 'body', cmsType: 'text' }] }),
+    schema({ apiId: 'note', fields: [{ name: 'body', cmsType: 'text' }] }),
   ];
   const srv = await startTestServerFromSchemas(sql, schemas);
   base = srv.base;

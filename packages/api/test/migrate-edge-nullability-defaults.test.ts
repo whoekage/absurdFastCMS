@@ -30,7 +30,7 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -54,10 +54,10 @@ async function colNullable(table: string, name: string): Promise<boolean | undef
 }
 
 test('ADD NOT NULL boolean WITH default false -> existing rows backfill to false (safe, not gated)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('a'), ('b')`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_act', 'active', 'boolean', { nullable: false, default: false }),
   ])];
@@ -71,10 +71,10 @@ test('ADD NOT NULL boolean WITH default false -> existing rows backfill to false
 });
 
 test('ADD NOT NULL boolean WITH default true -> backfill to true (default value carried, not just non-null)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('only')`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_ok', 'ok', 'boolean', { nullable: false, default: true }),
   ])];
@@ -84,10 +84,10 @@ test('ADD NOT NULL boolean WITH default true -> backfill to true (default value 
 });
 
 test('ADD NOT NULL integer WITH default 7 -> existing rows backfill to the integer default', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('x'), ('y'), ('z')`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_rk', 'rank', 'integer', { nullable: false, default: 7 }),
   ])];
@@ -98,11 +98,11 @@ test('ADD NOT NULL integer WITH default 7 -> existing rows backfill to the integ
 });
 
 test('ADD NOT NULL biginteger WITH default -> existing rows backfill (i64 default carried losslessly)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('big')`);
 
   // a value beyond i32 to prove the i64 path; supplied as a decimal-digit string (validateDefault i64).
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_cnt', 'count', 'biginteger', { nullable: false, default: '9007199254740993' }),
   ])];
@@ -112,10 +112,10 @@ test('ADD NOT NULL biginteger WITH default -> existing rows backfill (i64 defaul
 });
 
 test('ADD NOT NULL float WITH default -> existing rows backfill to the float default', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('p')`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_score', 'score', 'float', { nullable: false, default: 1.5 }),
   ])];
@@ -125,10 +125,10 @@ test('ADD NOT NULL float WITH default -> existing rows backfill to the float def
 });
 
 test('ADD NOT NULL decimal WITH default -> existing rows backfill to the decimal default', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('m')`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_amt', 'amount', 'decimal', { nullable: false, default: '12.34', precision: 10, scale: 2 }),
   ])];
@@ -138,10 +138,10 @@ test('ADD NOT NULL decimal WITH default -> existing rows backfill to the decimal
 });
 
 test('ADD NOT NULL string WITH default -> existing rows backfill to the string default', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('one'), ('two')`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_slug', 'slug', 'string', { nullable: false, default: 'untitled' }),
   ])];
@@ -151,10 +151,10 @@ test('ADD NOT NULL string WITH default -> existing rows backfill to the string d
 });
 
 test('ADD NOT NULL enumeration WITH default -> backfill to the enum member (CHECK still satisfied)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('e1'), ('e2')`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_st', 'state', 'enumeration', { nullable: false, default: 'draft', values: ['draft', 'review', 'live'] }),
   ])];
@@ -167,10 +167,10 @@ test('ADD NOT NULL enumeration WITH default -> backfill to the enum member (CHEC
 });
 
 test('ADD NOT NULL WITHOUT default on a POPULATED table is BLOCKED (data-dependent); nothing changes', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('row1')`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_rk', 'rank', 'integer', { nullable: false }), // NOT NULL, no default
   ])];
@@ -183,10 +183,10 @@ test('ADD NOT NULL WITHOUT default on a POPULATED table is BLOCKED (data-depende
 });
 
 test('ADD NOT NULL WITHOUT default + allowDestructive on POPULATED table -> PG 23502 -> ROLLBACK (no partial apply)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('keepme')`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_rk', 'rank', 'integer', { nullable: false }),
   ])];
@@ -201,7 +201,7 @@ test('ADD NOT NULL WITHOUT default + allowDestructive on POPULATED table -> PG 2
 
   // Snapshot unchanged: re-running with a default now re-computes the addField (the failed apply was not
   // recorded). If it succeeds and backfills, the prior apply genuinely rolled back.
-  const fixed = [ct('ct_a', 'thing', [
+  const fixed = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_rk', 'rank', 'integer', { nullable: false, default: 0 }),
   ])];
@@ -212,10 +212,10 @@ test('ADD NOT NULL WITHOUT default + allowDestructive on POPULATED table -> PG 2
 });
 
 test('ADD NOT NULL WITHOUT default on an EMPTY table -> applies (no rows to violate the constraint)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   // intentionally NO rows inserted
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_rk', 'rank', 'integer', { nullable: false }),
   ])];
@@ -230,13 +230,13 @@ test('ADD NOT NULL WITHOUT default on an EMPTY table -> applies (no rows to viol
 });
 
 test('FLIP nullable -> NOT NULL with SOME NULL rows is BLOCKED (data-dependent); column + rows unchanged', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [
+  await migrate(sql, [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_n', 'note', 'text', { nullable: true }),
   ])]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('a', 'has-note'), ('b', NULL)`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_n', 'note', 'text', { nullable: false }), // flip to NOT NULL
   ])];
@@ -249,13 +249,13 @@ test('FLIP nullable -> NOT NULL with SOME NULL rows is BLOCKED (data-dependent);
 });
 
 test('FLIP nullable -> NOT NULL with a NULL row + allowDestructive -> PG 23502 -> ROLLBACK (data intact)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [
+  await migrate(sql, [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_n', 'note', 'text', { nullable: true }),
   ])]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('a', 'kept'), ('b', NULL)`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_n', 'note', 'text', { nullable: false }),
   ])];
@@ -269,13 +269,13 @@ test('FLIP nullable -> NOT NULL with a NULL row + allowDestructive -> PG 23502 -
 });
 
 test('FLIP nullable -> NOT NULL when EVERY row is non-NULL + ack -> succeeds, data intact, column NOT NULL', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [
+  await migrate(sql, [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_n', 'note', 'text', { nullable: true }),
   ])]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('a', 'x'), ('b', 'y')`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_n', 'note', 'text', { nullable: false }),
   ])];
@@ -291,14 +291,14 @@ test('FLIP nullable -> NOT NULL when EVERY row is non-NULL + ack -> succeeds, da
 });
 
 test('FLIP NOT NULL -> nullable is SAFE (no ack): DROP NOT NULL, data intact, NULL insert now allowed', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [
+  await migrate(sql, [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_n', 'note', 'text', { nullable: false }),
   ])]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('a', 'present')`);
   assert.equal(await colNullable('ct_thing', 'note'), false, 'precondition: note starts NOT NULL');
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_n', 'note', 'text', { nullable: true }), // loosen to nullable
   ])];
@@ -315,10 +315,10 @@ test('FLIP NOT NULL -> nullable is SAFE (no ack): DROP NOT NULL, data intact, NU
 });
 
 test('default is NOT a runtime constraint: adding NOT NULL+default does not force later inserts to the default', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('old')`);
 
-  const next = [ct('ct_a', 'thing', [
+  const next = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_rk', 'rank', 'integer', { nullable: false, default: 100 }),
   ])];

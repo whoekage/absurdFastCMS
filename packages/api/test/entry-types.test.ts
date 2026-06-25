@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import type { ListenToken } from '../src/http/uws.adapter.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { rawField, startTestServerFromSchemas, ct } from './helpers.ts';
+import { rawField, startTestServerFromSchemas, schema } from './helpers.ts';
 
 /**
  * ENTRY-TYPES SLICE — write round-trip for i64/decimal/json over the REAL uWS + Postgres path. A
@@ -20,7 +20,7 @@ let close: (t: ListenToken) => void;
 before(async () => {
   db = await createFileDatabase('et');
   sql = db.sql;
-  const server = await startTestServerFromSchemas(sql, [ct({
+  const server = await startTestServerFromSchemas(sql, [schema({
     apiId: 'metric',
     fields: [
       { name: 'big', cmsType: 'biginteger', options: { nullable: false } },

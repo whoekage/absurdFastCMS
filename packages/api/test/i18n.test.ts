@@ -6,7 +6,7 @@ import { createServer, type ListenToken } from '../src/http/uws.adapter.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
 import type { Schema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { freePort, physicalColumns, ct, ARTICLE_SCHEMA } from './helpers.ts';
+import { freePort, physicalColumns, schema, ARTICLE_SCHEMA } from './helpers.ts';
 
 /**
  * be-06 i18n — READ-SIDE + SCHEMA, end-to-end over a REAL uWS server + REAL Postgres (.env.test), no
@@ -36,7 +36,7 @@ before(async () => {
   db = await createFileDatabase('i18n');
   sql = db.sql;
   // A NON-i18n type (the seed article) to assert byte-identity is unaffected + an i18n-ENABLED `page`.
-  const page = ct({
+  const page = schema({
     apiId: 'page',
     fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }],
     i18n: true,
@@ -199,7 +199,7 @@ async function getJson(path: string): Promise<any> {
 
 test('write-side: plain create -> variant create (same document_id, distinct id+locale) -> locale reads', async () => {
   // A dedicated i18n type: localized `title`, SHARED `summary`, plus draft_publish (compose test below).
-  const doc = ct({
+  const doc = schema({
     apiId: 'doc',
     fields: [
       { name: 'title', cmsType: 'string', options: { nullable: false }, localized: true },

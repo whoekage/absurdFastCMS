@@ -14,13 +14,13 @@ delete process.env.S3_BUCKET; // select the LOCAL provider for this run.
 
 const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { cleanCatalog, ct, startTestServerFromSchemas } = await import('./helpers.ts');
+const { cleanCatalog, schema, startTestServerFromSchemas } = await import('./helpers.ts');
 const { mintId } = await import('../src/db/schema/model.ts');
 const { resetStorageProvider } = await import('../src/storage/index.ts');
 const { pngBytes } = await import('./storage-fixtures.ts');
 
 /** Build an in-memory ComponentSchema (mints the component + field ids). Fields use the files-first `type`. */
-function cmp(apiId: string, fields: { name: string; type: FieldType; options?: FieldOptions }[]): ComponentSchema {
+function component(apiId: string, fields: { name: string; type: FieldType; options?: FieldOptions }[]): ComponentSchema {
   return { id: mintId('cmp'), apiId, fields: fields.map((f): FieldSchema => ({ id: mintId('f'), ...f })) };
 }
 
@@ -86,11 +86,11 @@ async function uploadAsset(w: number, h: number): Promise<Asset> {
 
 // --- W1: SINGLE component value validated, stored, read back with a stable instance id ---------
 test('W1 single component value validates + stores + reads back with a stable instance id', async () => {
-  const seo = cmp('seo', [
+  const seo = component('seo', [
     { name: 'metaTitle', type: 'string', options: { nullable: false } },
     { name: 'metaDescription', type: 'text' },
   ]);
-  const page = ct({
+  const page = schema({
     apiId: 'page',
     fields: [
       { name: 'title', cmsType: 'string', options: { nullable: false } },
@@ -114,8 +114,8 @@ test('W1 single component value validates + stores + reads back with a stable in
 
 // --- W2: repeatable component preserves order + assigns distinct ids ---------------------------
 test('W2 repeatable component preserves array order and assigns distinct instance ids', async () => {
-  const item = cmp('item', [{ name: 'label', type: 'string', options: { nullable: false } }]);
-  const list = ct({ apiId: 'list', fields: [{ name: 'items', cmsType: 'component-repeatable', options: { component: 'item' } }] });
+  const item = component('item', [{ name: 'label', type: 'string', options: { nullable: false } }]);
+  const list = schema({ apiId: 'list', fields: [{ name: 'items', cmsType: 'component-repeatable', options: { component: 'item' } }] });
   await boot([list], [item]);
 
   const created = (await (await POST('/list', { items: [{ label: 'a' }, { label: 'b' }, { label: 'c' }] })).json()) as {
@@ -133,10 +133,10 @@ test('W2 repeatable component preserves array order and assigns distinct instanc
 test('W3 dynamic zone validates __component, preserves order, rejects disallowed/unknown blocks', async () => {
   // banner is a REAL component but deliberately LEFT OUT of the dz allowed-set, so the test can assert a
   // real-but-disallowed block 400s distinctly from an unknown-component block.
-  const hero = cmp('hero', [{ name: 'headline', type: 'string', options: { nullable: false } }]);
-  const quote = cmp('quote', [{ name: 'text', type: 'string', options: { nullable: false } }]);
-  const banner = cmp('banner', [{ name: 'src', type: 'string' }]);
-  const article = ct({ apiId: 'article', fields: [{ name: 'body', cmsType: 'dynamiczone', options: { components: ['hero', 'quote'] } }] });
+  const hero = component('hero', [{ name: 'headline', type: 'string', options: { nullable: false } }]);
+  const quote = component('quote', [{ name: 'text', type: 'string', options: { nullable: false } }]);
+  const banner = component('banner', [{ name: 'src', type: 'string' }]);
+  const article = schema({ apiId: 'article', fields: [{ name: 'body', cmsType: 'dynamiczone', options: { components: ['hero', 'quote'] } }] });
   await boot([article], [hero, quote, banner]);
 
   const created = (await (await POST('/article', {
@@ -165,8 +165,8 @@ test('W3 dynamic zone validates __component, preserves order, rejects disallowed
 
 // --- W4: unknown nested field rejected with a scoped path --------------------------------------
 test('W4 an unknown field inside a component is rejected with a scoped-path 400', async () => {
-  const seo = cmp('seo', [{ name: 'metaTitle', type: 'string' }]);
-  const page = ct({ apiId: 'page', fields: [{ name: 'seo', cmsType: 'component', options: { component: 'seo' } }] });
+  const seo = component('seo', [{ name: 'metaTitle', type: 'string' }]);
+  const page = schema({ apiId: 'page', fields: [{ name: 'seo', cmsType: 'component', options: { component: 'seo' } }] });
   await boot([page], [seo]);
   const r = await POST('/page', { seo: { metaTitle: 'ok', bogus: 'nope' } });
   const rText = await r.text();
@@ -176,8 +176,8 @@ test('W4 an unknown field inside a component is rejected with a scoped-path 400'
 
 // --- W5: missing required nested field rejected with a scoped path -----------------------------
 test('W5 a missing required field inside a component is rejected (scoped path)', async () => {
-  const seo = cmp('seo', [{ name: 'metaTitle', type: 'string', options: { nullable: false } }]);
-  const page = ct({ apiId: 'page', fields: [{ name: 'seo', cmsType: 'component', options: { component: 'seo' } }] });
+  const seo = component('seo', [{ name: 'metaTitle', type: 'string', options: { nullable: false } }]);
+  const page = schema({ apiId: 'page', fields: [{ name: 'seo', cmsType: 'component', options: { component: 'seo' } }] });
   await boot([page], [seo]);
   const r = await POST('/page', { seo: { metaTitle: null } }); // explicit null on a non-nullable nested field.
   assert.equal(r.status, 400, await r.text());
@@ -185,13 +185,13 @@ test('W5 a missing required field inside a component is rejected (scoped path)',
 
 // --- W6: wire fidelity INSIDE a component (bigint / decimal / datetime / nested json) ----------
 test('W6 wire fidelity holds inside a component value', async () => {
-  const metrics = cmp('metrics', [
+  const metrics = component('metrics', [
     { name: 'big', type: 'biginteger' },
     { name: 'price', type: 'decimal', options: { precision: 12, scale: 2 } },
     { name: 'at', type: 'datetime' },
     { name: 'blob', type: 'json' },
   ]);
-  const doc = ct({ apiId: 'doc', fields: [{ name: 'm', cmsType: 'component', options: { component: 'metrics' } }] });
+  const doc = schema({ apiId: 'doc', fields: [{ name: 'm', cmsType: 'component', options: { component: 'metrics' } }] });
   await boot([doc], [metrics]);
 
   const bigVal = '9007199254740993'; // > 2^53, must survive as a STRING.
@@ -213,14 +213,14 @@ test('W6 wire fidelity holds inside a component value', async () => {
 test('W7 too-deep component nesting is rejected (depth cap, scoped 400)', async () => {
   // node -> node -> node ... ; the depth cap (10) bites for a hand-built deep tree.
   // Nest a chain of distinct components (12 deep) so a single write recurses past the cap.
-  const components = [cmp('node', [{ name: 'label', type: 'string' }])];
+  const components = [component('node', [{ name: 'label', type: 'string' }])];
   let prev = 'node';
   const names = ['n0', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8', 'n9', 'n10', 'n11'];
   for (const name of names) {
-    components.push(cmp(name, [{ name: 'child', type: 'component', options: { component: prev } }, { name: 'label', type: 'string' }]));
+    components.push(component(name, [{ name: 'child', type: 'component', options: { component: prev } }, { name: 'label', type: 'string' }]));
     prev = name;
   }
-  const tree = ct({ apiId: 'tree', fields: [{ name: 'root', cmsType: 'component', options: { component: prev } }] });
+  const tree = schema({ apiId: 'tree', fields: [{ name: 'root', cmsType: 'component', options: { component: prev } }] });
   await boot([tree], components);
 
   // Build a value nested 12 deep (root -> child -> child ... -> node).
@@ -234,11 +234,11 @@ test('W7 too-deep component nesting is rejected (depth cap, scoped 400)', async 
 
 // --- W8: inline media ref inside a component — existence-checked + populated -------------------
 test('W8 an inline media ref inside a component is existence-checked + populated on read', async () => {
-  const card = cmp('card', [
+  const card = component('card', [
     { name: 'title', type: 'string' },
     { name: 'image', type: 'media' },
   ]);
-  const gallery = ct({ apiId: 'gallery', fields: [{ name: 'card', cmsType: 'component', options: { component: 'card' } }] });
+  const gallery = schema({ apiId: 'gallery', fields: [{ name: 'card', cmsType: 'component', options: { component: 'card' } }] });
   await boot([gallery], [card]);
 
   const asset = await uploadAsset(20, 30);
@@ -268,8 +268,8 @@ test('W8 an inline media ref inside a component is existence-checked + populated
 
 // --- W9: inline media inside a REPEATABLE + DYNAMIC ZONE populates across rows ------------------
 test('W9 inline media inside repeatable + dynamic-zone populates correctly', async () => {
-  const slide = cmp('slide', [{ name: 'pic', type: 'media' }]);
-  const deck = ct({ apiId: 'deck', fields: [{ name: 'slides', cmsType: 'component-repeatable', options: { component: 'slide' } }] });
+  const slide = component('slide', [{ name: 'pic', type: 'media' }]);
+  const deck = schema({ apiId: 'deck', fields: [{ name: 'slides', cmsType: 'component-repeatable', options: { component: 'slide' } }] });
   await boot([deck], [slide]);
   const a1 = await uploadAsset(10, 10);
   const a2 = await uploadAsset(11, 11);
@@ -284,7 +284,7 @@ test('W9 inline media inside repeatable + dynamic-zone populates correctly', asy
 
 // --- W10: BYTE-IDENTICAL — a content type with NO component field is untouched ------------------
 test('W10 a content type with NO component field reads identically (no populate effect)', async () => {
-  const plainType = ct({
+  const plainType = schema({
     apiId: 'plain',
     fields: [
       { name: 'title', cmsType: 'string', options: { nullable: false } },
@@ -304,8 +304,8 @@ test('W10 a content type with NO component field reads identically (no populate 
 
 // --- W11: oversized component instance is rejected ---------------------------------------------
 test('W11 an oversized component instance is rejected (size cap, 400)', async () => {
-  const blobby = cmp('blobby', [{ name: 'data', type: 'json' }]);
-  const big = ct({ apiId: 'big', fields: [{ name: 'b', cmsType: 'component', options: { component: 'blobby' } }] });
+  const blobby = component('blobby', [{ name: 'data', type: 'json' }]);
+  const big = schema({ apiId: 'big', fields: [{ name: 'b', cmsType: 'component', options: { component: 'blobby' } }] });
   await boot([big], [blobby]);
   // The request body cap is 1 MiB; the per-instance cap is 256 KiB. A ~400 KiB instance trips the instance
   // cap with a clean 400 (under the body cap, so it reaches the validator).

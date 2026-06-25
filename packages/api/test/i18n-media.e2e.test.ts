@@ -12,7 +12,7 @@ delete process.env.S3_BUCKET; // select the LOCAL provider for this run.
 
 const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { startTestServerFromSchemas, ct } = await import('./helpers.ts');
+const { startTestServerFromSchemas, schema } = await import('./helpers.ts');
 const { resetStorageProvider } = await import('../src/storage/index.ts');
 const { pngBytes } = await import('./storage-fixtures.ts');
 
@@ -57,7 +57,7 @@ before(async () => {
   // i18n type with: a localized title, a SHARED MULTIPLE media field (the crashing case), and a SHARED
   // SINGLE media field (the int4 case that already worked — asserted still fine), plus a LOCALIZED media
   // field (overlaid per variant via the request body).
-  const pageSchema = ct({
+  const pageSchema = schema({
     apiId: 'page',
     i18n: true,
     fields: [

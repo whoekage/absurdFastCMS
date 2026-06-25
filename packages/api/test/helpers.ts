@@ -197,17 +197,17 @@ export async function startTestServerFromSchemas(
 /**
  * Convert the old `createContentType` spec shape (`{ apiId, fields:[{name, cmsType, options}], relations,
  * draftPublish, i18n }`) into a files-first {@link Schema} (stable ids minted, `cmsType`→`type`).
- * Lets a meta-path test migrate by wrapping its specs in `ct(...)` + `startTestServerFromSchemas` instead of
+ * Lets a meta-path test migrate by wrapping its specs in `schema(...)` + `startTestServerFromSchemas` instead of
  * imperative `createContentType` + `addRelation` calls.
  */
-export interface CtSpec {
+export interface SchemaSpec {
   apiId: string;
   fields: { name: string; cmsType: FieldType; options?: FieldOptions; localized?: boolean }[];
   relations?: { field: string; kind: RelationKind; target: string; inverseField?: string }[];
   draftPublish?: boolean;
   i18n?: boolean;
 }
-export function ct(spec: CtSpec): Schema {
+export function schema(spec: SchemaSpec): Schema {
   const out: Schema = {
     id: mintId('ct'),
     apiId: spec.apiId,

@@ -19,7 +19,7 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -47,7 +47,7 @@ async function appliedRows(s: Sql): Promise<{ type_id: string; api_id: string; s
 test('HEADLINE lifecycle: create -> rename -> add+default -> retype -> drop -> idempotent re-run, data intact throughout', async () => {
   // 1) CREATE the entity.
   const v1 = [
-    ct('ct_a', 'article', [
+    schema('ct_a', 'article', [
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_b', 'body', 'text', { nullable: true }),
       f('f_v', 'views', 'integer', { nullable: true }),
@@ -65,7 +65,7 @@ test('HEADLINE lifecycle: create -> rename -> add+default -> retype -> drop -> i
 
   // 3) MIGRATE: rename `title` -> `headline` (same field id f_t => RENAME COLUMN, lossless).
   const v2 = [
-    ct('ct_a', 'article', [
+    schema('ct_a', 'article', [
       f('f_t', 'headline', 'string', { nullable: true }),
       f('f_b', 'body', 'text', { nullable: true }),
       f('f_v', 'views', 'integer', { nullable: true }),
@@ -83,7 +83,7 @@ test('HEADLINE lifecycle: create -> rename -> add+default -> retype -> drop -> i
 
   // 4) MIGRATE: add `active boolean NOT NULL DEFAULT false` (safe — default backfills existing rows).
   const v3 = [
-    ct('ct_a', 'article', [
+    schema('ct_a', 'article', [
       f('f_t', 'headline', 'string', { nullable: true }),
       f('f_b', 'body', 'text', { nullable: true }),
       f('f_v', 'views', 'integer', { nullable: true }),
@@ -100,7 +100,7 @@ test('HEADLINE lifecycle: create -> rename -> add+default -> retype -> drop -> i
 
   // 5) MIGRATE: retype `views` integer -> biginteger (rewrite = data-dependent => needs the ack).
   const v4 = [
-    ct('ct_a', 'article', [
+    schema('ct_a', 'article', [
       f('f_t', 'headline', 'string', { nullable: true }),
       f('f_b', 'body', 'text', { nullable: true }),
       f('f_v', 'views', 'biginteger', { nullable: true }),
@@ -124,7 +124,7 @@ test('HEADLINE lifecycle: create -> rename -> add+default -> retype -> drop -> i
 
   // 6) MIGRATE: drop `body` (destructive => gated; allowed with the ack). The OTHER columns' data intact.
   const v5 = [
-    ct('ct_a', 'article', [
+    schema('ct_a', 'article', [
       f('f_t', 'headline', 'string', { nullable: true }),
       f('f_v', 'views', 'biginteger', { nullable: true }),
       f('f_act', 'active', 'boolean', { nullable: false, default: false }),
@@ -161,7 +161,7 @@ test('HEADLINE lifecycle: create -> rename -> add+default -> retype -> drop -> i
 
 test('migrating to the EXACT current state is a no-op (diff(x,x) empty) — even with rows present', async () => {
   const v = [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_n', 'note', 'text', { nullable: true }),
     ]),
@@ -171,7 +171,7 @@ test('migrating to the EXACT current state is a no-op (diff(x,x) empty) — even
 
   // identical IR (fresh object graph, same ids/names/types) => empty change-set => no-op.
   const same = [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_n', 'note', 'text', { nullable: true }),
     ]),
@@ -187,14 +187,14 @@ test('migrating to the EXACT current state is a no-op (diff(x,x) empty) — even
 
 test('re-running a DESTRUCTIVE migration is itself a no-op (the drop is not re-attempted)', async () => {
   await migrate(sql, [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_n', 'note', 'text', { nullable: true }),
     ]),
   ]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('a', 'b')`);
 
-  const dropped = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
+  const dropped = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
   const r1 = await migrate(sql, dropped, { allowDestructive: true });
   assert.deepEqual(r1.applied.map((c) => c.kind), ['dropField']);
 
@@ -211,13 +211,13 @@ test('re-running a DESTRUCTIVE migration is itself a no-op (the drop is not re-a
 });
 
 test('a BLOCKED migration mutates NOTHING: not the table, not the applied snapshot (re-run still sees the gate)', async () => {
-  const v1 = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])];
+  const v1 = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])];
   await migrate(sql, v1);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('x', 'y')`);
 
   const snapBefore = await appliedRows(sql);
 
-  const dropped = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
+  const dropped = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
   await assert.rejects(migrate(sql, dropped), MigrationBlockedError);
 
   // table unchanged.
@@ -239,7 +239,7 @@ test('a BLOCKED migration mutates NOTHING: not the table, not the applied snapsh
 test('ROLLBACK atomicity: a multi-op migration that fails its data-dependent op leaves NO partial apply', async () => {
   // start: title + a free-text `code` column carrying a non-numeric value.
   await migrate(sql, [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_c', 'code', 'string', { nullable: true }),
     ]),
@@ -249,7 +249,7 @@ test('ROLLBACK atomicity: a multi-op migration that fails its data-dependent op 
   // one migration with TWO ops: a safe rename (title->headline) AND a rewrite-cast (code string->integer)
   // whose cast FAILS on the real rows. The cast aborts the tx => the rename must roll back too.
   const failing = [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'headline', 'string', { nullable: true }),
       f('f_c', 'code', 'integer', { nullable: true }),
     ]),
@@ -271,14 +271,14 @@ test('ROLLBACK atomicity: a multi-op migration that fails its data-dependent op 
 });
 
 test('rename round-trip (A->B->A) preserves data and lands a self-consistent snapshot', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('roundtrip')`);
 
   // A -> B
-  const r1 = await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'headline', 'string', { nullable: true })])]);
+  const r1 = await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'headline', 'string', { nullable: true })])]);
   assert.deepEqual(r1.applied.map((c) => c.kind), ['renameField']);
   // B -> A (back to the original name)
-  const r2 = await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  const r2 = await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   assert.deepEqual(r2.applied.map((c) => c.kind), ['renameField']);
 
   const cols = (await physicalColumns(sql, 'ct_thing')).map((c) => c.name);
@@ -287,19 +287,19 @@ test('rename round-trip (A->B->A) preserves data and lands a self-consistent sna
   assert.equal(row?.title, 'roundtrip'); // never lost across two renames
 
   // re-running the final state is a clean no-op (snapshot agrees with the file).
-  const r3 = await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  const r3 = await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   assert.equal(r3.noop, true);
   const applied = await appliedRows(sql);
   assert.equal(applied[0]!.schema.fields[0]!.name, 'title');
 });
 
 test('rename + add in ONE migration: both apply atomically, old rows survive under the new name, new column backfills', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('one'), ('two')`);
 
   // one step: rename title->name AND add slug NOT NULL DEFAULT 'x'.
   const next = [
-    ct('ct_a', 'thing', [
+    schema('ct_a', 'thing', [
       f('f_t', 'name', 'string', { nullable: true }),
       f('f_s', 'slug', 'string', { nullable: false, default: 'x' }),
     ]),

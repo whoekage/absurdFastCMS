@@ -16,7 +16,7 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -35,7 +35,7 @@ after(async () => {
 });
 
 test('fresh migrate creates the table; a second run is a no-op (idempotent)', async () => {
-  const next = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
+  const next = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
   const r1 = await migrate(sql, next);
   assert.equal(r1.noop, false);
   assert.equal(await tableExists(sql, 'ct_thing'), true);
@@ -46,10 +46,10 @@ test('fresh migrate creates the table; a second run is a no-op (idempotent)', as
 });
 
 test('RENAME preserves data: id-matched name change → RENAME COLUMN, rows intact', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('hello')`);
 
-  const r = await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'headline', 'string', { nullable: true })])]); // same id f_t
+  const r = await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'headline', 'string', { nullable: true })])]); // same id f_t
   assert.deepEqual(r.applied.map((c) => c.kind), ['renameField']);
 
   const cols = (await physicalColumns(sql, 'ct_thing')).map((c) => c.name);
@@ -59,10 +59,10 @@ test('RENAME preserves data: id-matched name change → RENAME COLUMN, rows inta
 });
 
 test('RENAME TYPE preserves data: apiId change → RENAME TABLE, rows intact', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('keep')`);
 
-  const r = await migrate(sql, [ct('ct_a', 'gadget', [f('f_t', 'title', 'string', { nullable: true })])]); // same id ct_a
+  const r = await migrate(sql, [schema('ct_a', 'gadget', [f('f_t', 'title', 'string', { nullable: true })])]); // same id ct_a
   assert.deepEqual(r.applied.map((c) => c.kind), ['renameType']);
   assert.equal(await tableExists(sql, 'ct_gadget'), true);
   assert.equal(await tableExists(sql, 'ct_thing'), false);
@@ -71,10 +71,10 @@ test('RENAME TYPE preserves data: apiId change → RENAME TABLE, rows intact', a
 });
 
 test('DROP field is blocked without ack, allowed with allowDestructive', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('a', 'b')`);
 
-  const dropped = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
+  const dropped = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])];
   await assert.rejects(migrate(sql, dropped), MigrationBlockedError);
   assert.ok((await physicalColumns(sql, 'ct_thing')).some((c) => c.name === 'note'), 'blocked migration did not apply');
 
@@ -84,24 +84,24 @@ test('DROP field is blocked without ack, allowed with allowDestructive', async (
 });
 
 test('ADD NOT NULL with a default applies (safe); without a default is gated (data-dependent)', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('x')`);
 
-  const withDefault = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_a', 'active', 'boolean', { nullable: false, default: false })])];
+  const withDefault = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_a', 'active', 'boolean', { nullable: false, default: false })])];
   const r = await migrate(sql, withDefault);
   assert.deepEqual(r.applied.map((c) => c.kind), ['addField']);
   const [row] = await sql<{ active: boolean }[]>`SELECT active FROM ct_thing`;
   assert.equal(row?.active, false); // existing row backfilled to the default
 
-  const noDefault = [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_a', 'active', 'boolean', { nullable: false, default: false }), f('f_r', 'rank', 'integer', { nullable: false })])];
+  const noDefault = [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_a', 'active', 'boolean', { nullable: false, default: false }), f('f_r', 'rank', 'integer', { nullable: false })])];
   await assert.rejects(migrate(sql, noDefault), MigrationBlockedError);
 });
 
 test('RETYPE is gated as data-dependent and preserves data when acked', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_v', 'views', 'integer', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_v', 'views', 'integer', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (views) VALUES (5)`);
 
-  const widened = [ct('ct_a', 'thing', [f('f_v', 'views', 'biginteger', { nullable: true })])];
+  const widened = [schema('ct_a', 'thing', [f('f_v', 'views', 'biginteger', { nullable: true })])];
   await assert.rejects(migrate(sql, widened), MigrationBlockedError);
 
   const r = await migrate(sql, widened, { allowDestructive: true });
@@ -139,9 +139,9 @@ test('relation: migrate creates the link table after both ct_ tables; idempotent
 });
 
 test('migrateLint reports the blocked changes WITHOUT applying', async () => {
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
 
-  const { changes, blocked } = await migrateLint(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
+  const { changes, blocked } = await migrateLint(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   assert.deepEqual(changes.map((c) => c.kind), ['dropField']);
   assert.equal(blocked.length, 1);
   assert.ok((await physicalColumns(sql, 'ct_thing')).some((c) => c.name === 'note')); // lint applied nothing

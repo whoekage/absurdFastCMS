@@ -5,7 +5,7 @@ import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer, type ListenToken } from '../src/http/uws.adapter.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { freePort, physicalColumns, ct, ARTICLE_SCHEMA } from './helpers.ts';
+import { freePort, physicalColumns, schema, ARTICLE_SCHEMA } from './helpers.ts';
 
 /**
  * MODEL A DRAFT & PUBLISH — per-type opt-in, end-to-end over a REAL uWS server + REAL Postgres
@@ -32,7 +32,7 @@ before(async () => {
   // A NON-D&P type (the seed article) to assert byte-identity is unaffected, + a D&P-ENABLED `post`. Note
   // the USER field `publishedAt` (camelCase) ALSO present, to prove it does NOT collide with the snake_case
   // system `published_at` column.
-  const post = ct({
+  const post = schema({
     apiId: 'post',
     fields: [
       { name: 'title', cmsType: 'string', options: { nullable: false } },

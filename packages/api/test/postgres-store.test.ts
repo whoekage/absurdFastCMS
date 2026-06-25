@@ -6,7 +6,7 @@ import { migrate } from '../src/db/schema/migrate.ts';
 import type { Schema } from '../src/db/schema/model.ts';
 import { handleRequest } from '../src/http/read.router.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { ct } from './helpers.ts';
+import { schema } from './helpers.ts';
 
 /**
  * POSTGRES-STORE SLICE — the boot load path, end-to-end against a REAL Postgres (no mocks), on the
@@ -42,7 +42,7 @@ const ROWS: SeedRow[] = [
 before(async () => {
   db = await createFileDatabase('ps');
   sql = db.sql;
-  articleSchema = ct({
+  articleSchema = schema({
     apiId: 'article',
     fields: [
       { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },

@@ -9,7 +9,7 @@ import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer } from '../src/http/uws.adapter.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
-import { freePort, ct } from './helpers.ts';
+import { freePort, schema } from './helpers.ts';
 import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
 import { buildAuth } from '../src/auth/auth.ts';
 import { SessionCache } from '../src/auth/session.cache.ts';
@@ -42,7 +42,7 @@ let close: (t: unknown) => void;
 const PW = 'correct-horse-battery-staple';
 
 /** The single incidental write surface the API-key scope tests gate against (content.create/delete). */
-const NOTE_SCHEMA = ct({ apiId: 'note', fields: [{ name: 'title', cmsType: 'string' }] });
+const NOTE_SCHEMA = schema({ apiId: 'note', fields: [{ name: 'title', cmsType: 'string' }] });
 
 /** Sign up a fresh user; returns its session Cookie header. */
 async function signUp(email: string): Promise<string> {

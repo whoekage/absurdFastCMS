@@ -10,7 +10,7 @@ import { Engine } from '../src/store/engine.ts';
 import { CursorCodec } from '../src/store/cursor.codec.ts';
 import { handleRequest } from '../src/http/read.router.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { cleanCatalog, ct, rawField } from './helpers.ts';
+import { cleanCatalog, schema, rawField } from './helpers.ts';
 
 /**
  * RELATIONS SLICE 5 — POPULATE EXECUTION, end-to-end against a REAL Postgres (no mocks).
@@ -79,8 +79,8 @@ function recordOf(engine: Engine, type: string, id: number): Record<string, unkn
 
 test('to-one (manyToOne) populate nests a single OBJECT', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('book', 'author');
@@ -105,8 +105,8 @@ test('to-one (manyToOne) populate nests a single OBJECT', async () => {
 
 test('to-one populate with no edge emits null (key present), both manyToOne and oneToOne', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({
       apiId: 'book',
       fields: [{ name: 'title', cmsType: 'string' }],
       relations: [
@@ -138,8 +138,8 @@ test('to-one populate with no edge emits null (key present), both manyToOne and 
 
 test('to-many populate nests an ARRAY (oneToMany and manyToMany), members in edge-insertion order', async () => {
   const schemas = [
-    ct({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
+    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
   ];
   await applySchemas(schemas);
   const linkT = deriveLinkTableName('book', 'tags');
@@ -164,8 +164,8 @@ test('to-many populate nests an ARRAY (oneToMany and manyToMany), members in edg
   // oneToMany variant: author has many books.
   await cleanCatalog(sql);
   const schemasB = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'books', kind: 'oneToMany', target: 'book' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'books', kind: 'oneToMany', target: 'book' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] }),
   ];
   await applySchemas(schemasB);
   const linkO = deriveLinkTableName('author', 'books');
@@ -187,8 +187,8 @@ test('to-many populate nests an ARRAY (oneToMany and manyToMany), members in edg
 
 test('to-many populate with zero edges emits []', async () => {
   const schemas = [
-    ct({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
+    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
   ];
   await applySchemas(schemas);
   const b1 = await insertRow('ct_book', 'title', 'Untagged');
@@ -208,8 +208,8 @@ test('to-many populate with zero edges emits []', async () => {
 test('two-way: populate via the inverse field gives an ARRAY (inverse kind); owner field gives an OBJECT', async () => {
   // book.author manyToOne; inverse author.books -> oneToMany (to-many array).
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('book', 'author');
@@ -244,8 +244,8 @@ test('two-way: populate via the inverse field gives an ARRAY (inverse kind); own
 
 test('depth-2 nested populate: author -> books (array) each book -> author (object)', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('book', 'author');
@@ -276,8 +276,8 @@ test('depth-2 nested populate: author -> books (array) each book -> author (obje
 
 test('depth-cap: a 3-hop request stops at the cap; the depth-3 object equals the frozen related slice', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('book', 'author');
@@ -318,7 +318,7 @@ test('depth-cap: a 3-hop request stops at the cap; the depth-3 object equals the
 
 test('self-referential populate terminates by the depth cap (no throw, no hang)', async () => {
   const schemas = [
-    ct({ apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'category' }] }),
+    schema({ apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'category' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('category', 'parent');
@@ -346,8 +346,8 @@ test('self-referential populate terminates by the depth cap (no throw, no hang)'
 
 test('2-type cycle A->B->A populate is finite (innermost at the frontier)', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('book', 'author');
@@ -373,9 +373,9 @@ test('2-type cycle A->B->A populate is finite (innermost at the frontier)', asyn
 
 test('populate=* expands all declared relations (depth-1); equals explicit naming; relation-less type unchanged + cached', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    ct({
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({
       apiId: 'book',
       fields: [{ name: 'title', cmsType: 'string' }],
       relations: [
@@ -401,7 +401,7 @@ test('populate=* expands all declared relations (depth-1); equals explicit namin
 
   // Relation-less type: populate=* yields an empty effective plan -> byte-identical to no-populate AND cached.
   await cleanCatalog(sql);
-  const schemasB = [ct({ apiId: 'note', fields: [{ name: 'text', cmsType: 'string' }] })];
+  const schemasB = [schema({ apiId: 'note', fields: [{ name: 'text', cmsType: 'string' }] })];
   await applySchemas(schemasB);
   await insertRow('ct_note', 'text', 'hi');
   const e2 = await boot(schemasB);
@@ -417,8 +417,8 @@ test('populate=* expands all declared relations (depth-1); equals explicit namin
 
 test('unknown populate name -> 400 (top-level, nested, and a scalar field name)', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
   ];
   await applySchemas(schemas);
   await insertRow('ct_author', 'name', 'a');
@@ -434,8 +434,8 @@ test('unknown populate name -> 400 (top-level, nested, and a scalar field name)'
 
 test('populate composed with a relation filter + sort + offset: owner page/meta unchanged, related set FULL', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('book', 'author');
@@ -469,8 +469,8 @@ test('populate composed with a relation filter + sort + offset: owner page/meta 
 
 test('populate composed with owner-level keyset pagination: nested data correct, order = keyset order', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('book', 'author');
@@ -506,7 +506,7 @@ test('populate composed with owner-level keyset pagination: nested data correct,
 
 test('i64/decimal/json in a related row survive byte-exact through populate (spliced verbatim)', async () => {
   const schemas = [
-    ct({
+    schema({
       apiId: 'metric',
       fields: [
         { name: 'big', cmsType: 'biginteger' },
@@ -514,7 +514,7 @@ test('i64/decimal/json in a related row survive byte-exact through populate (spl
         { name: 'blob', cmsType: 'json' },
       ],
     }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'metric', kind: 'manyToOne', target: 'metric' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'metric', kind: 'manyToOne', target: 'metric' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('book', 'metric');
@@ -569,9 +569,9 @@ function serializeBook(bookRec: Record<string, unknown>, metricRawSlice: string)
 
 test('respondById honors populate; self-referential single-item terminates and matches the list frame', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
-    ct({ apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'category' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    schema({ apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'category' }] }),
   ];
   await applySchemas(schemas);
   const linkBA = deriveLinkTableName('book', 'author');
@@ -613,8 +613,8 @@ test('respondById honors populate; self-referential single-item terminates and m
 
 test('a NON-populated request is byte-identical to before this slice and is cached', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
   ];
   await applySchemas(schemas);
   for (let i = 0; i < 4; i++) await insertRow('ct_book', 'title', `t${i}`);
@@ -642,8 +642,8 @@ test('a NON-populated request is byte-identical to before this slice and is cach
 
 test('populate= (empty) is byte-identical to no-populate and cached', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
   ];
   await applySchemas(schemas);
   await insertRow('ct_book', 'title', 'x');
@@ -663,8 +663,8 @@ test('populate= (empty) is byte-identical to no-populate and cached', async () =
 
 test('a non-empty populated response is NOT cached (no cache hit on identical repeat)', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('book', 'author');
@@ -690,8 +690,8 @@ test('to-one with >1 edge fail-softly emits the FIRST related object (not an arr
   // manyToOne link table enforces UNIQUE(owner_id); a second edge for the SAME owner is rejected by the DB,
   // so the fail-soft to-one branch is dead-defensive. We still probe a second edge to document the intent.
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('book', 'author');
@@ -727,8 +727,8 @@ test('to-one with >1 edge fail-softly emits the FIRST related object (not an arr
 test('inverse cardinality flips: oneToMany owner -> inverse field is a to-one OBJECT/null; manyToMany inverse stays an ARRAY', async () => {
   // OWNER declares author.books = oneToMany; inverse book.author = manyToOne (to-one OBJECT via inverse).
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'books', kind: 'oneToMany', target: 'book', inverseField: 'author' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'books', kind: 'oneToMany', target: 'book', inverseField: 'author' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('author', 'books');
@@ -759,8 +759,8 @@ test('inverse cardinality flips: oneToMany owner -> inverse field is a to-one OB
   // manyToMany two-way: inverse stays a to-many ARRAY on both sides.
   await cleanCatalog(sql);
   const schemasB = [
-    ct({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    ct({ apiId: 'post', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'posts' }] }),
+    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ apiId: 'post', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'posts' }] }),
   ];
   await applySchemas(schemasB);
   const linkM = deriveLinkTableName('post', 'tags');
@@ -781,8 +781,8 @@ test('inverse cardinality flips: oneToMany owner -> inverse field is a to-one OB
 
 test('duplicate populate names de-dupe to a single key, merging sub-plans', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    ct({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
   ];
   await applySchemas(schemas);
   const link = deriveLinkTableName('book', 'author');
@@ -812,7 +812,7 @@ test('duplicate populate names de-dupe to a single key, merging sub-plans', asyn
 
 test('pathologically deep populate nesting -> clean 400 (not a stack-overflow 500)', async () => {
   const schemas = [
-    ct({ apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'category' }] }),
+    schema({ apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'category' }] }),
   ];
   await applySchemas(schemas);
   await insertRow('ct_category', 'slug', 'root');

@@ -5,7 +5,7 @@ import { Registry } from '../src/db/registry.ts';
 import { buildEngine } from '../src/db/engine.loader.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { cleanCatalog, rawField, ct } from './helpers.ts';
+import { cleanCatalog, rawField, schema } from './helpers.ts';
 
 /**
  * LOAD SLICE — generalized loader over a REAL Postgres (no mocks). Multi-type load, i64/decimal/json
@@ -29,12 +29,12 @@ after(async () => {
 
 test('multi-type load with i64/decimal/json byte-exact round-trip; warm once; empty type 0 rows', async () => {
   const schemas = [
-    ct({ apiId: 'note', fields: [
+    schema({ apiId: 'note', fields: [
       { name: 'big', cmsType: 'biginteger', options: { nullable: true } },
       { name: 'price', cmsType: 'decimal', options: { precision: 18, scale: 2, nullable: true } },
       { name: 'meta', cmsType: 'json', options: { nullable: true } },
     ] }),
-    ct({ apiId: 'empty', fields: [{ name: 'x', cmsType: 'integer', options: { nullable: true } }] }),
+    schema({ apiId: 'empty', fields: [{ name: 'x', cmsType: 'integer', options: { nullable: true } }] }),
   ];
   await migrate(sql, schemas, { allowDestructive: true });
 

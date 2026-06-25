@@ -23,7 +23,7 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const ct = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
 
 /** The stored applied-snapshot for a type id, as canonical-ish JSON text (to prove it is byte-unchanged). */
 async function appliedSnapshot(sql: Sql, typeId: string): Promise<string | null> {
@@ -49,12 +49,12 @@ after(async () => {
 
 test('GATING: a safe ADD bundled with a destructive DROP applies NOTHING (the add is not applied either)', async () => {
   // Seed: two columns, one real row.
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('keep-title', 'keep-note')`);
   const before = await appliedSnapshot(sql, 'ct_a');
 
   // Same call: ADD a new safe column `extra` AND DROP `note` (destructive). No allowDestructive.
-  const mixed = [ct('ct_a', 'thing', [
+  const mixed = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_x', 'extra', 'string', { nullable: true }), // safe add
     // f_n dropped -> destructive
@@ -73,12 +73,12 @@ test('GATING: a safe ADD bundled with a destructive DROP applies NOTHING (the ad
 
 test('GATING: a FORBIDDEN retype bundled with a safe RENAME applies nothing, even WITH allowDestructive', async () => {
   // jsonb <-> integer is an impossible cast (classifyTypeChange -> forbidden). forbidden is NEVER allowed.
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_d', 'data', 'json', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_d', 'data', 'json', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (data) VALUES ('{"v":1}'::jsonb)`);
   const before = await appliedSnapshot(sql, 'ct_a');
 
   // Rename f_d data->payload (safe) AND retype json->integer (forbidden) in one call, fully acked.
-  const next = [ct('ct_a', 'thing', [f('f_d', 'payload', 'integer', { nullable: true })])];
+  const next = [schema('ct_a', 'thing', [f('f_d', 'payload', 'integer', { nullable: true })])];
   await assert.rejects(migrate(sql, next, { allowDestructive: true }), MigrationBlockedError);
 
   const cols = (await physicalColumns(sql, 'ct_thing')).map((c) => c.name);
@@ -91,7 +91,7 @@ test('GATING: a FORBIDDEN retype bundled with a safe RENAME applies nothing, eve
 test('ROLLBACK: an acked UNCASTABLE retype fails at apply -> whole tx rolls back; a corrected migrate then works', async () => {
   // `code` holds non-numeric strings. string->integer is classified `rewrite` (data-dependent) — ackable —
   // but the `USING code::integer` cast FAILS on real data ('ABC'), so the DDL errors mid-tx.
-  await migrate(sql, [ct('ct_a', 'thing', [
+  await migrate(sql, [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_c', 'code', 'string', { nullable: true }),
   ])]);
@@ -99,7 +99,7 @@ test('ROLLBACK: an acked UNCASTABLE retype fails at apply -> whole tx rolls back
   const before = await appliedSnapshot(sql, 'ct_a');
 
   // Same call: a SAFE add (`tag`) bundled with the doomed retype. The cast throws -> EVERYTHING rolls back.
-  const doomed = [ct('ct_a', 'thing', [
+  const doomed = [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_c', 'code', 'integer', { nullable: true }), // uncastable on 'ABC'
     f('f_g', 'tag', 'string', { nullable: true }), // safe add in the SAME tx
@@ -122,7 +122,7 @@ test('ROLLBACK: an acked UNCASTABLE retype fails at apply -> whole tx rolls back
   // The bad rows still diff as the SAME pending change-set (proof the applied snapshot was not mutated):
   // fix the data, retype the SAME field again, and it now succeeds carrying real data across the cast.
   await sql.unsafe(`UPDATE ct_thing SET code = '7' WHERE code = 'ABC'`);
-  const corrected = await migrate(sql, [ct('ct_a', 'thing', [
+  const corrected = await migrate(sql, [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_c', 'code', 'integer', { nullable: true }),
   ])], { allowDestructive: true });
@@ -135,14 +135,14 @@ test('ROLLBACK: an acked UNCASTABLE retype fails at apply -> whole tx rolls back
 test('ROLLBACK: an acked NOT NULL add over EXISTING NULLs fails at apply -> whole tx rolls back, data intact', async () => {
   // Setting an EXISTING nullable column to NOT NULL while a row holds NULL is data-dependent: the
   // ALTER ... SET NOT NULL fails (23502). Bundle it with a safe rename to prove the rename rolls back too.
-  await migrate(sql, [ct('ct_a', 'thing', [
+  await migrate(sql, [schema('ct_a', 'thing', [
     f('f_t', 'title', 'string', { nullable: true }),
     f('f_s', 'subtitle', 'string', { nullable: true }),
   ])]);
   await sql.unsafe(`INSERT INTO ct_thing (title, subtitle) VALUES ('has', 'sub'), ('null-sub', NULL)`);
   const before = await appliedSnapshot(sql, 'ct_a');
 
-  const doomed = [ct('ct_a', 'thing', [
+  const doomed = [schema('ct_a', 'thing', [
     f('f_t', 'headline', 'string', { nullable: true }), // safe RENAME bundled in
     f('f_s', 'subtitle', 'string', { nullable: false }), // NOT NULL over a NULL row -> fails at apply
   ])];
@@ -163,8 +163,8 @@ test('ROLLBACK across TWO types in one change-set: a failure on type B rolls bac
   // Two types. The call ADDs a safe column to A AND retypes a doomed column on B. The whole multi-type
   // change-set runs in ONE tx, so B's apply-failure must un-apply A's already-issued ADD COLUMN.
   await migrate(sql, [
-    ct('ct_a', 'alpha', [f('a_t', 'title', 'string', { nullable: true })]),
-    ct('ct_b', 'beta', [f('b_c', 'code', 'string', { nullable: true })]),
+    schema('ct_a', 'alpha', [f('a_t', 'title', 'string', { nullable: true })]),
+    schema('ct_b', 'beta', [f('b_c', 'code', 'string', { nullable: true })]),
   ]);
   await sql.unsafe(`INSERT INTO ct_alpha (title) VALUES ('a1')`);
   await sql.unsafe(`INSERT INTO ct_beta (code) VALUES ('not-a-number')`);
@@ -172,8 +172,8 @@ test('ROLLBACK across TWO types in one change-set: a failure on type B rolls bac
   const beforeB = await appliedSnapshot(sql, 'ct_b');
 
   const doomed = [
-    ct('ct_a', 'alpha', [f('a_t', 'title', 'string', { nullable: true }), f('a_x', 'extra', 'integer', { nullable: true })]), // safe add on A
-    ct('ct_b', 'beta', [f('b_c', 'code', 'integer', { nullable: true })]), // uncastable retype on B
+    schema('ct_a', 'alpha', [f('a_t', 'title', 'string', { nullable: true }), f('a_x', 'extra', 'integer', { nullable: true })]), // safe add on A
+    schema('ct_b', 'beta', [f('b_c', 'code', 'integer', { nullable: true })]), // uncastable retype on B
   ];
   await assert.rejects(migrate(sql, doomed, { allowDestructive: true }), (err: Error) => {
     assert.ok(!(err instanceof MigrationBlockedError));
@@ -191,12 +191,12 @@ test('ROLLBACK across TWO types in one change-set: a failure on type B rolls bac
 test('GATING: a DROP TYPE bundled with a brand-new ADD TYPE blocks; the new table is NOT created', async () => {
   // Drop an existing type (destructive) while creating a fresh one — no allowDestructive. The whole call
   // must be refused; the new table must not exist (the add must not slip through ahead of the block).
-  await migrate(sql, [ct('ct_a', 'old', [f('f_t', 'title', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'old', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_old (title) VALUES ('survivor')`);
   const before = await appliedSnapshot(sql, 'ct_a');
 
   // next: drop ct_a (absent), add ct_b ('fresh').
-  const next = [ct('ct_b', 'fresh', [f('f_n', 'name', 'string', { nullable: true })])];
+  const next = [schema('ct_b', 'fresh', [f('f_n', 'name', 'string', { nullable: true })])];
   await assert.rejects(migrate(sql, next), MigrationBlockedError);
 
   assert.equal(await tableExists(sql, 'ct_old'), true, 'the dropped type still exists');
@@ -208,16 +208,16 @@ test('GATING: a DROP TYPE bundled with a brand-new ADD TYPE blocks; the new tabl
 
 test('ROLLBACK is RECOVERABLE: after a failed apply, an unrelated safe migrate still succeeds (advisory lock released)', async () => {
   // A failed migrate must RELEASE pg_advisory_xact_lock + leave no open tx, so the very next migrate works.
-  await migrate(sql, [ct('ct_a', 'thing', [f('f_c', 'code', 'string', { nullable: true })])]);
+  await migrate(sql, [schema('ct_a', 'thing', [f('f_c', 'code', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (code) VALUES ('xyz')`);
 
   await assert.rejects(
-    migrate(sql, [ct('ct_a', 'thing', [f('f_c', 'code', 'integer', { nullable: true })])], { allowDestructive: true }),
+    migrate(sql, [schema('ct_a', 'thing', [f('f_c', 'code', 'integer', { nullable: true })])], { allowDestructive: true }),
     (err: Error) => !(err instanceof MigrationBlockedError),
   );
 
   // A completely independent, safe migrate right after the rollback must proceed (lock not stuck).
-  const r = await migrate(sql, [ct('ct_a', 'thing', [
+  const r = await migrate(sql, [schema('ct_a', 'thing', [
     f('f_c', 'code', 'string', { nullable: true }),
     f('f_n', 'note', 'text', { nullable: true }), // safe add
   ])]);

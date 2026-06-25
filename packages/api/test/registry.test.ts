@@ -6,7 +6,7 @@ import { migrate } from '../src/db/schema/migrate.ts';
 import { loadType } from '../src/db/engine.loader.ts';
 import { Engine } from '../src/store/engine.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { cleanCatalog, ct } from './helpers.ts';
+import { cleanCatalog, schema } from './helpers.ts';
 
 /**
  * REGISTRY SLICE — Registry.fromSchemas from the files-first IR (no mocks). Proves the runtime source of
@@ -32,7 +32,7 @@ after(async () => {
 
 test('build: system fields prepended in order, engine types 1:1, decimal scale/precision (incl scale 0), index plan, writable/required', () => {
   const reg = Registry.fromSchemas([
-    ct({
+    schema({
       apiId: 'kitchen',
       fields: [
         { name: 'name', cmsType: 'string', options: { length: 50, nullable: false } },
@@ -94,13 +94,13 @@ test('build: system fields prepended in order, engine types 1:1, decimal scale/p
 
 test('build: a `time` field is rejected with RegistryError (engineType i32 but pg returns a string)', () => {
   assert.throws(
-    () => Registry.fromSchemas([ct({ apiId: 'sched', fields: [{ name: 'at', cmsType: 'time', options: { nullable: true } }] })]),
+    () => Registry.fromSchemas([schema({ apiId: 'sched', fields: [{ name: 'at', cmsType: 'time', options: { nullable: true } }] })]),
     RegistryError,
   );
 });
 
 test('a system-fields-only type builds a 3-field def and loads to a valid 0-row table', async () => {
-  const schemas = [ct({ apiId: 'bare', fields: [] })];
+  const schemas = [schema({ apiId: 'bare', fields: [] })];
   await migrate(sql, schemas, { allowDestructive: true });
   const reg = Registry.fromSchemas(schemas);
   const def = reg.get('bare')!;

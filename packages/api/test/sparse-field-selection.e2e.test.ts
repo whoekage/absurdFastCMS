@@ -8,7 +8,7 @@ import { buildEngine } from '../src/db/engine.loader.ts';
 import { Engine } from '../src/store/engine.ts';
 import { handleRequest } from '../src/http/read.router.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { cleanCatalog, ct } from './helpers.ts';
+import { cleanCatalog, schema } from './helpers.ts';
 
 /**
  * be-02 — Strapi v5 sparse field selection (`fields`), END-TO-END over the REAL HTTP read router +
@@ -68,7 +68,7 @@ function parse(body: Buffer): unknown {
 
 test('LIST fields=: returns exactly id + requested columns (Strapi v5)', async () => {
   const schemas = [
-    ct({
+    schema({
       apiId: 'article',
       fields: [
         { name: 'title', cmsType: 'string' },
@@ -91,7 +91,7 @@ test('LIST fields=: returns exactly id + requested columns (Strapi v5)', async (
 
 test('SINGLE /:type/:id now threads fields (was previously ignored)', async () => {
   const schemas = [
-    ct({
+    schema({
       apiId: 'article',
       fields: [
         { name: 'title', cmsType: 'string' },
@@ -112,7 +112,7 @@ test('SINGLE /:type/:id now threads fields (was previously ignored)', async () =
 });
 
 test('fields with an UNKNOWN field 400s (same gate as filters)', async () => {
-  const schemas = [ct({ apiId: 'article', fields: [{ name: 'title', cmsType: 'string' }] })];
+  const schemas = [schema({ apiId: 'article', fields: [{ name: 'title', cmsType: 'string' }] })];
   await setup(schemas);
   const engine = await boot(schemas);
   assert.equal(get(engine, '/article', 'fields=nope').status, 400);
@@ -121,8 +121,8 @@ test('fields with an UNKNOWN field 400s (same gate as filters)', async () => {
 
 test('fields COMPOSES with populate: projected OWNER body + FULL related rows', async () => {
   const schemas = [
-    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }, { name: 'bio', cmsType: 'text' }] }),
-    ct({
+    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }, { name: 'bio', cmsType: 'text' }] }),
+    schema({
       apiId: 'book',
       fields: [{ name: 'title', cmsType: 'string' }, { name: 'isbn', cmsType: 'string' }],
       relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }],
@@ -151,7 +151,7 @@ test('fields COMPOSES with populate: projected OWNER body + FULL related rows', 
 
 test('NO fields: the response is byte-identical to before (full-row path unchanged)', async () => {
   const schemas = [
-    ct({
+    schema({
       apiId: 'article',
       fields: [{ name: 'title', cmsType: 'string' }, { name: 'views', cmsType: 'integer' }],
     }),
