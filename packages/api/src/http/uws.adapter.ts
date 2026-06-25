@@ -7,11 +7,14 @@ import { rebuildType } from '../db/engine.loader.ts';
 import { handleRequest, errorResponse, JSON_CT, type CoreResponse } from './read.router.ts';
 import { handleWrite, type WriteContext } from './write.handler.ts';
 import { HookRegistry } from '../db/schema/hooks.ts';
-import { applySchemaEdit, applySchemaDelete, previewSchemaEdit, BuilderValidationError, BuilderNotFoundError, type ContentTypeDraft, type SchemaEditResult } from '../compose/builder.ts';
+import { applySchemaEdit, applySchemaDelete, previewSchemaEdit, BuilderValidationError, BuilderNotFoundError, BuilderBusyError, type ContentTypeDraft, type SchemaEditResult } from '../compose/builder.ts';
 import { swapFromIR } from '../db/engine.swap.ts';
-import { loadTypes } from '../db/schema/load.ts';
-import { readAppliedSchemas, MigrationBlockedError, MigrationDataLossError, MigrationUnsupportedError } from '../db/schema/migrate.ts';
+import { loadTypes, loadTypesCacheBusted } from '../db/schema/load.ts';
+import { readAppliedSchemas, ensureAppliedTable, MigrationBlockedError, MigrationDataLossError, MigrationUnsupportedError } from '../db/schema/migrate.ts';
 import { SchemaDiffError } from '../db/schema/diff.ts';
+import { SchemaChangeConflictError } from '../db/ddl.ts';
+import { computeCatalogVersion, hashRequest } from '../compose/catalog-version.ts';
+import { ensureIdempotencyTable, idempotencyLookup, recordIdempotency, pruneIdempotency } from '../compose/builder-idempotency.ts';
 import { handleContentTypeRequest, type ContentTypeContext } from './content-type.controller.ts';
 import { handleComponentTypeRequest, type ComponentTypeContext } from './component-type.controller.ts';
 import { handleUpload, handleListFiles, handleGetFile, handleDeleteFile, type FileContext, type ParsedUpload } from './upload.handler.ts';
@@ -103,6 +106,12 @@ function statusLine(status: number): string {
 /** Write a {@link CoreResponse} onto the uWS response (synchronous; offset-safe body view). */
 function writeResponse(res: uWS.HttpResponse, result: CoreResponse): void {
   res.writeStatus(statusLine(result.status));
+  // A 304 MUST carry no message body (HTTP semantics) — write status + headers (ETag) only.
+  if (result.status === 304) {
+    if (result.headers) for (const [k, v] of Object.entries(result.headers)) res.writeHeader(k, v);
+    res.end();
+    return;
+  }
   res.writeHeader('Content-Type', result.contentType);
   // Optional extra headers (Builder routes only). Absent on the read hot path ⇒ byte-identical output.
   if (result.headers) for (const [k, v] of Object.entries(result.headers)) res.writeHeader(k, v);
@@ -167,14 +176,21 @@ function builderJson(status: number, fields: Record<string, unknown>, headers?: 
   return headers ? { status, contentType: JSON_CT, body, headers } : { status, contentType: JSON_CT, body };
 }
 
-/** Map a Builder/migrate throw to its HTTP status + envelope. A blocked-by-lint case is a RETURN, not here. */
+/** Map a Builder/migrate throw to its HTTP status + envelope fields. A blocked-by-lint case is a RETURN, not here. */
+function builderErrorFields(e: unknown): { status: number; fields: Record<string, unknown> } {
+  if (e instanceof BuilderNotFoundError) return { status: 404, fields: { ok: false, error: e.message } };
+  if (e instanceof BuilderValidationError || e instanceof SchemaDiffError) return { status: 422, fields: { ok: false, error: e.message } };
+  if (e instanceof MigrationBlockedError) return { status: 409, fields: { ok: false, blocked: e.blocked, error: 'requires allowDestructive' } };
+  if (e instanceof MigrationDataLossError) return { status: 422, fields: { ok: false, error: e.message, table: e.table, column: e.column, affected: e.affected } };
+  if (e instanceof MigrationUnsupportedError) return { status: 422, fields: { ok: false, error: e.message } };
+  if (e instanceof SchemaChangeConflictError) return { status: 409, fields: { ok: false, error: 'schema lock timed out; retry' } };
+  return { status: 500, fields: { ok: false, error: 'internal error' } }; // never leak an arbitrary message
+}
+
+/** The CoreResponse form of {@link builderErrorFields} (the transient lock 409 carries Retry-After). */
 function builderError(e: unknown): CoreResponse {
-  if (e instanceof BuilderNotFoundError) return builderJson(404, { ok: false, error: e.message });
-  if (e instanceof BuilderValidationError || e instanceof SchemaDiffError) return builderJson(422, { ok: false, error: e.message });
-  if (e instanceof MigrationBlockedError) return builderJson(409, { ok: false, blocked: e.blocked, error: 'requires allowDestructive' });
-  if (e instanceof MigrationDataLossError) return builderJson(422, { ok: false, error: e.message, table: e.table, column: e.column, affected: e.affected });
-  if (e instanceof MigrationUnsupportedError) return builderJson(422, { ok: false, error: e.message });
-  return builderJson(500, { ok: false, error: 'internal error' }); // never leak an arbitrary message
+  const { status, fields } = builderErrorFields(e);
+  return e instanceof SchemaChangeConflictError ? builderJson(status, fields, { 'Retry-After': '1' }) : builderJson(status, fields);
 }
 
 /**
@@ -904,65 +920,141 @@ export function createServer(
     if (entitiesDir !== undefined) {
       const dir = entitiesDir;
       const sql = store.sql;
-      applyEditFn = async (draft, opts) => {
-        const result = await applySchemaEdit(sql, dir, draft, opts ?? {});
-        if (!result.ok || result.next === undefined || (result.applied?.length ?? 0) === 0) return result; // blocked / no-op → no swap
-        // Re-load hooks so a NEW type's hooks.ts is merged. ESM-cache invariant (documented): a NEW path is
-        // imported fresh; an EDIT to an existing type's schema.ts does not change its (cached) hooks.ts; an
-        // out-of-band hooks.ts edit is not live-reloaded (needs a restart). Rebuilding the Map each edit is
-        // cheap — a Builder edit is a rare admin action, not a hot path.
-        const { hooks: nextHooks } = await loadTypes(dir);
-        await swapFromIR(sql, live, result.next, result.applied!, new HookRegistry(nextHooks));
-        return result;
+      // S6 per-server state: the on-disk catalog version (sha256) + the single-writer mutex flag. NEVER
+      // module-scope (two test servers must not share). Warm both best-effort at construction (createServer
+      // is sync, so cannot await); a defensive lazy recompute covers a request that races the warm.
+      let currentVersion = '';
+      let writerBusy = false;
+      // Ensure the on-demand bookkeeping tables EXACTLY ONCE per server (memoized) — never a fire-and-forget
+      // warm: a `CREATE TABLE IF NOT EXISTS` racing a concurrent one trips pg_type's unique index. Memoizing
+      // collapses concurrent first-callers onto one promise; the ensure helpers also swallow the race defensively.
+      let tablesReady: Promise<void> | undefined;
+      const ensureTables = (): Promise<void> =>
+        (tablesReady ??= (async () => { await ensureAppliedTable(sql); await ensureIdempotencyTable(sql); })());
+      const ensureVersion = async (): Promise<string> => {
+        if (currentVersion === '') currentVersion = await computeCatalogVersion(dir);
+        return currentVersion;
       };
-      // DELETE drives the SAME swap site (the dropType change feeds swapFromIR).
-      const applyDeleteFn = async (apiId: string): Promise<SchemaEditResult> => {
-        const result = await applySchemaDelete(sql, dir, apiId);
+      // Read the applied catalog, tolerating a not-yet-created _schema_applied (a GET before any apply).
+      const readApplied = async (): Promise<Awaited<ReturnType<typeof readAppliedSchemas>>> => {
+        await ensureTables();
+        return readAppliedSchemas(sql);
+      };
+
+      // The apply core (no mutex — the caller holds it). Re-loads hooks (a NEW type's hooks.ts is merged;
+      // ESM-cache invariant: an existing type's cached hooks.ts is correct; an out-of-band hooks.ts edit needs
+      // a restart), then swaps. A blocked / no-op result returns without swapping.
+      const swapAfter = async (result: SchemaEditResult): Promise<SchemaEditResult> => {
         if (!result.ok || result.next === undefined || (result.applied?.length ?? 0) === 0) return result;
         const { hooks: nextHooks } = await loadTypes(dir);
         await swapFromIR(sql, live, result.next, result.applied!, new HookRegistry(nextHooks));
         return result;
       };
-      // The S5 success-envelope for an apply (PUT/DELETE). `applied`/`blocked` always present.
-      const okEnvelope = (r: SchemaEditResult): CoreResponse =>
-        r.ok
-          ? builderJson(200, { ok: true, applied: r.applied ?? [], blocked: [], live: true, ...(r.schema !== undefined ? { schema: r.schema } : {}) })
-          : builderJson(409, { ok: false, applied: [], blocked: r.blocked ?? [], error: 'requires allowDestructive' });
+      const runEdit = async (draft: ContentTypeDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult> =>
+        swapAfter(await applySchemaEdit(sql, dir, draft, opts ?? {}));
+      const runDelete = async (apiId: string): Promise<SchemaEditResult> => swapAfter(await applySchemaDelete(sql, dir, apiId));
 
-      // ---- BUILDER ROUTE SURFACE (design §1). GET reads are PUBLIC (like the legacy GET); mutations gated. ----
+      // Programmatic entry (srv.applyEdit): serialize via the SAME mutex; a contended call THROWS (it cannot
+      // return a CoreResponse). The HTTP path calls runEdit DIRECTLY from inside its own held mutex (no double-acquire).
+      applyEditFn = async (draft, opts) => {
+        if (writerBusy) throw new BuilderBusyError('builder busy');
+        writerBusy = true;
+        try { return await runEdit(draft, opts); } finally { writerBusy = false; }
+      };
 
-      // GET list — the applied catalog (with ids, so a client can echo them for ownership-safe edits).
-      app.get('/builder/content-types', (res) => {
-        let aborted = false;
-        res.onAborted(() => { aborted = true; }); // uWS: an async responder MUST attach this synchronously.
+      // The success envelope FIELDS (also the stored idempotency body). `applied`/`blocked` always present.
+      const successFields = (r: SchemaEditResult): Record<string, unknown> =>
+        ({ ok: true, version: currentVersion, applied: r.applied ?? [], blocked: [], live: true, ...(r.schema !== undefined ? { schema: r.schema } : {}) });
+
+      // The shared mutating flow (PUT/DELETE): acquire-FIRST (zero awaits before set) → version precheck →
+      // idempotency lookup/replay → exec → recompute version → record idempotency → envelope. Release in finally.
+      const runMutation = (
+        res: uWS.HttpResponse, aborted: () => boolean,
+        pre: { ifMatch: string; bodyVersion: string | undefined; idemKey: string; requestHash: string },
+        exec: () => Promise<SchemaEditResult>,
+      ): void => {
         void (async () => {
+          if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
+          writerBusy = true;
           try {
-            const schemas = await readAppliedSchemas(store.sql);
-            corkSend(res, () => aborted, builderJson(200, { ok: true, schemas }));
-          } catch {
-            corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' }));
+            await ensureTables();
+            // Idempotency replay FIRST (before the version precheck): a lost-response retry resends the
+            // ORIGINAL If-Match, so checking the version first would 412 a request whose result we already have.
+            // A keyed replay is unconditional — it returns the stored outcome regardless of the current version.
+            if (pre.idemKey !== '') {
+              await pruneIdempotency(sql).catch(() => {});
+              const hit = await idempotencyLookup(sql, pre.idemKey);
+              if (hit !== undefined) {
+                if (hit.requestHash !== pre.requestHash) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'idempotency key reused for a different request' }));
+                const etag = hit.status === 200 ? { ETag: String((hit.response as { version?: string }).version ?? '') } : undefined;
+                return corkSend(res, aborted, builderJson(hit.status, hit.response, etag));
+              }
+            }
+            await ensureVersion();
+            const expected = pre.ifMatch !== '' ? pre.ifMatch : pre.bodyVersion;
+            if (expected !== currentVersion) return corkSend(res, aborted, builderJson(412, { ok: false, error: 'stale version', currentVersion }, { ETag: currentVersion }));
+            let r: SchemaEditResult;
+            try {
+              r = await exec();
+            } catch (e) {
+              if (pre.idemKey !== '') {
+                const { status, fields } = builderErrorFields(e);
+                if (status >= 400 && status < 500 && !(e instanceof SchemaChangeConflictError)) await recordIdempotency(sql, pre.idemKey, pre.requestHash, status, fields).catch(() => {});
+              }
+              throw e;
+            }
+            if (!r.ok) { // blocked: requires allowDestructive (deterministic terminal → 409, idempotent)
+              const fields = { ok: false, applied: [], blocked: r.blocked ?? [], error: 'requires allowDestructive' };
+              if (pre.idemKey !== '') await recordIdempotency(sql, pre.idemKey, pre.requestHash, 409, fields).catch(() => {});
+              return corkSend(res, aborted, builderJson(409, fields));
+            }
+            if ((r.applied?.length ?? 0) > 0) currentVersion = await computeCatalogVersion(dir); // skip on no-op
+            const fields = successFields(r);
+            if (pre.idemKey !== '') await recordIdempotency(sql, pre.idemKey, pre.requestHash, 200, fields).catch(() => {});
+            corkSend(res, aborted, builderJson(200, fields, { ETag: currentVersion }));
+          } catch (e) {
+            corkSend(res, aborted, builderError(e)); // SchemaChangeConflictError → 409+Retry-After
+          } finally {
+            writerBusy = false; // runs on EVERY path incl client abort; the 409-busy loser never entered this try
           }
         })();
-      });
+      };
 
-      // GET one — 404 when absent; else the single schema WITH ids.
-      app.get('/builder/content-types/:apiId', (res, req) => {
-        const apiId = req.getParameter(0) ?? '';
+      // ---- BUILDER ROUTE SURFACE (design §1). GET reads are PUBLIC; mutations gated on builder.manage. ----
+
+      // GET list — applied catalog (with ids) + ETag/304.
+      app.get('/builder/content-types', (res, req) => {
+        const inm = req.getHeader('if-none-match');
         let aborted = false;
         res.onAborted(() => { aborted = true; });
         void (async () => {
           try {
-            const schema = (await readAppliedSchemas(store.sql)).find((s) => s.apiId === apiId);
-            corkSend(res, () => aborted, schema === undefined
-              ? builderJson(404, { ok: false, error: `content-type "${apiId}" does not exist` })
-              : builderJson(200, { ok: true, schema }));
-          } catch {
-            corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' }));
-          }
+            await ensureVersion();
+            if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
+            const schemas = await readApplied();
+            corkSend(res, () => aborted, builderJson(200, { ok: true, schemas, version: currentVersion }, { ETag: currentVersion }));
+          } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
         })();
       });
 
-      // POST preview — dry-run: resolve + pre-flight + lint + codegen, NO write, NO migrate. GATED.
+      // GET one — 404 when absent; else the single schema WITH ids + ETag/304.
+      app.get('/builder/content-types/:apiId', (res, req) => {
+        const apiId = req.getParameter(0) ?? '';
+        const inm = req.getHeader('if-none-match');
+        let aborted = false;
+        res.onAborted(() => { aborted = true; });
+        void (async () => {
+          try {
+            await ensureVersion();
+            const schema = (await readApplied()).find((s) => s.apiId === apiId);
+            if (schema === undefined) return corkSend(res, () => aborted, builderJson(404, { ok: false, error: `content-type "${apiId}" does not exist` }));
+            if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
+            corkSend(res, () => aborted, builderJson(200, { ok: true, schema, version: currentVersion }, { ETag: currentVersion }));
+          } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
+        })();
+      });
+
+      // POST preview — dry-run (no write/migrate/swap), no mutex/version. GATED.
       app.post('/builder/content-types/:apiId/preview', (res, req) => {
         const apiId = req.getParameter(0) ?? '';
         gate(res, req, 'builder.manage', true, (raw, aborted) => {
@@ -973,7 +1065,7 @@ export function createServer(
           void (async () => {
             let result: CoreResponse;
             try {
-              const p = await previewSchemaEdit(store.sql, body, { allowDestructive: body.allowDestructive === true });
+              const p = await previewSchemaEdit(sql, body, { allowDestructive: body.allowDestructive === true });
               result = builderJson(200, { ok: p.ok, applied: p.changes, blocked: p.blocked, schema: p.schema, generatedSource: p.generatedSource });
             } catch (e) { result = builderError(e); }
             corkSend(res, aborted, result);
@@ -981,36 +1073,54 @@ export function createServer(
         });
       });
 
-      // PUT upsert — create / update / apiId-rename → applyEdit → live swap. GATED.
+      // PUT upsert — create / update / apiId-rename. GATED + mutex + If-Match/version + idempotency.
       app.put('/builder/content-types/:apiId', (res, req) => {
         const apiId = req.getParameter(0) ?? '';
+        const ifMatch = req.getHeader('if-match'); // '' when absent (uWS; lowercase key)
+        const idemKey = req.getHeader('idempotency-key');
         gate(res, req, 'builder.manage', true, (raw, aborted) => {
           const parsed = parseBody(raw);
           if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-          const body = parsed.body as { allowDestructive?: boolean } & ContentTypeDraft;
+          const body = parsed.body as { allowDestructive?: boolean; version?: string } & ContentTypeDraft;
           if (body.apiId !== apiId) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.apiId must equal the path apiId' }));
-          void (async () => {
-            let result: CoreResponse;
-            try { result = okEnvelope(await applyEditFn!(body, { allowDestructive: body.allowDestructive === true })); }
-            catch (e) { result = builderError(e); }
-            corkSend(res, aborted, result);
-          })();
+          if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
+          const { allowDestructive, version: _v, ...meaningful } = body;
+          const requestHash = hashRequest({ m: 'PUT', apiId, body: meaningful });
+          runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash },
+            () => runEdit(body, { allowDestructive: allowDestructive === true }));
         });
       });
 
-      // DELETE — drop a whole type (always destructive → require allowDestructive). GATED.
+      // DELETE — drop a whole type (always destructive → require allowDestructive). GATED + same wrap.
       app.del('/builder/content-types/:apiId', (res, req) => {
         const apiId = req.getParameter(0) ?? '';
+        const ifMatch = req.getHeader('if-match');
+        const idemKey = req.getHeader('idempotency-key');
         gate(res, req, 'builder.manage', true, (raw, aborted) => {
           const parsed = parseBody(raw);
           if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-          const body = parsed.body as { allowDestructive?: boolean };
+          const body = parsed.body as { allowDestructive?: boolean; version?: string };
           if (body.allowDestructive !== true) return corkSend(res, aborted, builderJson(409, { ok: false, applied: [], blocked: [], error: 'requires allowDestructive' }));
+          if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
+          const requestHash = hashRequest({ m: 'DELETE', apiId });
+          runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash }, () => runDelete(apiId));
+        });
+      });
+
+      // POST reload — operator escape hatch: cache-busted re-import + swap (registry/hooks/relations), NO
+      // migrate; advances the version so a pre-reload PUT carrying the old version fails 412. GATED + mutex.
+      app.post('/builder/reload', (res, req) => {
+        gate(res, req, 'builder.manage', false, (_raw, aborted) => {
           void (async () => {
-            let result: CoreResponse;
-            try { result = okEnvelope(await applyDeleteFn(apiId)); }
-            catch (e) { result = builderError(e); }
-            corkSend(res, aborted, result);
+            if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
+            writerBusy = true;
+            try {
+              const { schemas, hooks } = await loadTypesCacheBusted(dir, `reload:${process.pid}:${Date.now()}`);
+              await swapFromIR(sql, live, schemas, [], new HookRegistry(hooks)); // applied=[] → swaps registry/hooks/relations, no per-type rebuild
+              currentVersion = await computeCatalogVersion(dir);
+              corkSend(res, aborted, builderJson(200, { ok: true, version: currentVersion }, { ETag: currentVersion }));
+            } catch (e) { corkSend(res, aborted, builderError(e)); }
+            finally { writerBusy = false; }
           })();
         });
       });

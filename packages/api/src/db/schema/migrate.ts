@@ -267,14 +267,21 @@ async function applyOne(tx: Sql, c: Change): Promise<void> {
   }
 }
 
-/** Ensure the bookkeeping table exists (on-demand, like `_migrations` — no hand-written migration file). */
+/** Ensure the bookkeeping table exists (on-demand, like `_migrations` — no hand-written migration file).
+ *  Race-safe: two concurrent `CREATE TABLE IF NOT EXISTS` can both pass the existence check and collide on
+ *  pg_type's unique index (23505) or report 42P07 — both mean "another session just created it", so swallow. */
 export async function ensureAppliedTable(sql: Sql): Promise<void> {
-  await sql`CREATE TABLE IF NOT EXISTS _schema_applied (
-    type_id text PRIMARY KEY,
-    api_id text NOT NULL,
-    schema jsonb NOT NULL,
-    applied_at timestamptz NOT NULL DEFAULT now()
-  )`;
+  try {
+    await sql`CREATE TABLE IF NOT EXISTS _schema_applied (
+      type_id text PRIMARY KEY,
+      api_id text NOT NULL,
+      schema jsonb NOT NULL,
+      applied_at timestamptz NOT NULL DEFAULT now()
+    )`;
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    if (code !== '23505' && code !== '42P07') throw e;
+  }
 }
 
 /** The last-applied catalog, reconstructed from `_schema_applied` (Zod-validated against corruption). */
@@ -371,7 +378,10 @@ async function applyChangeSet(sql: Sql, cs: ChangeSet, next: ContentTypeSchema[]
   for (const [apiId, rs] of byTable) renamePlans.set(apiId, planRenameSteps(rs));
 
   await sql.begin(async (tx) => {
-    await tx`SET LOCAL lock_timeout = '5s'`;
+    // S6: a tight lock_timeout so a contended schema write fails FAST (55P03) and the Builder's bounded retry
+    // surfaces a 409 instead of hanging. The app-level single-writer mutex serializes within the instance; this
+    // guards against a stray second process / the dev watcher.
+    await tx`SET LOCAL lock_timeout = '1500ms'`;
     await tx`SET LOCAL standard_conforming_strings = on`;
     await tx`SELECT pg_advisory_xact_lock(${MIGRATE_LOCK_KEY})`;
     const handle = tx as unknown as Sql;

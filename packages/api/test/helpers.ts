@@ -4,6 +4,10 @@ import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer } from '../src/http/uws.adapter.ts';
 import { loadTypes } from '../src/db/schema/load.ts';
 import { HookRegistry } from '../src/db/schema/hooks.ts';
+import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
+import { buildAuth } from '../src/auth/auth.ts';
+import { SessionCache } from '../src/auth/session.cache.ts';
+import { RbacRegistry } from '../src/auth/rbac.registry.ts';
 import type { Engine } from '../src/store/engine.ts';
 import type { Registry } from '../src/db/registry.ts';
 
@@ -119,3 +123,63 @@ export async function startTestServerFromFiles(
   const token = await server.listen(port);
   return { base: `http://127.0.0.1:${port}`, close: server.close, token, applyEdit: server.applyEdit! };
 }
+
+/**
+ * S6: a files-first Builder server WITH the real auth stack wired, so the `builder.manage` gate is ENFORCED
+ * (401 unauthenticated / 403 under-privileged). Returns the auth helpers bound to this server. Each
+ * privileged test must EXPLICITLY `grantRole(userIdOf(email), 'super-admin')` — unique emails per test mean
+ * the first-admin bootstrap can't be relied on. Teardown MUST call `sessionCache.stop()` + `closeAuth()`.
+ */
+export async function startTestServerFromFilesWithAuth(
+  sql: Sql,
+  entitiesDir: string,
+): Promise<{
+  base: string;
+  close: (token: unknown) => void;
+  token: unknown;
+  applyEdit: NonNullable<ReturnType<typeof createServer>['applyEdit']>;
+  sessionCache: SessionCache;
+  rbac: RbacRegistry;
+  signUp: (email: string) => Promise<string>;
+  userIdOf: (email: string) => Promise<string>;
+  grantRole: (userId: string, roleName: string) => Promise<void>;
+}> {
+  setAuthSql(sql);
+  const port = await freePort();
+  const base = `http://127.0.0.1:${port}`;
+  const store = new PostgresStore(sql);
+  let auth: ReturnType<typeof buildAuth>;
+  const sessionCache = new SessionCache(() => auth); // lazy ()=>auth breaks the construction cycle
+  const rbac = new RbacRegistry(sql);
+  auth = buildAuth({ baseURL: base, sessionEvictor: sessionCache, sql, rbacInvalidate: () => rbac.rebuild() });
+  await rbac.rebuild();
+  const { schemas, hooks } = await loadTypes(entitiesDir);
+  const { engine, registry } = await store.loadFromSchemas(schemas);
+  // positions: auth=5, sessionCache=6, rbac=7 ⇒ authEnabled; HookRegistry=9, entitiesDir=10 ⇒ builderActive.
+  const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, undefined, new HookRegistry(hooks), entitiesDir);
+  const token = await server.listen(port);
+
+  const signUp = async (email: string): Promise<string> => {
+    const res = await fetch(`${base}/auth/sign-up/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: base },
+      body: JSON.stringify({ email, password: 'correct-horse-battery-staple', name: 'U' }),
+    });
+    if (res.status !== 200) throw new Error(`sign-up failed: ${res.status} ${await res.clone().text()}`);
+    return res.headers.getSetCookie().map((c) => c.split(';')[0]).filter((c): c is string => c !== undefined && c.includes('=')).join('; ');
+  };
+  const userIdOf = async (email: string): Promise<string> => {
+    const [row] = await sql<{ id: string }[]>`SELECT id FROM "user" WHERE email = ${email}`;
+    if (!row) throw new Error(`no user row for ${email}`);
+    return row.id;
+  };
+  const grantRole = async (userId: string, roleName: string): Promise<void> => {
+    await sql`INSERT INTO user_roles (user_id, role_id) SELECT ${userId}, id FROM roles WHERE name = ${roleName} ON CONFLICT DO NOTHING`;
+    await rbac.rebuild();
+  };
+
+  return { base, close: server.close, token, applyEdit: server.applyEdit!, sessionCache, rbac, signUp, userIdOf, grantRole };
+}
+
+/** Re-export so a test's teardown can close the shared auth instance. */
+export { closeAuth };

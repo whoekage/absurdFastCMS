@@ -37,11 +37,16 @@ after(async () => {
   await rm(genDir, { recursive: true, force: true });
 });
 
-const jsonReq = (method: string, p: string, body?: unknown): Promise<Response> =>
-  fetch(`${srv.base}${p}`, { method, headers: { 'content-type': 'application/json' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
-const put = (apiId: string, body: unknown): Promise<Response> => jsonReq('PUT', `/builder/content-types/${apiId}`, body);
-const del = (apiId: string, body: unknown): Promise<Response> => jsonReq('DELETE', `/builder/content-types/${apiId}`, body);
-const preview = (apiId: string, body: unknown): Promise<Response> => jsonReq('POST', `/builder/content-types/${apiId}/preview`, body);
+// S6 requires If-Match on PUT/DELETE. These helpers auto-attach the CURRENT on-disk version (the GET ETag)
+// unless an explicit `ifMatch` override is passed — so the functional route tests exercise the happy path
+// while the precondition is enforced. (412/428 are asserted in the concurrency suite.)
+const ver = async (): Promise<string> => (await fetch(`${srv.base}/builder/content-types`)).headers.get('etag') ?? '';
+const put = async (apiId: string, body: unknown, ifMatch?: string): Promise<Response> =>
+  fetch(`${srv.base}/builder/content-types/${apiId}`, { method: 'PUT', headers: { 'content-type': 'application/json', 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
+const del = async (apiId: string, body: unknown, ifMatch?: string): Promise<Response> =>
+  fetch(`${srv.base}/builder/content-types/${apiId}`, { method: 'DELETE', headers: { 'content-type': 'application/json', 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
+const preview = (apiId: string, body: unknown): Promise<Response> =>
+  fetch(`${srv.base}/builder/content-types/${apiId}/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 test('PUT create → 200 uniform envelope; GET list/one reflect it; the type serves live', async () => {
   const r = await put('gadget', { apiId: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });

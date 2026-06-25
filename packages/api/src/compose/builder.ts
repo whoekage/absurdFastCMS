@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Sql } from 'postgres';
 import { mintId, type ContentTypeSchema, type FieldSchema, type RelationSchema } from '../db/schema/model.ts';
 import { generateSchemaSource } from '../db/schema/codegen.ts';
-import { validateFieldName, validateRelationKind, deriveTableName } from '../db/ddl.ts';
+import { validateFieldName, validateRelationKind, deriveTableName, SchemaChangeConflictError } from '../db/ddl.ts';
 import { migrate, migrateLint, readAppliedSchemas, ensureAppliedTable } from '../db/schema/migrate.ts';
 import type { Change } from '../db/schema/diff.ts';
 
@@ -60,6 +60,16 @@ export class BuilderNotFoundError extends Error {
     this.name = 'BuilderNotFoundError';
   }
 }
+
+/** A second mutation arrived while one was in flight (single-writer mutex contended, programmatic path). → 409. */
+export class BuilderBusyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BuilderBusyError';
+  }
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Resolve a draft into a schema with stable ids, enforcing the OWNERSHIP guard against the addressed type's
@@ -175,12 +185,30 @@ async function applyResolvedPlan(
     tmp = `${plan.write.target}.${process.pid}.tmp`;
     await writeFile(tmp, plan.write.source);
   }
-  let result: Awaited<ReturnType<typeof migrate>>;
-  try {
-    result = await migrate(sql, plan.next, opts);
-  } catch (err) {
+  // S6: bounded retry on lock contention ONLY (Postgres 55P03 lock_timeout). The single-writer mutex +
+  // advisory lock serialize schema writes within the instance, so 55P03 means a STRAY holder (second process
+  // / dev watcher); 3 short attempts then a loud SchemaChangeConflictError → 409. The temp file is kept across
+  // attempts and unlinked ONCE on final failure (never per-attempt — a retried rename target would be gone).
+  let result: Awaited<ReturnType<typeof migrate>> | undefined;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      result = await migrate(sql, plan.next, opts);
+      lastErr = undefined;
+      break;
+    } catch (err) {
+      if ((err as { code?: string }).code === '55P03') {
+        lastErr = err;
+        await sleep(50 * 2 ** attempt + Math.random() * 25);
+        continue;
+      }
+      if (tmp) await unlink(tmp).catch(() => {}); // a real failure (cast/constraint/etc.) — clean up + rethrow
+      throw err;
+    }
+  }
+  if (lastErr !== undefined || result === undefined) {
     if (tmp) await unlink(tmp).catch(() => {});
-    throw err;
+    throw new SchemaChangeConflictError('builder migrate lock contended; retry');
   }
   if (plan.write && tmp) await rename(tmp, plan.write.target);
   if (plan.removeDir) await rm(plan.removeDir, { recursive: true, force: true });

@@ -35,6 +35,22 @@ export interface LoadedTypes {
 }
 
 export async function loadTypes(dir: string): Promise<LoadedTypes> {
+  return loadTypesImpl(dir, '');
+}
+
+/**
+ * S6: re-import every entity module with a per-call cache-bust token (`?v=<token>` on BOTH schema.ts AND
+ * hooks.ts) so an OUT-OF-BAND file edit is actually re-read — Node's ESM cache otherwise serves the stale
+ * module. Used by the catalog-version hash + `POST /builder/reload`. Race-TOLERANT: an entry that vanishes
+ * between `readdir` and `import` (a concurrent DELETE's `rm`) is SKIPPED, not thrown (boot `loadTypes` stays
+ * fail-loud). The token MUST change per call (a stable token re-hits the cache).
+ */
+export async function loadTypesCacheBusted(dir: string, token: string): Promise<LoadedTypes> {
+  return loadTypesImpl(dir, token);
+}
+
+async function loadTypesImpl(dir: string, token: string): Promise<LoadedTypes> {
+  const bust = token === '' ? '' : `?v=${encodeURIComponent(token)}`;
   let dirents: Dirent[];
   try {
     dirents = await readdir(dir, { withFileTypes: true });
@@ -52,14 +68,20 @@ export async function loadTypes(dir: string): Promise<LoadedTypes> {
   for (const apiId of entityNames) {
     const schemaFile = path.join(dir, apiId, 'schema.ts');
     if (!existsSync(schemaFile)) continue; // a grouping dir, not an entity
-    const mod = (await import(pathToFileURL(schemaFile).href)) as { default?: TypeDef };
+    let mod: { default?: TypeDef };
+    try {
+      mod = (await import(pathToFileURL(schemaFile).href + bust)) as { default?: TypeDef };
+    } catch (e) {
+      if (bust !== '' && (e as NodeJS.ErrnoException).code === 'ENOENT') continue; // vanished mid-walk (race) — skip
+      throw e;
+    }
     if (!mod.default || typeof mod.default !== 'object' || !('fields' in mod.default)) {
       throw new SchemaLoadError(`${apiId}/schema.ts`, 'must `export default defineType({ ... })`');
     }
     schemas.push(defToSchema(mod.default, apiId));
     const hooksFile = path.join(dir, apiId, 'hooks.ts');
     if (existsSync(hooksFile)) {
-      const hmod = (await import(pathToFileURL(hooksFile).href)) as { default?: Hooks };
+      const hmod = (await import(pathToFileURL(hooksFile).href + bust)) as { default?: Hooks };
       if (hmod.default !== undefined) hooks.set(apiId, hmod.default);
     }
   }
