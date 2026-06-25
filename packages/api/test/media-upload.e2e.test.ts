@@ -13,7 +13,7 @@ delete process.env.S3_BUCKET; // ensure the LOCAL provider is selected in this r
 
 const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { startTestServer } = await import('./helpers.ts');
+const { startTestServerFromSchemas } = await import('./helpers.ts');
 const { getStorageProvider, resetStorageProvider } = await import('../src/storage/index.ts');
 const { pngBytes, textBytes } = await import('./storage-fixtures.ts');
 
@@ -36,7 +36,8 @@ before(async () => {
   db = await createFileDatabase('mediaupload');
   sql = db.sql;
   await runMigrations(db.url);
-  const srv = await startTestServer(sql);
+  const srv = await startTestServerFromSchemas(sql, []); // media routes are catalog-agnostic; empty schema
+
   base = srv.base;
   close = srv.close;
   token = srv.token;

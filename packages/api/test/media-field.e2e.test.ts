@@ -12,7 +12,7 @@ delete process.env.S3_BUCKET; // select the LOCAL provider for this run.
 
 const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { startTestServer } = await import('./helpers.ts');
+const { startTestServerFromSchemas, ct } = await import('./helpers.ts');
 const { resetStorageProvider } = await import('../src/storage/index.ts');
 const { pngBytes } = await import('./storage-fixtures.ts');
 
@@ -29,16 +29,36 @@ let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let base: string;
 let close: (token: unknown) => void;
 let token: unknown;
+let registry: Awaited<ReturnType<typeof startTestServerFromSchemas>>['registry'];
 
 before(async () => {
   resetStorageProvider();
   db = await createFileDatabase('mediafield');
   sql = db.sql;
   await runMigrations(db.url);
-  const srv = await startTestServer(sql);
+  // Pre-build the full catalog (files-first): product (single media), gallery (multiple media), note (scalar-only).
+  const schemas = [
+    ct({
+      apiId: 'product',
+      fields: [
+        { name: 'title', cmsType: 'string', options: { nullable: false } },
+        { name: 'cover', cmsType: 'media' },
+      ],
+    }),
+    ct({
+      apiId: 'gallery',
+      fields: [
+        { name: 'name', cmsType: 'string', options: { nullable: false } },
+        { name: 'photos', cmsType: 'media', options: { multiple: true } },
+      ],
+    }),
+    ct({ apiId: 'note', fields: [{ name: 'body', cmsType: 'text' }] }),
+  ];
+  const srv = await startTestServerFromSchemas(sql, schemas);
   base = srv.base;
   close = srv.close;
   token = srv.token;
+  registry = srv.registry;
 });
 
 after(async () => {
@@ -62,19 +82,9 @@ async function uploadAsset(w: number, h: number): Promise<Asset> {
   return ((await r.json()) as { data: Asset }).data;
 }
 
-test('declare a SINGLE media field: builder projects cmsType media + multiple:false', async () => {
-  const r = await POST('/content-types', {
-    apiId: 'product',
-    fields: [
-      { name: 'title', cmsType: 'string', options: { nullable: false } },
-      { name: 'cover', cmsType: 'media' },
-    ],
-  });
-  assert.equal(r.status, 201);
-  const def = (await r.json()) as { fields: { name: string; cmsType: string; multiple?: boolean }[] };
-  const cover = def.fields.find((f) => f.name === 'cover')!;
-  assert.equal(cover.cmsType, 'media');
-  assert.equal(cover.multiple, false);
+test('declare a SINGLE media field: registry tags it as media + multiple:false', () => {
+  // The registry is the files-first source of truth; a single media field is a media ref with multiple:false.
+  assert.deepEqual(registry.get('product')!.mediaFields.get('cover'), { multiple: false });
 });
 
 test('attach a SINGLE asset, read un-populated (raw id) then populated (inlined object)', async () => {
@@ -108,16 +118,7 @@ test('LIST populate inlines the asset per row', async () => {
 });
 
 test('MULTIPLE media field: array of ids, populated to an array of asset objects (order preserved)', async () => {
-  const r = await POST('/content-types', {
-    apiId: 'gallery',
-    fields: [
-      { name: 'name', cmsType: 'string', options: { nullable: false } },
-      { name: 'photos', cmsType: 'media', options: { multiple: true } },
-    ],
-  });
-  assert.equal(r.status, 201);
-  const def = (await r.json()) as { fields: { name: string; multiple?: boolean }[] };
-  assert.equal(def.fields.find((f) => f.name === 'photos')!.multiple, true);
+  assert.deepEqual(registry.get('gallery')!.mediaFields.get('photos'), { multiple: true });
 
   const a = await uploadAsset(11, 12);
   const b = await uploadAsset(13, 14);
@@ -175,9 +176,8 @@ test('a deleted asset populates as null (single) — dangling ref is tolerated, 
 });
 
 test('a type WITHOUT a media field is byte-identical: no media key, populate has no effect', async () => {
-  await POST('/content-types', { apiId: 'note', fields: [{ name: 'body', cmsType: 'text' }] });
-  const def = (await (await GET('/content-types/note')).json()) as { fields: { name: string; multiple?: boolean }[] };
-  for (const f of def.fields) assert.equal('multiple' in f, false); // no media flag anywhere.
+  // A scalar-only type carries zero media fields in the registry (no media flag anywhere).
+  assert.equal(registry.get('note')!.mediaFields.size, 0);
 
   const created = (await (await POST('/note', { body: 'hello' })).json()) as { data: { id: number } };
   // A populate query naming a non-relation/non-media scalar field still 400s (engine populate validation).
