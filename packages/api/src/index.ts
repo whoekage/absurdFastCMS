@@ -9,6 +9,9 @@ export type { ContiApp, ServerLifecycle, ServerContext, StartedContext } from '.
 export { defineConfig, loadConfigFromEnv } from './compose/config.ts';
 export type { ContiConfig } from './compose/config.ts';
 export type { S3Config } from './config.ts';
+// Code-first schema authoring DSL (the `schema/<apiId>.ts` surface): defineType + the `c.*` builders.
+export { defineType, c } from './db/schema/define.ts';
+export type { InferType, TypeDef, HookFn, Hooks, HookContext } from './db/schema/define.ts';
 // Files-first schema migration (the `conti migrate` / `conti migrate lint` commands).
 export { runMigrate, runMigrateLint } from './compose/migrate.ts';
 export { MigrationBlockedError, describeChange } from './db/schema/migrate.ts';
