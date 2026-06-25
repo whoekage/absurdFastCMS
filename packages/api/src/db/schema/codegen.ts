@@ -1,4 +1,12 @@
-import type { ContentTypeSchema, FieldSchema } from './model.ts';
+import type { ContentTypeSchema, FieldSchema, RelationSchema } from './model.ts';
+
+/** Raised when the codegen meets a field kind the v1 DSL can't yet express (e.g. repeatable components). */
+export class BuilderCodegenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BuilderCodegenError';
+  }
+}
 
 /**
  * CODEGEN (the S2 function, folded into S5): JSON schema files are the SOURCE; TS types are GENERATED from
@@ -84,4 +92,69 @@ export function generateTypes(schemas: ContentTypeSchema[]): string {
     });
 
   return header + blocks.join('\n\n') + '\n';
+}
+
+// --- DSL SOURCE codegen (the visual Builder's writer: IR -> entities/<apiId>/schema.ts) ----------
+
+/** A JSON-ish literal for embedding in generated source (strings double-quoted, arrays inline). */
+function lit(v: unknown): string {
+  return JSON.stringify(v);
+}
+
+/** The `c.*(...)` builder call for one field — the inverse of `defToSchema` + the catalog resolution. */
+function fieldBuilderCall(f: FieldSchema): string {
+  const o = f.options ?? {};
+  const id = `id: ${lit(f.id)}`;
+  const nul = o.nullable === false ? ', nullable: false' : ''; // nullable defaults true ⇒ omit when true
+  const def = o.default !== undefined ? `, default: ${lit(o.default)}` : '';
+  const max = o.length !== undefined ? `, max: ${o.length}` : '';
+  switch (f.type) {
+    case 'string': return `c.string({ ${id}${max}${nul}${def} })`;
+    case 'text': return `c.text({ ${id}${nul}${def} })`;
+    case 'email': return `c.email({ ${id}${max}${nul} })`;
+    case 'uid': return `c.uid({ ${id}${max}${nul} })`;
+    case 'uuid': return `c.uuid({ ${id}${nul} })`;
+    case 'enumeration': return `c.enum(${lit(o.values ?? [])} as const, { ${id}${nul} })`;
+    case 'integer': return `c.integer({ ${id}${nul}${def} })`;
+    case 'biginteger': return `c.biginteger({ ${id}${nul} })`;
+    case 'float': return `c.float({ ${id}${nul}${def} })`;
+    case 'decimal': return `c.decimal({ ${id}${o.precision !== undefined ? `, precision: ${o.precision}` : ''}${o.scale !== undefined ? `, scale: ${o.scale}` : ''}${nul} })`;
+    case 'boolean': return `c.boolean({ ${id}${nul}${def} })`;
+    case 'date': return `c.date({ ${id}${nul} })`;
+    case 'datetime': return `c.datetime({ ${id}${nul} })`;
+    case 'json': return `c.json({ ${id}${nul} })`;
+    case 'media': return `c.media({ ${id}${o.multiple ? ', multiple: true' : ''}${nul} })`;
+    case 'component': return `c.component(${lit(o.component ?? '')}, { ${id}${nul} })`;
+    case 'dynamiczone': return `c.dynamiczone(${lit(o.components ?? [])}, { ${id} })`;
+    default:
+      throw new BuilderCodegenError(`field "${f.name}": type "${f.type}" is not yet expressible by the Builder codegen`);
+  }
+}
+
+/** The `c.relation(...)` call for an owner relation. */
+function relationBuilderCall(r: RelationSchema): string {
+  const inv = r.inverseField !== undefined ? `, inverse: ${lit(r.inverseField)}` : '';
+  return `c.relation(${lit(r.target)}, { id: ${lit(r.id)}, kind: ${lit(r.kind)}${inv} })`;
+}
+
+/**
+ * Generate the full `entities/<apiId>/schema.ts` SOURCE from the IR — the visual Builder's write artifact.
+ * Pure: IR in, source string out. Round-trips: loading the generated file (`loadTypes` → `defToSchema`)
+ * yields an IR equal to the input. The Builder regenerates this file WHOLESALE; hooks live in the sibling
+ * `hooks.ts` and are never touched.
+ */
+export function generateSchemaSource(schema: ContentTypeSchema): string {
+  const name = pascalCase(schema.apiId);
+  const lines: string[] = ["import { defineType, c } from '@conti/core';", '', `const ${name} = defineType({`, `  id: ${lit(schema.id)},`];
+  if (schema.options !== undefined) {
+    const parts: string[] = [];
+    if (schema.options.draftAndPublish !== undefined) parts.push(`draftAndPublish: ${schema.options.draftAndPublish}`);
+    if (schema.options.i18n !== undefined) parts.push(`i18n: ${schema.options.i18n}`);
+    if (parts.length > 0) lines.push(`  options: { ${parts.join(', ')} },`);
+  }
+  lines.push('  fields: {');
+  for (const f of schema.fields) lines.push(`    ${f.name}: ${fieldBuilderCall(f)},`);
+  for (const r of schema.relations ?? []) lines.push(`    ${r.field}: ${relationBuilderCall(r)},`);
+  lines.push('  },', '});', '', `export default ${name};`, `export type ${name} = typeof ${name};`, '');
+  return lines.join('\n');
 }

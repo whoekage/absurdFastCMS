@@ -163,7 +163,7 @@ async function applyOne(tx: Sql, c: Change): Promise<void> {
 }
 
 /** Ensure the bookkeeping table exists (on-demand, like `_migrations` — no hand-written migration file). */
-async function ensureAppliedTable(sql: Sql): Promise<void> {
+export async function ensureAppliedTable(sql: Sql): Promise<void> {
   await sql`CREATE TABLE IF NOT EXISTS _schema_applied (
     type_id text PRIMARY KEY,
     api_id text NOT NULL,
@@ -173,7 +173,7 @@ async function ensureAppliedTable(sql: Sql): Promise<void> {
 }
 
 /** The last-applied catalog, reconstructed from `_schema_applied` (Zod-validated against corruption). */
-async function readApplied(sql: Sql): Promise<ContentTypeSchema[]> {
+export async function readAppliedSchemas(sql: Sql): Promise<ContentTypeSchema[]> {
   const rows = await sql<{ schema: unknown }[]>`SELECT schema FROM _schema_applied ORDER BY api_id`;
   return rows.map((r) => contentTypeSchemaZ.parse(r.schema) as ContentTypeSchema);
 }
@@ -215,7 +215,7 @@ async function applyChangeSet(sql: Sql, cs: ChangeSet, next: ContentTypeSchema[]
  */
 export async function migrate(sql: Sql, next: ContentTypeSchema[], opts: MigrateOptions = {}): Promise<MigrateResult> {
   await ensureAppliedTable(sql);
-  const prev = await readApplied(sql);
+  const prev = await readAppliedSchemas(sql);
   const cs = diff(prev, next);
   const blocked = lint(cs, opts.allowDestructive ?? false);
   if (blocked.length > 0) throw new MigrationBlockedError(blocked);
@@ -234,7 +234,7 @@ export async function migrateLint(
   opts: MigrateOptions = {},
 ): Promise<{ changes: readonly Change[]; blocked: readonly Change[] }> {
   await ensureAppliedTable(sql);
-  const prev = await readApplied(sql);
+  const prev = await readAppliedSchemas(sql);
   const cs = diff(prev, next);
   return { changes: cs.changes, blocked: lint(cs, opts.allowDestructive ?? false) };
 }

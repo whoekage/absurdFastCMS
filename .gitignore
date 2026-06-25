@@ -18,3 +18,6 @@ playwright/.cache/
 .claude/
 
 .DS_Store
+
+# Builder test scratch (per-pid, cleaned in after())
+packages/api/test/fixtures/.gen-*/
