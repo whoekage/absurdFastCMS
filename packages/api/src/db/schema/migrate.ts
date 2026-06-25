@@ -142,9 +142,9 @@ async function applyOne(tx: Sql, c: Change): Promise<void> {
       return;
     }
     case 'renameField':
-      validateFieldName(c.to); // defense-in-depth: the new name becomes a SQL identifier.
-      await run(tx, compileRenameColumn(deriveTableName(c.apiId), c.from, c.to));
-      return;
+      // Renames are NOT applied here — they are BATCHED per table in applyChangeSet so a name SWAP / rename
+      // cycle (which a naive in-order apply hits with 42701 duplicate_column) is staged through a temp name.
+      throw new Error('internal: renameField is applied in applyChangeSet (batched), not applyOne');
     case 'retypeField': {
       const tbl = deriveTableName(c.apiId);
       const fromEnum = Array.isArray(c.from.params['values']);
@@ -225,14 +225,85 @@ async function reconcileApplied(tx: Sql, next: ContentTypeSchema[]): Promise<voi
   }
 }
 
+/** A single physical `RENAME COLUMN` step. `from`/`to` may be a temp name mid-sequence when breaking a cycle. */
+interface RenameStep {
+  readonly from: string;
+  readonly to: string;
+}
+
+/**
+ * Order a set of column renames into a COLLISION-SAFE sequence of physical `RENAME COLUMN` steps. Within one
+ * table the source names are distinct and the target names are distinct (both are unique field names), so the
+ * rename graph has in/out-degree <= 1 at every node and decomposes into disjoint CHAINS and CYCLES:
+ *   - a CHAIN (a->b->c, c free) resolves by repeatedly applying the rename whose target nobody still holds;
+ *   - a CYCLE (a->b->a — the field-name SWAP — or longer) has NO free target, so Postgres rejects a direct
+ *     rename with 42701 duplicate_column. Break it by parking ONE source under a unique temp name, which frees
+ *     its old name for the predecessor; the cycle then unwinds as a chain and the temp lands last.
+ * This is the temp-name staging that makes a swap lossless inside the ONE migrate transaction.
+ */
+export function planRenameSteps(renames: readonly { from: string; to: string; fieldId: string }[]): RenameStep[] {
+  const steps: RenameStep[] = [];
+  const occupied = new Set(renames.map((r) => r.from)); // names still held by a not-yet-applied source column
+  const universe = new Set<string>(); // every name in play — keeps a generated temp from colliding
+  for (const r of renames) { universe.add(r.from); universe.add(r.to); }
+  const pending = renames.map((r) => ({ from: r.from, to: r.to, fieldId: r.fieldId }));
+
+  while (pending.length > 0) {
+    const i = pending.findIndex((r) => !occupied.has(r.to)); // a target nobody still occupies => safe right now
+    if (i >= 0) {
+      const r = pending.splice(i, 1)[0]!;
+      steps.push({ from: r.from, to: r.to });
+      occupied.delete(r.from); // r.from is now free for whoever targets it
+      continue;
+    }
+    // No free target => every remaining rename sits in a cycle. Park ONE source under a unique temp name to
+    // free its old name (its predecessor's target), turning the cycle into a resolvable chain.
+    const r = pending[0]!;
+    let tmp = `__conti_tmp_${r.fieldId}`;
+    for (let n = 0; universe.has(tmp) || occupied.has(tmp); n++) tmp = `__conti_tmp_${r.fieldId}_${n}`;
+    steps.push({ from: r.from, to: tmp });
+    occupied.delete(r.from);
+    occupied.add(tmp);
+    universe.add(tmp);
+    r.from = tmp; // r becomes tmp -> r.to, still pending until r.to frees up as the cycle unwinds
+  }
+  return steps;
+}
+
 /** Apply the change-set + reconcile the applied snapshot in ONE serialized transaction (all-or-nothing). */
 async function applyChangeSet(sql: Sql, cs: ChangeSet, next: ContentTypeSchema[]): Promise<void> {
+  // Pre-plan per-table column renames into a collision-safe step sequence (handles the field-name SWAP /
+  // rename-cycle that a naive in-order apply hits with 42701). The plan executes as a block at the FIRST
+  // renameField of each table; the logical `applied` list (cs.changes) is unaffected.
+  const renamePlans = new Map<string, RenameStep[]>();
+  const byTable = new Map<string, { from: string; to: string; fieldId: string }[]>();
+  for (const c of cs.changes) {
+    if (c.kind !== 'renameField') continue;
+    validateFieldName(c.to); // defense-in-depth: the new name becomes a SQL identifier.
+    const arr = byTable.get(c.apiId) ?? [];
+    arr.push({ from: c.from, to: c.to, fieldId: c.fieldId });
+    byTable.set(c.apiId, arr);
+  }
+  for (const [apiId, rs] of byTable) renamePlans.set(apiId, planRenameSteps(rs));
+
   await sql.begin(async (tx) => {
     await tx`SET LOCAL lock_timeout = '5s'`;
     await tx`SET LOCAL standard_conforming_strings = on`;
     await tx`SELECT pg_advisory_xact_lock(${MIGRATE_LOCK_KEY})`;
     const handle = tx as unknown as Sql;
-    for (const c of cs.changes) await applyOne(handle, c);
+    const renamedTables = new Set<string>();
+    for (const c of cs.changes) {
+      if (c.kind === 'renameField') {
+        // Run this table's WHOLE rename plan at its first renameField (before that table's retypes/nullables,
+        // which reference the post-rename name); skip the rest — they are already in the plan.
+        if (renamedTables.has(c.apiId)) continue;
+        renamedTables.add(c.apiId);
+        const tbl = deriveTableName(c.apiId);
+        for (const step of renamePlans.get(c.apiId)!) await run(handle, compileRenameColumn(tbl, step.from, step.to));
+        continue;
+      }
+      await applyOne(handle, c);
+    }
     await reconcileApplied(handle, next);
   });
 }

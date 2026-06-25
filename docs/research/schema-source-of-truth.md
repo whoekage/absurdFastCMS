@@ -347,10 +347,18 @@ ONE migrate (rename+add+retype atomic, data preserved, topological order), trans
 or failing op applies NOTHING — no partial), idempotency + the full lifecycle, relations (link tables +
 edges survive unrelated migrations; drop keeps endpoint rows).
 
-Three engine/harness fixes the sweep forced:
+Four engine/harness fixes the sweep forced:
 - **diff ordering:** `dropField` now precedes field renames/adds within a migrate, so dropping `legacy` +
   renaming `current`→`legacy` (or dropping `headline` + adding a new `headline`) in ONE migrate works
   (previously collided with the not-yet-dropped column). 
+- **field-name SWAP / rename cycle (FIXED):** within a table the rename graph has in/out-degree ≤ 1 (sources
+  distinct, targets distinct) → disjoint chains + cycles. `applyChangeSet` now pre-plans each table's renames
+  (`planRenameSteps`) into a collision-safe DDL sequence: a chain applies whichever rename's target is free;
+  a cycle (A↔B swap, or longer A→B→C→A) — which Postgres rejects with 42701 — is broken by parking one source
+  under a unique temp name, then unwinds as a chain. The plan runs as a block at the table's first
+  `renameField` (before its retypes/nullables, which reference the post-rename name); the logical `applied`
+  list is unchanged. Lossless in the ONE tx; values ride their columns. Pinned by swap + 3-cycle tests in
+  `migrate-edge-rename.test.ts`.
 - **enum value-set change (FIXED):** the `retypeField` apply now treats enum involvement as a CHECK swap —
   drop the old `<table>_<col>_check` (discovered via `pg_constraint`), alter the varchar type ONLY on a
   category change or a GROW (never a shrink, which would truncate in-use values), then add the new CHECK with
@@ -363,8 +371,6 @@ Three engine/harness fixes the sweep forced:
 
 KNOWN LIMITATIONS found (data is SAFE in all — they reject/roll back, never corrupt — but the op is
 unsupported; each is pinned by a passing test asserting the current behaviour):
-1. **field-name SWAP in one migrate** (rename A→B AND B→A): rejected (Postgres 42701) + atomic rollback.
-   Needs intermediate temp-name staging. Rare; two-step rename works today.
-2. **lossy shrink on ack** (varchar shorten / decimal scale reduce): once `allowDestructive` is given, PG
+1. **lossy shrink on ack** (varchar shorten / decimal scale reduce): once `allowDestructive` is given, PG
    truncates/rounds silently rather than failing loud on rows that would lose information. A data-loss
    surface distinct from the rollback path — arguably acceptable (it was acked) but worth a pre-flight check.
