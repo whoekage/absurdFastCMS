@@ -78,14 +78,19 @@ export interface UwsServer {
 const STATUS_LINE: Record<number, string> = {
   200: '200 OK',
   201: '201 Created',
+  304: '304 Not Modified',
   400: '400 Bad Request',
   401: '401 Unauthorized',
   403: '403 Forbidden',
   404: '404 Not Found',
   405: '405 Method Not Allowed',
   409: '409 Conflict',
+  410: '410 Gone',
+  412: '412 Precondition Failed',
   413: '413 Payload Too Large',
   415: '415 Unsupported Media Type',
+  422: '422 Unprocessable Entity',
+  428: '428 Precondition Required',
   500: '500 Internal Server Error',
 };
 
@@ -97,6 +102,8 @@ function statusLine(status: number): string {
 function writeResponse(res: uWS.HttpResponse, result: CoreResponse): void {
   res.writeStatus(statusLine(result.status));
   res.writeHeader('Content-Type', result.contentType);
+  // Optional extra headers (Builder routes only). Absent on the read hot path ⇒ byte-identical output.
+  if (result.headers) for (const [k, v] of Object.entries(result.headers)) res.writeHeader(k, v);
   const body = result.body;
   // Offset-safe view: the engine's Buffer is a subarray of the shared OutputArena ArrayBuffer.
   res.end(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));

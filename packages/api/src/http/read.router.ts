@@ -49,6 +49,8 @@ export interface CoreResponse {
   status: number;
   contentType: string;
   body: Buffer;
+  /** Optional extra response headers (e.g. ETag / Retry-After on Builder routes). Absent on the read hot path. */
+  headers?: Record<string, string>;
 }
 
 export const JSON_CT = 'application/json; charset=utf-8';
