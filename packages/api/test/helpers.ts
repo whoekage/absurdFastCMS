@@ -46,6 +46,12 @@ export async function cleanCatalog(sql: Sql): Promise<void> {
   await sql`TRUNCATE content_type_relations, content_type_fields, content_types RESTART IDENTITY CASCADE`;
   // be-05: wipe the component catalog too (component_type_fields cascades from component_types).
   await sql`TRUNCATE component_type_fields, component_types RESTART IDENTITY CASCADE`;
+  // Stage 1 (legacy-meta teardown): files-first tests re-`migrate()` per test, which diffs against the
+  // `_schema_applied` snapshot — so wipe it (and reset the document_id sequence) for a clean per-test start.
+  // `_schema_applied` is created lazily by `migrate()`, so IF EXISTS guards the pre-first-migrate beforeEach.
+  // The meta TRUNCATEs above stay until Stage 4 (still-unmigrated tests rely on them).
+  await sql`DROP TABLE IF EXISTS _schema_applied`;
+  await sql`ALTER SEQUENCE IF EXISTS document_id_seq RESTART`;
 }
 
 /** Whether a table physically exists. */

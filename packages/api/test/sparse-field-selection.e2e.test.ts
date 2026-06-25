@@ -1,13 +1,14 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { createContentType, addRelation } from '../src/db/content-type.repository.ts';
 import { Registry } from '../src/db/registry.ts';
+import { migrate } from '../src/db/schema/migrate.ts';
+import type { ContentTypeSchema } from '../src/db/schema/model.ts';
 import { buildEngine } from '../src/db/engine.loader.ts';
 import { Engine } from '../src/store/engine.ts';
 import { handleRequest } from '../src/http/read.router.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { cleanCatalog } from './helpers.ts';
+import { cleanCatalog, ct } from './helpers.ts';
 
 /**
  * be-02 — Strapi v5 sparse field selection (`fields`), END-TO-END over the REAL HTTP read router +
@@ -48,8 +49,12 @@ async function insertEdge(link: string, ownerPk: number, relatedPk: number): Pro
   await sql.unsafe(`INSERT INTO "${link}" (owner_id, related_id) VALUES ($1, $2)`, [ownerPk, relatedPk]);
 }
 
-async function boot(): Promise<Engine> {
-  return buildEngine(sql, await Registry.build(sql));
+async function setup(schemas: ContentTypeSchema[]): Promise<void> {
+  await migrate(sql, schemas, { allowDestructive: true }); // CREATE TABLE ct_* (+ link tables), no meta
+}
+
+async function boot(schemas: ContentTypeSchema[]): Promise<Engine> {
+  return buildEngine(sql, Registry.fromSchemas(schemas));
 }
 
 function get(engine: Engine, path: string, query = ''): { status: number; body: Buffer } {
@@ -62,16 +67,19 @@ function parse(body: Buffer): unknown {
 }
 
 test('LIST fields=: returns exactly id + requested columns (Strapi v5)', async () => {
-  await createContentType(sql, {
-    apiId: 'article',
-    fields: [
-      { name: 'title', cmsType: 'string' },
-      { name: 'body', cmsType: 'text' },
-      { name: 'views', cmsType: 'integer' },
-    ],
-  });
+  const schemas = [
+    ct({
+      apiId: 'article',
+      fields: [
+        { name: 'title', cmsType: 'string' },
+        { name: 'body', cmsType: 'text' },
+        { name: 'views', cmsType: 'integer' },
+      ],
+    }),
+  ];
+  await setup(schemas);
   await insertRow('ct_article', { title: 'A', body: 'long body', views: 7 });
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   const res = get(engine, '/article', 'fields=title,views');
   assert.equal(res.status, 200);
@@ -82,15 +90,18 @@ test('LIST fields=: returns exactly id + requested columns (Strapi v5)', async (
 });
 
 test('SINGLE /:type/:id now threads fields (was previously ignored)', async () => {
-  await createContentType(sql, {
-    apiId: 'article',
-    fields: [
-      { name: 'title', cmsType: 'string' },
-      { name: 'body', cmsType: 'text' },
-    ],
-  });
+  const schemas = [
+    ct({
+      apiId: 'article',
+      fields: [
+        { name: 'title', cmsType: 'string' },
+        { name: 'body', cmsType: 'text' },
+      ],
+    }),
+  ];
+  await setup(schemas);
   const id = await insertRow('ct_article', { title: 'A', body: 'B' });
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   const res = get(engine, `/article/${id}`, 'fields=title');
   assert.equal(res.status, 200);
@@ -101,20 +112,27 @@ test('SINGLE /:type/:id now threads fields (was previously ignored)', async () =
 });
 
 test('fields with an UNKNOWN field 400s (same gate as filters)', async () => {
-  await createContentType(sql, { apiId: 'article', fields: [{ name: 'title', cmsType: 'string' }] });
-  const engine = await boot();
+  const schemas = [ct({ apiId: 'article', fields: [{ name: 'title', cmsType: 'string' }] })];
+  await setup(schemas);
+  const engine = await boot(schemas);
   assert.equal(get(engine, '/article', 'fields=nope').status, 400);
   assert.equal(get(engine, '/article', 'fields=title,nope').status, 400);
 });
 
 test('fields COMPOSES with populate: projected OWNER body + FULL related rows', async () => {
-  await createContentType(sql, { apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }, { name: 'bio', cmsType: 'text' }] });
-  await createContentType(sql, { apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }, { name: 'isbn', cmsType: 'string' }] });
-  const rel = await addRelation(sql, 'book', { field: 'author', kind: 'manyToOne', target: 'author' });
+  const schemas = [
+    ct({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }, { name: 'bio', cmsType: 'text' }] }),
+    ct({
+      apiId: 'book',
+      fields: [{ name: 'title', cmsType: 'string' }, { name: 'isbn', cmsType: 'string' }],
+      relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }],
+    }),
+  ];
+  await setup(schemas);
   const a1 = await insertRow('ct_author', { name: 'Le Guin', bio: 'bio text' });
   const b1 = await insertRow('ct_book', { title: 'The Dispossessed', isbn: '111' });
-  await insertEdge(rel.link_table, b1, a1);
-  const engine = await boot();
+  await insertEdge('book_author_lnk', b1, a1); // deterministic link name (was rel.link_table)
+  const engine = await boot(schemas);
 
   // Project the OWNER to (id + title); populate author -> the author row is FULL (relations are not projected).
   const res = get(engine, '/book', 'fields=title&populate=author');
@@ -132,13 +150,16 @@ test('fields COMPOSES with populate: projected OWNER body + FULL related rows', 
 });
 
 test('NO fields: the response is byte-identical to before (full-row path unchanged)', async () => {
-  await createContentType(sql, {
-    apiId: 'article',
-    fields: [{ name: 'title', cmsType: 'string' }, { name: 'views', cmsType: 'integer' }],
-  });
+  const schemas = [
+    ct({
+      apiId: 'article',
+      fields: [{ name: 'title', cmsType: 'string' }, { name: 'views', cmsType: 'integer' }],
+    }),
+  ];
+  await setup(schemas);
   await insertRow('ct_article', { title: 'A', views: 1 });
   await insertRow('ct_article', { title: 'B', views: 2 });
-  const engine = await boot();
+  const engine = await boot(schemas);
 
   const a = get(engine, '/article', 'sort=id:asc');
   const b = get(engine, '/article', 'sort=id:asc&fields='); // empty fields= is a no-op
