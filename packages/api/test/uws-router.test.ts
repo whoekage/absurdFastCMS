@@ -212,7 +212,7 @@ test('GET /:type/:id -> 200 single-item envelope deep-equal to the oracle + byte
 
 // --- 5. unknown type -> 404 -------------------------------------------------
 
-test('unknown content-type -> 404 with { error }', () => {
+test('unknown module -> 404 with { error }', () => {
   const engine = seedEngine(buildRows(10, 1));
 
   const list = handleRequest(engine, { method: 'GET', path: '/widget', query: '' });

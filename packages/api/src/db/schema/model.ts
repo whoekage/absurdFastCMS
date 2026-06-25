@@ -4,7 +4,7 @@ import type { CmsType, ComponentFieldKind, FieldOptions } from '../type.catalog.
 import type { RelationKind } from '../ddl.ts';
 
 /**
- * THE FILES-FIRST SCHEMA MODEL (§S1 of docs/research/schema-source-of-truth.md). A content-type is
+ * THE FILES-FIRST SCHEMA MODEL (§S1 of docs/research/schema-source-of-truth.md). A module is
  * declared in a committed, dev-editable `schema/<apiId>.json` file — the SOURCE OF TRUTH. This module
  * is the model + the Zod BOUNDARY validator for that file; it is PURE (no DB, no fs) and carries the
  * cardinal design choice:
@@ -78,7 +78,7 @@ const relationSchemaZ = z
   .strict();
 
 /**
- * One content-type, as it lives on disk in `schema/<apiId>.json`. `id` is identity; `apiId` is the
+ * One module, as it lives on disk in `schema/<apiId>.json`. `id` is identity; `apiId` is the
  * route/engine key and the basis for the `ct_<apiId>` table; `collectionName` is OPTIONAL (re-derived as
  * `ct_<apiId>` when absent — stored only to mirror Strapi's display↔table decoupling). `info` is cosmetic
  * (unused by the registry). Field ORDER is significant (the byte-identical wire order).
@@ -124,7 +124,7 @@ export interface FieldSchema {
   localized?: boolean;
 }
 
-/** A relation declaration owned by a content-type. */
+/** A relation declaration owned by a module. */
 export interface RelationSchema {
   id: string;
   field: string;
@@ -135,7 +135,7 @@ export interface RelationSchema {
 
 /**
  * A COMPONENT declaration — a reusable field group with NO physical table (stored as nested JSON in a host
- * type's jsonb column). No options (draft&publish/i18n are content-type concerns) and no top-level relations
+ * type's jsonb column). No options (draft&publish/i18n are module concerns) and no top-level relations
  * (a `relation` field INSIDE a component is an inline id-ref, expressed as a normal {@link FieldSchema} of
  * type `relation`). Lives in `schema/components/<apiId>.ts`.
  */
@@ -145,7 +145,7 @@ export interface ComponentSchema {
   fields: FieldSchema[];
 }
 
-/** A whole content-type declaration (one `schema/<apiId>.json` file). */
+/** A whole module declaration (one `schema/<apiId>.json` file). */
 export interface Schema {
   /** Stable identity (never changes; survives an apiId/displayName rename). */
   id: string;

@@ -37,7 +37,7 @@ before(async () => {
   const auth = buildAuth({ baseURL: base });
 
   store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadFromSchemas([]); // files-first empty catalog (no content types here)
+  const { engine, registry } = await store.loadFromSchemas([]); // files-first empty catalog (no modules here)
   const server = createServer(engine, store, registry, undefined, auth);
   token = await server.listen(port0);
   close = server.close;
@@ -98,7 +98,7 @@ test('a non-/auth route is unaffected by the auth mount (existing read path stay
   // 404 is acceptable; what matters is it is NOT an auth-handler response.
   const res = await fetch(`${base}/modules`);
   assert.ok(res.status === 200 || res.status === 404, `unexpected status ${res.status}`);
-  // An auth response would carry better-auth's JSON error shape; a builder response is the content-type list.
+  // An auth response would carry better-auth's JSON error shape; a builder response is the module list.
   const text = await res.text();
   assert.ok(!/Better Auth|invalid_/i.test(text), 'a non-/auth route must not be handled by the auth provider');
 });

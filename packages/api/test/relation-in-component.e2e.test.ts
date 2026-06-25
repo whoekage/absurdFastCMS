@@ -14,7 +14,7 @@ const { migrate } = await import('../src/db/schema/migrate.ts');
  * be-05b RELATION-INSIDE-COMPONENT — INLINE relation refs inside components, end-to-end over a REAL uWS
  * server + REAL Postgres (per-file clone), NO MOCKS. Proves:
  *  - a `relation` field inside a SINGLE / REPEATABLE / DYNAMIC-ZONE component stores inline id ref(s) to a
- *    TARGET content-type (NOT a link table) and reads back VERBATIM un-populated;
+ *    TARGET module (NOT a link table) and reads back VERBATIM un-populated;
  *  - write existence-check: a dangling id -> 400; a wrong-target id (exists in another type, not the
  *    declared target) -> 400; single vs many cardinality enforced;
  *  - read populate: a single ref -> the resolved target OBJECT (or null when dangling), a many ref -> an
@@ -25,7 +25,7 @@ const { migrate } = await import('../src/db/schema/migrate.ts');
  *  - the files-first migrate REJECTS a top-level `relation` field (the be-05b component-only guard).
  *
  * MIGRATION NOTE (legacy-meta teardown): the original R0 ('a component relation field whose target
- * content-type does not exist is rejected at component-type DEFINITION') asserted the legacy
+ * module does not exist is rejected at component-type DEFINITION') asserted the legacy
  * POST /component-types controller's definition-time validation. The files-first path (Registry.fromSchemas)
  * does not re-validate a component relation target at definition; runtime safety is instead covered by the
  * write-time existence checks below (R2 dangling id, R2b wrong-target id). R0 had no files-first analog and
@@ -73,7 +73,7 @@ after(async () => {
 const POST = (p: string, body: unknown) => fetch(`${base}${p}`, { method: 'POST', body: JSON.stringify(body) });
 const GET = (p: string) => fetch(`${base}${p}`);
 
-/** The `author` target content-type as a files-first IR. */
+/** The `author` target module as a files-first IR. */
 const authorType = schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false } }] });
 
 /** Create two `author` rows over the live write path; returns their ids (the type is pre-built per test). */
@@ -83,7 +83,7 @@ async function seedAuthorRows(): Promise<{ a1: number; a2: number }> {
   return { a1, a2 };
 }
 
-// --- R0b: a `relation` field is COMPONENT-ONLY (no top-level content-type form) -----------------
+// --- R0b: a `relation` field is COMPONENT-ONLY (no top-level module form) -----------------
 // be-05b GUARD ported to the files-first path: `relation` is a ComponentFieldKind, but unlike
 // component/component-repeatable/dynamiczone it has NO top-level form — an inline ref only lives inside a
 // component json. A top-level `relation` field is rejected by resolveFields -> rejectTopLevelRelation,
@@ -302,7 +302,7 @@ test('R9 a component without a relation-ref field reads identically (no relation
 });
 
 // --- R10: a non-component type is byte-identical (relation-ref machinery never runs) ------------
-test('R10 a non-component content type is byte-identical (relation-ref machinery never runs)', async () => {
+test('R10 a non-component module is byte-identical (relation-ref machinery never runs)', async () => {
   const plainType = schema({ apiId: 'plain', fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }] });
   await boot([plainType]);
   const created = (await (await POST('/plain', { title: 'T' })).json()) as { data: { id: number } };

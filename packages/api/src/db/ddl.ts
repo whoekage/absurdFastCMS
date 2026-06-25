@@ -82,7 +82,7 @@ export class ReservedFieldNameError extends Error {
 export class ReservedTableNameError extends Error {
   readonly value: string;
   constructor(value: string) {
-    super(`content-type api_id / table name ${JSON.stringify(value)} is reserved`);
+    super(`module api_id / table name ${JSON.stringify(value)} is reserved`);
     this.name = 'ReservedTableNameError';
     this.value = value;
   }
@@ -98,7 +98,7 @@ export class DuplicateFieldError extends Error {
 export class ModuleExistsError extends Error {
   readonly apiId: string;
   constructor(apiId: string) {
-    super(`content-type ${JSON.stringify(apiId)} already exists`);
+    super(`module ${JSON.stringify(apiId)} already exists`);
     this.name = 'ModuleExistsError';
     this.apiId = apiId;
   }
@@ -106,7 +106,7 @@ export class ModuleExistsError extends Error {
 export class ModuleNotFoundError extends Error {
   readonly apiId: string;
   constructor(apiId: string) {
-    super(`content-type ${JSON.stringify(apiId)} not found`);
+    super(`module ${JSON.stringify(apiId)} not found`);
     this.name = 'ModuleNotFoundError';
     this.apiId = apiId;
   }
@@ -224,7 +224,7 @@ export function validateFieldName(value: unknown): string {
 }
 
 /**
- * Derive (and validate) the physical table name for a content-type api_id. Validates the api_id,
+ * Derive (and validate) the physical table name for a module api_id. Validates the api_id,
  * rejects reserved names / `_`-leading / `ct_`-leading (case-insensitively), assembles `ct_${apiId}`,
  * then re-validates the FINAL assembled name INCLUDING the 63-byte check on the assembly (so the real
  * table name can never silently truncate) and rejects a final collision with a reserved table.
@@ -357,7 +357,7 @@ function columnSpec(name: string, field: ResolvedField): (cb: import('kysely').C
 }
 
 /**
- * CREATE TABLE for a content-type: the three system columns (`id` identity PK, `created_at`,
+ * CREATE TABLE for a module: the three system columns (`id` identity PK, `created_at`,
  * `updated_at` both `timestamptz NOT NULL DEFAULT now()`) then the user columns in `sort` order, each
  * with its native pg type via the `sql\`\`` escape hatch, NULL/NOT NULL, enum CHECK, and constant
  * default. Valid even with zero user fields. Returns `{ sql, parameters }` — never executes.
@@ -421,7 +421,7 @@ export function compileRenameColumn(tableName: string, from: string, to: string)
   return compiler.schema.alterTable(tableName).renameColumn(from, to).compile();
 }
 
-/** ALTER TABLE ... RENAME TO ... (real TABLE rename for a content-type apiId change — lossless). */
+/** ALTER TABLE ... RENAME TO ... (real TABLE rename for a module apiId change — lossless). */
 export function compileRenameTable(from: string, to: string): CompiledQuery {
   return compiler.schema.alterTable(from).renameTo(to).compile();
 }

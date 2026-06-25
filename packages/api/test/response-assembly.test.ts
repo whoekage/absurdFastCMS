@@ -222,7 +222,7 @@ test('respond: limit larger than result and offset past the end behave like the 
   }
 });
 
-test('respond on a content-type with zero rows: empty data, total 0', () => {
+test('respond on a module with zero rows: empty data, total 0', () => {
   const engine = new Engine();
   engine.define('empty', [{ name: 'x', type: 'i32' }]);
   const buf = engine.respond('empty', {});

@@ -2,14 +2,14 @@ import type { Sql } from 'postgres';
 import type { ColumnType } from '../store/column.ts';
 import type { FieldDef } from '../store/table.ts';
 import { deriveTableName, validateIdentifier, RELATION_KINDS, type RelationKind } from './ddl.ts';
-import type { ModuleRow, FieldRow, RelationRow } from './content-type.repository.ts';
-import type { ComponentTypeRow, ComponentFieldRow } from './component-type.repository.ts';
+import type { ModuleRow, FieldRow, RelationRow } from './module.fields.ts';
+import type { ComponentTypeRow, ComponentFieldRow } from './component.fields.ts';
 import { isComponentFieldKind, type CmsType, type ComponentFieldKind } from './type.catalog.ts';
 import { schemaToRows, relationRowsByType, componentSchemaToRows } from './schema/adapt.ts';
 import type { Schema, ComponentSchema } from './schema/model.ts';
 
 /**
- * THE RAM SOURCE OF TRUTH at runtime. Built at boot from the files-first content-type schemas (via
+ * THE RAM SOURCE OF TRUTH at runtime. Built at boot from the files-first module schemas (via
  * {@link Registry.fromSchemas}), the
  * {@link Registry} holds a per-type {@link ModuleDef} that drives EVERYTHING downstream — the
  * engine `define`, the loader's typed coercion, the body validator, and the write repo — so they can
@@ -61,14 +61,14 @@ export class RegistryError extends Error {
   readonly apiId: string;
   readonly field: string;
   constructor(apiId: string, field: string, reason: string) {
-    super(`content-type "${apiId}" field "${field}": ${reason}`);
+    super(`module "${apiId}" field "${field}": ${reason}`);
     this.name = 'RegistryError';
     this.apiId = apiId;
     this.field = field;
   }
 }
 
-/** One field of a content-type, fully resolved for load / validate / write. */
+/** One field of a module, fully resolved for load / validate / write. */
 export interface RegistryField {
   /** Engine field name == Postgres column name (verbatim, no snake_case map). */
   name: string;
@@ -109,8 +109,8 @@ export interface RegistryField {
   component?: { kind: ComponentFieldKind; component?: string; components?: readonly string[] };
   /**
    * be-05b RELATION-INSIDE-COMPONENT: present iff `cmsType === 'relation'` (a component field only) — an
-   * INLINE id ref to a target content-type. The field IS a plain `json` column (`field.json===true`),
-   * emitted verbatim un-populated. `target` is the referenced content-type api_id; `multiple` selects
+   * INLINE id ref to a target module. The field IS a plain `json` column (`field.json===true`),
+   * emitted verbatim un-populated. `target` is the referenced module api_id; `multiple` selects
    * single-id vs array-of-ids cardinality. The body parser reads it (positive-int4 + cardinality), the
    * write existence-check reads it (the id(s) must exist in the TARGET ct_ table), and the read populate
    * post-step reads it (resolve the id(s) via the engine, applying target draft/publish + locale
@@ -141,7 +141,7 @@ export interface IndexPlan {
 }
 
 /**
- * One relation declared on this content-type SIDE — METADATA ONLY (this slice). The edge data lives in
+ * One relation declared on this module SIDE — METADATA ONLY (this slice). The edge data lives in
  * `linkTable`; loading edges into the CSR / building Relation objects is the NEXT slice. The read arena
  * is byte-identical with or without relations (a relation emits NO ct_ column and NO FieldDef).
  */
@@ -159,7 +159,7 @@ export interface RelationMeta {
   sort: number;
 }
 
-/** A content-type fully resolved for the runtime — the unit the registry hands to every consumer. */
+/** A module fully resolved for the runtime — the unit the registry hands to every consumer. */
 export interface ModuleDef {
   /** The canonical stored api_id (the engine + registry key). */
   apiId: string;
@@ -554,10 +554,10 @@ function buildDef(ct: ModuleRow, fieldRows: FieldRow[], relationRows: RelationRo
 
 /**
  * be-05 — a COMPONENT type resolved for the runtime: its api_id + its fields (each a {@link RegistryField},
- * reusing the same builder as a content-type user field). A component has NO physical table / NO engine
+ * reusing the same builder as a module user field). A component has NO physical table / NO engine
  * presence, so a {@link ComponentDef} carries NO fieldDefs/columnPlan/indexPlan — only the field SHAPE the
  * recursive write validator + read populate post-step (next phases) walk. `requiredOnCreate` mirrors a
- * content-type's: a NOT-NULL field with no default must be present in a component instance.
+ * module's: a NOT-NULL field with no default must be present in a component instance.
  */
 export interface ComponentDef {
   apiId: string;
@@ -570,7 +570,7 @@ export interface ComponentDef {
   /** Media fields inside this component (inline id refs; the populate seam). */
   mediaFields: Map<string, { multiple: boolean }>;
   /**
-   * be-05b: relation-ref fields inside this component (inline content-type id refs; the write existence-
+   * be-05b: relation-ref fields inside this component (inline module id refs; the write existence-
    * check + read populate seam). Empty for a component with no relation field => those walks are no-ops.
    */
   relationRefFields: Map<string, { target: string; multiple: boolean }>;
@@ -630,7 +630,7 @@ function componentEngineType(r: ComponentFieldRow): string {
 }
 
 /**
- * The content-type registry: O(1) lookup by api_id, built from meta with exactly two query CLASSES
+ * The module registry: O(1) lookup by api_id, built from meta with exactly two query CLASSES
  * (listContentTypes + getFields-per-type) and per-type rebuild on a schema change / write.
  */
 export class Registry {
@@ -638,7 +638,7 @@ export class Registry {
   /** be-05: the parallel component-type store (no engine presence; pure schema for write/populate walks). */
   private readonly components = new Map<string, ComponentDef>();
 
-  /** Is a content-type by this api_id known? (mirrors engine.has — same canonical key). */
+  /** Is a module by this api_id known? (mirrors engine.has — same canonical key). */
   has(apiId: string): boolean {
     return this.byApiId.has(apiId);
   }
@@ -677,7 +677,7 @@ export class Registry {
    */
   static fromSchemas(schemas: Schema[], components: ComponentSchema[] = []): Registry {
     const reg = new Registry();
-    // Components FIRST (a content-type / component field can reference one).
+    // Components FIRST (a module / component field can reference one).
     for (const cs of components) {
       const { cmp, fieldRows } = componentSchemaToRows(cs);
       reg.components.set(cmp.api_id, buildComponentDef(cmp, fieldRows));

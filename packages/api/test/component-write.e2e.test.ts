@@ -34,7 +34,7 @@ function component(apiId: string, fields: { name: string; type: FieldType; optio
  *    too-deep nesting, oversized JSON);
  *  - an INLINE media ref inside a component is existence-checked in the write tx (dangling id -> 400) and
  *    POPULATED on read (the asset object inlined in place of the bare id);
- *  - a content type WITHOUT a component field is byte-identical (its read path is untouched).
+ *  - a module WITHOUT a component field is byte-identical (its read path is untouched).
  */
 
 let sql: Sql;
@@ -282,8 +282,8 @@ test('W9 inline media inside repeatable + dynamic-zone populates correctly', asy
   assert.equal(pop.data.slides[1]!.pic!.id, a2.id);
 });
 
-// --- W10: BYTE-IDENTICAL — a content type with NO component field is untouched ------------------
-test('W10 a content type with NO component field reads identically (no populate effect)', async () => {
+// --- W10: BYTE-IDENTICAL — a module with NO component field is untouched ------------------
+test('W10 a module with NO component field reads identically (no populate effect)', async () => {
   const plainType = schema({
     apiId: 'plain',
     fields: [

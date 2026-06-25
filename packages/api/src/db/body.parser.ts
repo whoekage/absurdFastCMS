@@ -132,7 +132,7 @@ export function validateBody(def: ModuleDef, raw: unknown, mode: WriteMode, regi
  *   - `null` / any other primitive / an object with an unknown key -> 400.
  * A to-one (oneToOne / manyToOne) accepts at most ONE id for set/connect (disconnect of >1 is allowed,
  * extras are no-ops). `meta.kind` is ALREADY this side's cardinality: the owning row stores `spec.kind`,
- * the inverse row stores `inverseKind(spec.kind)` (content-type-repo) — so it needs NO further flip here.
+ * the inverse row stores `inverseKind(spec.kind)` (module-repo) — so it needs NO further flip here.
  */
 function parseRelationValue(meta: RelationMeta, value: unknown, out: RelationOp[]): void {
   const field = meta.field;
@@ -228,7 +228,7 @@ function coerceMedia(field: RegistryField, multiple: boolean, v: unknown): unkno
  * (or, leniently, a single-element array) -> a NUMBER stored inline in the json component column. MULTIPLE
  * accepts an id or an array of ids -> a deduped NUMBER[] stored inline. Every id is a positive int4 (same
  * MAX_INT4 guard as a media / link-table relation id); a non-int / <=0 / >int4 id is a clean 400. The id's
- * EXISTENCE in the TARGET content-type is checked later in write.handler (the body parser is sync + has no
+ * EXISTENCE in the TARGET module is checked later in write.handler (the body parser is sync + has no
  * DB); a dangling id simply resolves to null/dropped on read. NO link table is touched — the ref is stored
  * by value inline, distinct from a be-01 link-table relation.
  */

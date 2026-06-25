@@ -1,6 +1,6 @@
-import type { ModuleRow, FieldRow, RelationRow, FieldSpec } from '../content-type.repository.ts';
-import { resolveFields } from '../content-type.repository.ts';
-import { resolveComponentFields, type ComponentTypeRow, type ComponentFieldRow } from '../component-type.repository.ts';
+import type { ModuleRow, FieldRow, RelationRow, FieldSpec } from '../module.fields.ts';
+import { resolveFields } from '../module.fields.ts';
+import { resolveComponentFields, type ComponentTypeRow, type ComponentFieldRow } from '../component.fields.ts';
 import { deriveTableName, deriveLinkTableName, inverseKind } from '../ddl.ts';
 import type { Schema, ComponentSchema, FieldSchema } from './model.ts';
 
@@ -24,7 +24,7 @@ import type { Schema, ComponentSchema, FieldSchema } from './model.ts';
 export class SchemaAdaptError extends Error {
   readonly apiId: string;
   constructor(apiId: string, reason: string) {
-    super(`content-type "${apiId}": ${reason}`);
+    super(`module "${apiId}": ${reason}`);
     this.name = 'SchemaAdaptError';
     this.apiId = apiId;
   }
@@ -139,7 +139,7 @@ export function relationRowsByType(schemas: Schema[]): Map<string, RelationRow[]
 /**
  * Convert a {@link ComponentSchema} into the component meta rows `buildComponentDef` expects. Resolves
  * every field through the SAME `resolveComponentFields` the meta writer uses (which allows a `relation`
- * inline-ref field, unlike a content-type field). Synthetic numeric ids (buildComponentDef keys off the
+ * inline-ref field, unlike a module field). Synthetic numeric ids (buildComponentDef keys off the
  * field name). A component has no physical table → these rows feed the registry only, never any DDL.
  */
 export function componentSchemaToRows(schema: ComponentSchema): { cmp: ComponentTypeRow; fieldRows: ComponentFieldRow[] } {

@@ -215,7 +215,7 @@ test('GET /:type list with surrogate-pair text -> bytes byte-identical to engine
 
 // --- 5. 404s ----------------------------------------------------------------
 
-test('unknown content-type -> 404 with an error body', async () => {
+test('unknown module -> 404 with an error body', async () => {
   const list = await fetch(`${base}/widget`);
   assert.equal(list.status, 404);
   assert.match(list.headers.get('content-type') ?? '', /application\/json/);

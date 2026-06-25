@@ -150,7 +150,7 @@ const NULL_LIT = Buffer.from('null', 'utf8');
 const POPULATE_DEPTH_CAP = 2;
 
 /**
- * The content-type REGISTRY + output facade. Owns named modules -> {@link Table} instances and
+ * The module REGISTRY + output facade. Owns named modules -> {@link Table} instances and
  * their per-table {@link OutputArena}. Thin by design: the Table does all the query work (filter /
  * sort / paginate via `scanTree`/`query`); the Engine adds the serialize-on-write output store and
  * the list/single Buffer assembly (late materialization).
@@ -365,9 +365,9 @@ export class Engine {
     return this.relations.get(Engine.relKey(ownerApiId, field));
   }
 
-  /** Define a content-type by name + field schema, creating its Table and output arena. */
+  /** Define a module by name + field schema, creating its Table and output arena. */
   define(name: string, fields: FieldDef[]): Table {
-    if (this.tables.has(name)) throw new Error(`content-type "${name}" already defined`);
+    if (this.tables.has(name)) throw new Error(`module "${name}" already defined`);
     const t = new Table(fields);
     this.tables.set(name, t);
     this.arenas.set(name, new OutputArena());
@@ -381,25 +381,25 @@ export class Engine {
     return t;
   }
 
-  /** The Table for a content-type (for index registration, warming, raw queries). */
+  /** The Table for a module (for index registration, warming, raw queries). */
   table(name: string): Table {
     const t = this.tables.get(name);
-    if (t === undefined) throw new Error(`unknown content-type "${name}"`);
+    if (t === undefined) throw new Error(`unknown module "${name}"`);
     return t;
   }
 
-  /** Whether a content-type by this name is defined (the HTTP layer's 404 gate). */
+  /** Whether a module by this name is defined (the HTTP layer's 404 gate). */
   has(name: string): boolean {
     return this.tables.has(name);
   }
 
-  /** All defined content-type names (registration order). Read-only introspection seam (debug inspector). */
+  /** All defined module names (registration order). Read-only introspection seam (debug inspector). */
   typeNames(): string[] {
     return [...this.tables.keys()];
   }
 
   /**
-   * The field SCHEMA for a content-type, as a fresh `FieldDef[]` (the whitelist the query parser
+   * The field SCHEMA for a module, as a fresh `FieldDef[]` (the whitelist the query parser
    * validates against). Throws on an unknown type — callers gate with {@link has} first.
    */
   fields(name: string): FieldDef[] {
@@ -415,19 +415,19 @@ export class Engine {
     }));
   }
 
-  /** The dense row count of a content-type (the single-item id range gate: id in [0, rowCount)). */
+  /** The dense row count of a module (the single-item id range gate: id in [0, rowCount)). */
   rowCount(name: string): number {
     return this.table(name).rowCount;
   }
 
   private arena(name: string): OutputArena {
     const a = this.arenas.get(name);
-    if (a === undefined) throw new Error(`unknown content-type "${name}"`);
+    if (a === undefined) throw new Error(`unknown module "${name}"`);
     return a;
   }
 
   /**
-   * Insert a row into a content-type: append it to the Table (which builds the columns + null bits)
+   * Insert a row into a module: append it to the Table (which builds the columns + null bits)
    * AND serialize-on-write its output JSON bytes into the arena ONCE. `materialize` already renders a
    * NULL field as `null` and a date as ISO-8601, so the stored bytes match the read-time envelope.
    * Returns the dense row id.
@@ -448,14 +448,14 @@ export class Engine {
   }
 
   /**
-   * Install a freshly-built {@link DetachedTable} as a NEW content-type (the boot/load path) WITHOUT
+   * Install a freshly-built {@link DetachedTable} as a NEW module (the boot/load path) WITHOUT
    * the throwaway empty Table + OutputArena that `define` would allocate. Sets the three Map slots
    * directly from the detached pair. Throws if `name` is ALREADY defined (use {@link replaceType} to
    * swap an existing type). No cache invalidation publish: at boot the cache is empty, and a freshly
    * registered type has no cached responses to drop.
    */
   registerDetached(name: string, detached: DetachedTable): void {
-    if (this.tables.has(name)) throw new Error(`content-type "${name}" already defined`);
+    if (this.tables.has(name)) throw new Error(`module "${name}" already defined`);
     this.tables.set(name, detached.table);
     this.arenas.set(name, detached.arena);
     this.hasRawField.set(name, detached.hasRawField);
@@ -465,7 +465,7 @@ export class Engine {
   }
 
   /**
-   * Atomically REPLACE an already-defined content-type's storage with a freshly-built {@link
+   * Atomically REPLACE an already-defined module's storage with a freshly-built {@link
    * DetachedTable} (its Table + output arena + hasRawField). The per-type rebuild fast path: the
    * caller streams the type's rows into the detached pair off to the side (registering indexes +
    * warming once), THEN calls this — which does the three Map writes + the per-type cache
@@ -478,7 +478,7 @@ export class Engine {
    * existing name). Sibling types' tables/arenas/caches are untouched — the blast radius is one type.
    */
   replaceType(name: string, detached: DetachedTable): void {
-    if (!this.tables.has(name)) throw new Error(`content-type "${name}" is not defined (use define)`);
+    if (!this.tables.has(name)) throw new Error(`module "${name}" is not defined (use define)`);
     // Synchronous swap burst: no await between these, so no torn read is possible.
     this.tables.set(name, detached.table);
     this.arenas.set(name, detached.arena);
@@ -492,14 +492,14 @@ export class Engine {
   }
 
   /**
-   * Remove a content-type entirely (the DROP path): delete its Table + arena + hasRawField slot and
+   * Remove a module entirely (the DROP path): delete its Table + arena + hasRawField slot and
    * publish so the response cache drops every Buffer view pinning the old arena. Synchronous burst — no
    * await between the deletes — so a concurrent GET sees `has()===false` atomically (clean 404), never a
    * torn slot. Throws if not defined (the caller only drops after a confirmed-present DB commit, so an
    * absent slot signals an engine/registry desync worth surfacing).
    */
   dropType(name: string): void {
-    if (!this.tables.has(name)) throw new Error(`content-type "${name}" is not defined (cannot drop)`);
+    if (!this.tables.has(name)) throw new Error(`module "${name}" is not defined (cannot drop)`);
     const dropped = this.tables.get(name)!; // capture BEFORE the delete for the endpoint scan below.
     this.tables.delete(name);
     this.arenas.delete(name);
@@ -835,7 +835,7 @@ export class Engine {
    * Assemble a SINGLE-item response addressed by the PUBLIC primary key `id` (the real Postgres PK,
    * not the dense row position). Resolves `id` -> dense row via the eq index on the `id` field, then
    * reuses {@link respondOne}. Returns `null` when no row carries that id (the 404 gate). Requires the
-   * content-type to have an eq index on `id`.
+   * module to have an eq index on `id`.
    */
   respondById(name: string, id: number, populate: PopulatePlan = [], where?: FilterNode, fields?: string[]): Buffer | null {
     // Resolve + VALIDATE the plan FIRST (unknown/scalar populate name -> 400) for the single-item path

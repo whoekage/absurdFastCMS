@@ -28,7 +28,7 @@ export type HookOp = 'create' | 'update' | 'delete';
 const BEFORE = { create: 'beforeCreate', update: 'beforeUpdate', delete: 'beforeDelete' } as const;
 const AFTER = { create: 'afterCreate', update: 'afterUpdate', delete: 'afterDelete' } as const;
 
-/** Resolves a content-type's hooks by apiId and runs them with the correct transaction/error semantics. */
+/** Resolves a module's hooks by apiId and runs them with the correct transaction/error semantics. */
 export class HookRegistry {
   // NB: a field + assignment, not a constructor parameter-property — the latter is not erasable syntax
   // (it emits runtime code) and Node's type-stripping rejects it.

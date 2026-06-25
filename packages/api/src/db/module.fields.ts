@@ -2,7 +2,7 @@ import { resolveType, resolveComponentField, isComponentFieldKind, ComponentFiel
 import { validateFieldName, validateDefault, DuplicateFieldError, type RelationKind, type ResolvedField } from './ddl.ts';
 
 /**
- * PURE content-type field helpers + the meta ROW TYPES. After the legacy-meta teardown, the meta-write
+ * PURE module field helpers + the meta ROW TYPES. After the legacy-meta teardown, the meta-write
  * operations (createContentType / addField / addRelation / dropContentType / …) and the meta-read selects
  * are GONE — files (`modules/<apiId>/schema.ts`) + `_schema_applied` are the source of truth, materialized
  * by `migrate()`. What survives here is {@link resolveFields} (the field-spec → resolved-field validation,
@@ -74,9 +74,9 @@ export interface RelationRow {
 
 /**
  * be-05b GUARD: `relation` is a {@link ComponentFieldKind}, but unlike component/component-repeatable/
- * dynamiczone it has NO top-level (content-type) form — a relation INSIDE a component is an inline id ref
+ * dynamiczone it has NO top-level (module) form — a relation INSIDE a component is an inline id ref
  * stored in the component's json (set-by-value, existence-checked on write, populate-resolved on read). A
- * relation at the TOP LEVEL of a content-type goes through the be-01 LINK-TABLE path ({@link RelationSpec},
+ * relation at the TOP LEVEL of a module goes through the be-01 LINK-TABLE path ({@link RelationSpec},
  * a real CSR with an inverse side), NOT this scalar-field path. So reject `cmsType === 'relation'` here:
  * `resolveComponentField` is shared with the component-type path (the only legitimate caller). Without
  * this, a top-level relation field would resolve to a bare json column that is never existence-checked nor
@@ -105,7 +105,7 @@ export function resolveFields(specs: FieldSpec[]): ResolvedField[] {
     seen.add(lower);
     // be-05b: `relation` is a component-field-kind that is ONLY valid INSIDE a component type (it has no
     // top-level form — an inline id ref lives in a component json column, not a ct_ column). Reject it on
-    // the content-type field path BEFORE resolving (otherwise it would resolve to a bare json column that
+    // the module field path BEFORE resolving (otherwise it would resolve to a bare json column that
     // is never existence-checked on write nor populated on read). Top-level relations go through the be-01
     // link-table path (RelationSpec), NOT this scalar-field path.
     rejectTopLevelRelation(spec.cmsType);

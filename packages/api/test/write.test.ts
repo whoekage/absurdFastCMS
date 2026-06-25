@@ -8,7 +8,7 @@ import { startTestServerFromSchemas, ARTICLE_SCHEMA } from './helpers.ts';
 
 /**
  * WRITE-PATH SLICE — POST/PUT/DELETE end-to-end over a REAL uWS server backed by a REAL Postgres
- * (.env.test), no mocks, on the GENERIC content-type path. Each write commits to Postgres (source of
+ * (.env.test), no mocks, on the GENERIC module path. Each write commits to Postgres (source of
  * truth) and the server rebuilds ONLY that type's in-memory storage, so we prove read-after-write
  * through the wire. Plus strict-validation 400s, 404s, per-type cache isolation, and no corrupted state.
  */
@@ -31,7 +31,7 @@ async function seedRows(): Promise<void> {
 before(async () => {
   db = await createFileDatabase('wr');
   sql = db.sql;
-  // A SECOND content-type (widget) to prove per-type cache isolation on an article write.
+  // A SECOND module (widget) to prove per-type cache isolation on an article write.
   const widget: import('../src/db/schema/model.ts').Schema = { id: 'ct_widget', apiId: 'widget', fields: [{ id: 'f_label', name: 'label', type: 'string', options: { nullable: false } }] };
   const blank: import('../src/db/schema/model.ts').Schema = { id: 'ct_blank', apiId: 'blank', fields: [] }; // system-fields-only
   const server = await startTestServerFromSchemas(sql, [ARTICLE_SCHEMA, widget, blank], {
@@ -150,7 +150,7 @@ test('POST with an over-length string -> a clean 400 (length guard, not a PG 220
   assert.ok(!/22001|varchar|truncation|SQLSTATE/i.test(err));
 });
 
-test('system-fields-only content-type: POST {} -> 201 via DEFAULT VALUES, GET sees it, DELETE removes it', async () => {
+test('system-fields-only module: POST {} -> 201 via DEFAULT VALUES, GET sees it, DELETE removes it', async () => {
   // `blank` (no user fields) is seeded in before(); use the running server.
   const res = await fetch(`${base}/blank`, j({}));
   const payload = await res.json();

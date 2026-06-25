@@ -17,7 +17,7 @@ import {
   compileDropTable,
   compileCreateLinkTable,
 } from '../ddl.ts';
-import { resolveFields } from '../content-type.repository.ts';
+import { resolveFields } from '../module.fields.ts';
 import type { ResolvedType } from '../type.catalog.ts';
 import { schemaZ, type Schema } from './model.ts';
 import { fieldSchemaToSpec } from './adapt.ts';

@@ -28,7 +28,7 @@ export interface CursorPayload {
  * the field-shape counter. Any mismatch vs the live request flips the sig and rejects the cursor.
  */
 export interface SigInput {
-  /** The content-type (collection) name — binds a cursor to ITS collection so a cursor minted on
+  /** The module (collection) name — binds a cursor to ITS collection so a cursor minted on
    * type A cannot be replayed against type B that happens to share the sort/filter/schemaVersion. */
   typeName: string;
   sortCanonical: string;

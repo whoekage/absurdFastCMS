@@ -32,7 +32,7 @@ import { JSON_CT, type CoreResponse } from './read.router.ts';
  * a component carrying no media field, is left as its raw inline tree.
  *
  * be-05b RELATION-INSIDE-COMPONENT — the SAME post-step also resolves inline relation refs (an id / id[]
- * to a TARGET content-type). UNLIKE media (resolved against the `files` table via SQL, because `files` is
+ * to a TARGET module). UNLIKE media (resolved against the `files` table via SQL, because `files` is
  * NOT an engine type), a relation TARGET *is* an engine type, so it is resolved VIA THE ENGINE (the be-01/
  * be-04 read path) — this reuses the RAM source-of-truth so the nested row materializes BYTE-IDENTICALLY to
  * a top-level GET (RawJson json fields, i64/decimal strings) AND lets target VISIBILITY apply: a nested ref
@@ -55,7 +55,7 @@ export function componentPopulateTargets(def: ModuleDef, query: string): Map<str
 
 /**
  * The collect accumulator: inline media `files.id`s (one global Set, resolved against `files`) PLUS inline
- * relation-ref ids BINNED BY TARGET content-type api_id (resolved per-target against the engine).
+ * relation-ref ids BINNED BY TARGET module api_id (resolved per-target against the engine).
  */
 interface CollectAcc {
   media: Set<number>;
@@ -100,7 +100,7 @@ function collectInstance(registry: Registry, apiId: string, obj: unknown, into: 
       into.media.add(v);
     }
   }
-  // be-05b: bin relation-ref ids by their declared target content-type (resolved per-target via the engine).
+  // be-05b: bin relation-ref ids by their declared target module (resolved per-target via the engine).
   for (const [name, { target, multiple }] of cdef.relationRefFields) {
     const v = o[name];
     if (v === undefined || v === null) continue;
@@ -219,7 +219,7 @@ function resolveTargetRows(engine: Engine, target: string, ids: number[]): Map<n
 /**
  * Apply component populate to an engine LIST/SINGLE response Buffer. Parses the `{data,meta}` envelope,
  * batch-resolves every inline media id (ONE `getFilesByIds` query) + every inline relation-ref id (per
- * target content-type, via the engine with default visibility) across all rows + targeted component fields,
+ * target module, via the engine with default visibility) across all rows + targeted component fields,
  * splices the resolved object(s) into each component tree, and re-serializes. The caller guarantees
  * `targets` is non-empty (otherwise the engine Buffer is returned untouched).
  */

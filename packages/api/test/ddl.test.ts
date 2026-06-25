@@ -16,7 +16,7 @@ import {
   type ResolvedField,
 } from '../src/db/ddl.ts';
 import { resolveType, classifyTypeChange, UnknownCmsTypeError, TypeOptionError, EnumValueError, INTENT_ONLY_ENGINE_TYPES, type CmsType, type EngineTypeIntent } from '../src/db/type.catalog.ts';
-import { resolveFields } from '../src/db/content-type.repository.ts';
+import { resolveFields } from '../src/db/module.fields.ts';
 import { type ColumnType } from '../src/store/column.ts';
 
 /**

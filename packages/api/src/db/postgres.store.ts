@@ -6,7 +6,7 @@ import { buildEngine } from './engine.loader.ts';
 import { createSql } from './database.client.ts';
 
 /**
- * The Postgres-backed durable source. {@link loadFromSchemas} builds the content-type
+ * The Postgres-backed durable source. {@link loadFromSchemas} builds the module
  * {@link Registry} from committed schema OBJECTS, then CURSOR-STREAMS every type's `ct_<apiId>` table into a
  * fresh Engine (type-aware coercion per the registry), warming each type's indexes once. The Postgres
  * `id` (serial PK) becomes the engine's public `id`. Empty catalog / empty type are valid.

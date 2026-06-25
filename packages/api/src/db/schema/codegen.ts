@@ -70,7 +70,7 @@ function fieldLine(f: FieldSchema): string {
 
 /**
  * Generate the `modules.d.ts` text for a catalog of schemas (sorted by apiId for a deterministic,
- * diff-stable artifact). One interface per content-type: the system fields the read path always emits,
+ * diff-stable artifact). One interface per module: the system fields the read path always emits,
  * then the user fields in declared (wire) order.
  */
 export function generateTypes(schemas: Schema[]): string {

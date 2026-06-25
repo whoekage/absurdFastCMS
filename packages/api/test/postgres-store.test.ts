@@ -10,7 +10,7 @@ import { schema } from './helpers.ts';
 
 /**
  * POSTGRES-STORE SLICE — the boot load path, end-to-end against a REAL Postgres (no mocks), on the
- * GENERIC content-type path: `article` is now a dynamic content-type (ct_article) seeded via the
+ * GENERIC module path: `article` is now a dynamic module (ct_article) seeded via the
  * step-2 createContentType path. We migrate, seed the type, insert known rows over a real connection
  * into ct_article (registry column names incl. "publishedAt"), load through {@link PostgresStore}, and
  * prove the engine serves them: PK lookup (now incl. created_at/updated_at), NULL rendering,

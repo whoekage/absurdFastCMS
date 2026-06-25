@@ -177,7 +177,7 @@ export async function startTestServerFromFilesWithAuth(
 /**
  * The files-first replacement for the meta-path `createContentType(...) + startTestServer(...)` setup:
  * `migrate()` materializes the `ct_*` tables (+ writes `_schema_applied`) with ZERO meta, then the engine is
- * built via `loadFromSchemas`. Tests pass their content-type IR (and optional in-memory components) directly.
+ * built via `loadFromSchemas`. Tests pass their module IR (and optional in-memory components) directly.
  */
 export async function startTestServerFromSchemas(
   sql: Sql,

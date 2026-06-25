@@ -717,7 +717,7 @@ export function createServer(
   // `debug-inspect` segment contains '-', illegal in an api_id, so it can never shadow a real `/:type`.
   // Synchronous like the read routes: decode straight off the live engine, emit JSON, never mutate.
   if (config.debugInspector) {
-    // INDEX: every content-type + row count.
+    // INDEX: every module + row count.
     app.get('/debug-inspect', (res) => {
       writeJson(res, 200, listTypes(live.engine));
     });
@@ -728,7 +728,7 @@ export function createServer(
       const offset = toInt(params.get('offset'));
       const limit = toInt(params.get('limit'));
       const result = inspectType(live.engine, type, { offset, limit } as { offset?: number; limit?: number });
-      if (result === null) writeJson(res, 404, { error: `unknown content-type "${type}"` });
+      if (result === null) writeJson(res, 404, { error: `unknown module "${type}"` });
       else writeJson(res, 200, result);
     });
   }
@@ -745,7 +745,7 @@ export function createServer(
   // We therefore register the concrete verbs for the 2-segment `/auth/:p` form (covers GET /get-session,
   // POST /sign-out, ...) PLUS an `any('/auth/*')` for the deeper paths (/sign-in/email, /sign-up/email,
   // /api-key/*), all funnelling through the one Fetch bridge. The leading literal `auth` also means a
-  // content-type can never be named `auth` and shadow these in reverse; reads of OTHER types are
+  // module can never be named `auth` and shadow these in reverse; reads of OTHER types are
   // byte-untouched. Mounted only when an auth instance is supplied (a read-only/test-only server omits it
   // → /auth falls to the core's 404). This slice gates NOTHING — it only proxies the provider.
   if (auth !== undefined) {
@@ -941,7 +941,7 @@ export function createServer(
           try {
             await ensureVersion();
             const schema = (await readApplied()).find((s) => s.apiId === apiId);
-            if (schema === undefined) return corkSend(res, () => aborted, builderJson(404, { ok: false, error: `content-type "${apiId}" does not exist` }));
+            if (schema === undefined) return corkSend(res, () => aborted, builderJson(404, { ok: false, error: `module "${apiId}" does not exist` }));
             if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
             corkSend(res, () => aborted, builderJson(200, { ok: true, schema, version: currentVersion }, { ETag: currentVersion }));
           } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }

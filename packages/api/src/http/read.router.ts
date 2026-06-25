@@ -16,7 +16,7 @@ import { config } from '../config.ts';
  *
  * ROUTES (read-only this slice):
  *   GET /:type      — LIST. The raw query string (Strapi bracket syntax `filters[a][$op]=v`,
- *                     WITHOUT a leading '?') is parsed against the content-type's FIELD SCHEMA into
+ *                     WITHOUT a leading '?') is parsed against the module's FIELD SCHEMA into
  *                     `{ options }`, then `engine.respond(type, options)` returns the PRE-SERIALIZED
  *                     response Buffer (offset-0, the body IS the buffer — no re-serialization).
  *   GET /:type/:id  — SINGLE. `id` must be a CANONICAL non-negative integer literal (reject "01",
@@ -24,7 +24,7 @@ import { config } from '../config.ts';
  *                     primary key (Postgres PK) via the eq index, 404 when no row carries it.
  *
  * STATUS CODES (correct, not 200-with-error-body):
- *   - unknown content-type                 -> 404
+ *   - unknown module                 -> 404
  *   - unknown / out-of-range / non-int id  -> 404
  *   - non-GET on a known route             -> 405
  *   - anything else (no route match)       -> 404
@@ -111,7 +111,7 @@ function segments(path: string): string[] {
 
 /**
  * The pure request core. Routes the request, validates it against the engine, and returns the
- * status + content-type + body Buffer. Never throws for a client error (those become 400/404/405);
+ * status + module + body Buffer. Never throws for a client error (those become 400/404/405);
  * a non-{@link QueryParseError} thrown by the engine propagates (it's a server bug, not a request).
  */
 export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
@@ -121,7 +121,7 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
   // LIST: /:type
   if (segs.length === 1) {
     const name = segs[0]!;
-    if (!engine.has(name)) return errorResponse(404, `unknown content-type "${name}"`);
+    if (!engine.has(name)) return errorResponse(404, `unknown module "${name}"`);
     if (!isGet) return errorResponse(405, `method ${req.method} not allowed`);
     // Tolerate a leading '?' so the parser never sees it (uWS getQuery() omits it; be robust anyway).
     const query = req.query.startsWith('?') ? req.query.slice(1) : req.query;
@@ -153,7 +153,7 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
   if (segs.length === 2) {
     const name = segs[0]!;
     const idRaw = segs[1]!;
-    if (!engine.has(name)) return errorResponse(404, `unknown content-type "${name}"`);
+    if (!engine.has(name)) return errorResponse(404, `unknown module "${name}"`);
     if (!isGet) return errorResponse(405, `method ${req.method} not allowed`);
     if (!CANONICAL_INT.test(idRaw)) return errorResponse(404, `not found`);
     // `id` is the PUBLIC primary key (the Postgres PK), resolved through the eq index — NOT a dense

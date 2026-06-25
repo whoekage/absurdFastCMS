@@ -12,7 +12,7 @@ import type { SortDir } from './indexes/sorted.index.ts';
  *   - {@link QueryOptions} `sort` / `offset` / `limit` (BOTH pagination styles map here);
  *   - an optional {@link PopulatePlan} naming relations to populate.
  *
- * Everything is VALIDATED against the content-type schema (the `FieldDef[]` the Engine was
+ * Everything is VALIDATED against the module schema (the `FieldDef[]` the Engine was
  * `define`d with): an unknown field, an unknown operator, a type-mismatched value, a string-only
  * op on a number field, a `between` without exactly two args, or malformed bracket syntax all THROW
  * a {@link QueryParseError} with a clear message — never a silent wrong query.
@@ -736,7 +736,7 @@ function parsePopulate(node: ParamNode, nesting = 0): PopulatePlan {
 /**
  * Parse a Strapi query into the engine's structured form. `input` is EITHER a raw query string
  * (`status[$eq]=published&...` — note: NO leading `filters` is added; pass full Strapi keys) or an
- * already-parsed {@link ParamNode} object (what a router hands you). `schema` is the content-type's
+ * already-parsed {@link ParamNode} object (what a router hands you). `schema` is the module's
  * field list (from `Engine.define`); it is the whitelist.
  *
  * Returns `{ where?, options: { where?, sort?, offset?, limit? }, populate }`. `options.where` is

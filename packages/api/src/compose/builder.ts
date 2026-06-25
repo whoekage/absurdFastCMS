@@ -24,7 +24,7 @@ import type { Change } from '../db/schema/diff.ts';
 
 type Draft<T> = Omit<T, 'id'> & { id?: string };
 
-/** A content-type edit from the SPA: ids are OPTIONAL (present = existing, kept; absent = new, minted). */
+/** A module edit from the SPA: ids are OPTIONAL (present = existing, kept; absent = new, minted). */
 export interface ModuleDraft {
   id?: string;
   apiId: string;
@@ -81,7 +81,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  */
 function resolveSchema(draft: ModuleDraft, appliedEntry: Schema | undefined): Schema {
   if (draft.id !== undefined && (appliedEntry === undefined || appliedEntry.id !== draft.id)) {
-    throw new BuilderValidationError(`unknown content-type id "${draft.id}"`);
+    throw new BuilderValidationError(`unknown module id "${draft.id}"`);
   }
   const existingFieldIds = new Set((appliedEntry?.fields ?? []).map((f) => f.id));
   const existingRelIds = new Set((appliedEntry?.relations ?? []).map((r) => r.id));
@@ -233,7 +233,7 @@ function resolveEdit(draft: ModuleDraft, applied: Schema[]): { schema: Schema; n
 }
 
 /**
- * Apply a content-type CREATE / UPDATE / apiId-RENAME: resolve ids (ownership-guarded) → id-keyed next →
+ * Apply a module CREATE / UPDATE / apiId-RENAME: resolve ids (ownership-guarded) → id-keyed next →
  * pre-flight → atomic write+migrate. Returns blocked changes (applying NOTHING) when a destructive/forbidden
  * op is present without `allowDestructive`.
  */
@@ -249,11 +249,11 @@ export async function applySchemaEdit(
   return applyResolvedPlan(sql, { next, write: { target, source: generateSchemaSource(schema) }, schema }, opts);
 }
 
-/** Drop a whole content-type (always destructive). Blocks if a surviving type still targets it by relation. */
+/** Drop a whole module (always destructive). Blocks if a surviving type still targets it by relation. */
 export async function applySchemaDelete(sql: Sql, modulesDir: string, apiId: string): Promise<SchemaEditResult> {
   const applied = await readApplied(sql);
   const target = applied.find((s) => s.apiId === apiId);
-  if (target === undefined) throw new BuilderNotFoundError(`content-type "${apiId}" does not exist`);
+  if (target === undefined) throw new BuilderNotFoundError(`module "${apiId}" does not exist`);
   // Inbound-relation safety: a surviving type whose relation targets this one would dangle (and its link
   // table FKs ct_<apiId>, so DROP TABLE would error). Block with a clear message — remove the relation first.
   const inbound = applied

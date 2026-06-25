@@ -3,7 +3,7 @@ import { DECIMAL_MAX_SAFE_PRECISION } from '../store/decimal.const.ts';
 
 /**
  * The SINGLE source of the `cms_type -> { pgType, engineType, params }` mapping. Both the DDL
- * generator (src/db/ddl.ts) and the meta writer (src/db/content-type.repository.ts) derive every per-type
+ * generator (src/db/ddl.ts) and the meta writer (src/db/module.fields.ts) derive every per-type
  * decision from here, so the rendered Postgres column and the `content_type_fields` row can never
  * diverge. This module renders a pg TYPE LITERAL string (e.g. `numeric(10,2)`) that the Kysely
  * builder drops in via its `sql\`\`` escape hatch — it never speaks SQL itself, and never touches a
@@ -76,7 +76,7 @@ export interface FieldOptions {
   /** be-05 dynamiczone only: the allowed component-type api_ids (the zone's allowed-set). */
   components?: string[];
   /**
-   * be-05b RELATION-INSIDE-COMPONENT only: the target CONTENT-TYPE api_id an inline ref points at. NOTE
+   * be-05b RELATION-INSIDE-COMPONENT only: the target module api_id an inline ref points at. NOTE
    * this is semantically DISTINCT from a top-level (be-01) relation: a relation field INSIDE a component
    * stores inline id ref(s) IN the component json (set-by-value, resolved-on-read, NOT independently
    * queryable) — there is NO link table, NO CSR, NO inverse side. The `multiple` flag above is reused for
@@ -97,7 +97,7 @@ export interface ResolvedType {
 export class UnknownCmsTypeError extends Error {
   readonly cmsType: unknown;
   constructor(cmsType: unknown) {
-    super(`unknown or unsupported content-type field type: ${String(cmsType)}`);
+    super(`unknown or unsupported module field type: ${String(cmsType)}`);
     this.name = 'UnknownCmsTypeError';
     this.cmsType = cmsType;
   }
@@ -221,7 +221,7 @@ export function resolveType(cmsType: CmsType, options?: FieldOptions): ResolvedT
 // --- be-05 COMPONENT field kinds (a CLOSED set; like RELATION_KINDS they are NOT scalar CmsTypes) -----
 
 /**
- * The three structured-content field kinds a content-type (or another component) may attach. They are
+ * The three structured-content field kinds a module (or another component) may attach. They are
  * NOT members of {@link CmsType}: each PHYSICALLY resolves to a single `jsonb` column (no link table, no
  * per-kind RESOLVERS arm — keeping the `satisfies Record<CmsType,...>` exhaustiveness guard intact), but
  * their `params` SHAPE differs from `media` (a component/dynamiczone carries the referenced component
@@ -231,7 +231,7 @@ export function resolveType(cmsType: CmsType, options?: FieldOptions): ResolvedT
  *   component-repeatable — an ORDERED ARRAY of instances of one component (`params.component`).
  *   dynamiczone          — an ORDERED ARRAY of instances, each tagged `__component`, drawn from an
  *                          allowed-set (`params.components = ["a","b",...]`).
- *   relation             — be-05b: an INLINE id ref (or array of ids) to a TARGET content-type
+ *   relation             — be-05b: an INLINE id ref (or array of ids) to a TARGET module
  *                          (`params.target = "<apiId>"`, `params.multiple`). It rides the SAME json-column
  *                          plumbing as a multiple-media field — set-by-value, existence-checked on write,
  *                          resolved by the read populate-walk. It is NOT a be-01 link-table relation (no
@@ -267,14 +267,14 @@ export class ComponentFieldError extends Error {
  */
 export function resolveComponentField(kind: ComponentFieldKind, options?: FieldOptions): ResolvedType {
   if (kind === 'relation') {
-    // be-05b: an inline id ref to a TARGET content-type. pgType is ALWAYS jsonb (engine `json`) for BOTH
+    // be-05b: an inline id ref to a TARGET module. pgType is ALWAYS jsonb (engine `json`) for BOTH
     // cardinalities (unlike a top-level media single, which is an int4 COLUMN — here the ref always lives
     // INSIDE a json component column, so json is correct + simpler). SHAPE-only validation of the target
     // api_id here (a non-empty string with no NUL); its EXISTENCE in `content_types` is checked by the
     // repository against the live catalog (this module never touches a connection).
     const target = options?.target;
     if (typeof target !== 'string' || target.length === 0) {
-      throw new ComponentFieldError('relation requires a target content-type api_id');
+      throw new ComponentFieldError('relation requires a target module api_id');
     }
     if (target.includes(' ')) throw new ComponentFieldError(`relation target ${JSON.stringify(target)} is not a valid api_id`);
     return { cmsType: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, target, multiple: options?.multiple === true } };

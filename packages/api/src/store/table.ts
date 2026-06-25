@@ -164,7 +164,7 @@ const PROBE_LEAD_DENOM = 64;
 const MAX_COMPOSITE_INDEXES = 32;
 
 /**
- * One content-type, stored column-by-column. Rows are dense (row index 0..rowCount).
+ * One module, stored column-by-column. Rows are dense (row index 0..rowCount).
  *
  * The query engine half of the store. Filtering goes through indexes where available
  * (hash index for `$eq`, sorted index for ranges) and falls back to a full typed-array

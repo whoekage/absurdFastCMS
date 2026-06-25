@@ -78,7 +78,7 @@ export function listTypes(engine: Engine): { types: { type: string; rowCount: nu
 }
 
 /**
- * Decode-and-summarize ONE content-type: per-column storage + null counts + (for strings) the decoded
+ * Decode-and-summarize ONE module: per-column storage + null counts + (for strings) the decoded
  * dictionary, the relation fields, and a window of fully-materialized rows. `limit`/`offset` bound the
  * decoded row window only (column stats always reflect the whole table). Returns null for an unknown type.
  */

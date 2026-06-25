@@ -17,7 +17,7 @@ const { resetStorageProvider } = await import('../src/storage/index.ts');
 const { pngBytes } = await import('./storage-fixtures.ts');
 
 /**
- * be-04 MEDIA FIELD — declare a media field on a content-type, attach uploaded asset(s), read it back
+ * be-04 MEDIA FIELD — declare a media field on a module, attach uploaded asset(s), read it back
  * BOTH un-populated (raw id / id[]) and populated (inlined asset object / array), over a REAL uWS server
  * + REAL Postgres (per-file clone) + REAL local-fs. NO mocks. Also proves: positive-int + cardinality +
  * existence validation, a scalar-only type is byte-identical (no media key, no populate effect), single

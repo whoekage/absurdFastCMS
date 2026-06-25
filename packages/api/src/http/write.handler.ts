@@ -184,7 +184,7 @@ function collectInstanceMediaIds(registry: Registry, apiId: string, obj: unknown
 
 /**
  * be-05b RELATION-INSIDE-COMPONENT — assert every inline relation-ref id a write body references actually
- * exists in its TARGET content-type, INSIDE the caller's tx (so the existence check + the row insert/update
+ * exists in its TARGET module, INSIDE the caller's tx (so the existence check + the row insert/update
  * commit atomically). Sibling of {@link assertMediaRefsExist}: the body parser already validated shape +
  * cardinality + positive-int4; here we gather the referenced ids from the COERCED component trees, BINNED
  * BY TARGET api_id (different relation fields point at different modules), then per-target reject (a
@@ -210,7 +210,7 @@ async function assertRelationRefsExist(tx: Sql | TransactionSql, def: ModuleDef,
     const targetDef = registry.get(target);
     // A relation target that vanished AFTER the component was defined (no dropContentType guard this slice)
     // -> the write cannot verify the ref, so reject it cleanly rather than store an unverifiable id.
-    if (targetDef === undefined) throw new EntryWriteError(`relation reference to unknown content-type "${target}"`);
+    if (targetDef === undefined) throw new EntryWriteError(`relation reference to unknown module "${target}"`);
     const missing = await missingEntryIds(tx, targetDef, ids);
     if (missing.length > 0) {
       throw new EntryWriteError(`relation reference to unknown ${target} id(s): ${missing.join(', ')}`);
@@ -220,7 +220,7 @@ async function assertRelationRefsExist(tx: Sql | TransactionSql, def: ModuleDef,
 
 /**
  * be-05b — recursively gather every INLINE relation-ref id inside a coerced component / component-repeatable
- * / dynamiczone value, binned BY TARGET content-type api_id, guided by the registry's {@link ComponentDef}
+ * / dynamiczone value, binned BY TARGET module api_id, guided by the registry's {@link ComponentDef}
  * schemas. Mirrors {@link collectComponentMediaIds} (the same component-tree walk), but reads
  * `cdef.relationRefFields` instead of `cdef.mediaFields` and keys ids by their declared target.
  */
@@ -283,7 +283,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
   const { method, type, idRaw, body, action, variantLocale } = req;
   // Registry membership === engine membership (same canonical api_id). Gate BEFORE any SQL.
   const def = ctx.registry().get(type);
-  if (def === undefined || !ctx.engine().has(type)) return errorResponse(404, `unknown content-type "${type}"`);
+  if (def === undefined || !ctx.engine().has(type)) return errorResponse(404, `unknown module "${type}"`);
 
   try {
     // i18n VARIANT-CREATE sub-route (POST /:type/:id/locales/:locale). Gated FIRST so it never collides
@@ -292,7 +292,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
     // localized fields, and server-sets `locale`. UNIQUE(document_id, locale) rejects a duplicate locale.
     if (variantLocale !== undefined) {
       if (method !== 'POST') return errorResponse(405, `method ${method} not allowed`);
-      if (!def.i18n) return errorResponse(400, 'content-type does not support i18n');
+      if (!def.i18n) return errorResponse(400, 'module does not support i18n');
       const locale = validateLocale(variantLocale); // QueryParseError -> 400 (caught below).
       const id = parseId(idRaw);
       if (id === null) return errorResponse(404, 'not found');
@@ -335,7 +335,7 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
     // never collides with the plain POST-create branch (a create has no `action`).
     if (action !== undefined) {
       if (method !== 'POST') return errorResponse(405, `method ${method} not allowed`);
-      if (!def.draftPublish) return errorResponse(400, 'content-type does not support draft & publish');
+      if (!def.draftPublish) return errorResponse(400, 'module does not support draft & publish');
       const id = parseId(idRaw);
       if (id === null) return errorResponse(404, 'not found');
       // ONE statement, wrapped in a tx for symmetry with the other verbs. published_at is set to the

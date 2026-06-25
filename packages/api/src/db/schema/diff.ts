@@ -51,16 +51,16 @@ export class SchemaDiffError extends Error {
 export type ChangeRisk = 'safe' | 'data-dependent' | 'destructive' | 'forbidden';
 
 interface BaseChange {
-  /** The content-type's STABLE id (identity across renames). */
+  /** The module's STABLE id (identity across renames). */
   readonly typeId: string;
-  /** The content-type's CURRENT (next) apiId — the table is `ct_<apiId>` (post-rename for a renamed type). */
+  /** The module's CURRENT (next) apiId — the table is `ct_<apiId>` (post-rename for a renamed type). */
   readonly apiId: string;
   readonly risk: ChangeRisk;
 }
 
-/** A whole new content-type (a fresh empty `ct_` table — its NOT NULL fields are safe: no rows yet). */
+/** A whole new module (a fresh empty `ct_` table — its NOT NULL fields are safe: no rows yet). */
 export interface AddType extends BaseChange { readonly kind: 'addType'; readonly schema: Schema; }
-/** Drop a content-type entirely (DESTRUCTIVE). */
+/** Drop a module entirely (DESTRUCTIVE). */
 export interface DropType extends BaseChange { readonly kind: 'dropType'; }
 /** Same id, changed apiId → `ALTER TABLE ct_<from> RENAME TO ct_<to>` (lossless). */
 export interface RenameType extends BaseChange { readonly kind: 'renameType'; readonly fromApiId: string; readonly toApiId: string; }
@@ -98,7 +98,7 @@ export interface ChangeSet {
 function indexTypes(schemas: Schema[]): Map<string, Schema> {
   const m = new Map<string, Schema>();
   for (const s of schemas) {
-    if (m.has(s.id)) throw new SchemaDiffError(`duplicate content-type id "${s.id}" (ids are the identity and must be unique)`);
+    if (m.has(s.id)) throw new SchemaDiffError(`duplicate module id "${s.id}" (ids are the identity and must be unique)`);
     indexFields(s); // validate field-id uniqueness for EVERY schema (added or matched), not just matched ones.
     indexRelations(s); // and relation-id uniqueness.
     m.set(s.id, s);
@@ -109,7 +109,7 @@ function indexTypes(schemas: Schema[]): Map<string, Schema> {
 function indexFields(schema: Schema): Map<string, FieldSchema> {
   const m = new Map<string, FieldSchema>();
   for (const f of schema.fields) {
-    if (m.has(f.id)) throw new SchemaDiffError(`content-type "${schema.apiId}" field "${f.name}": duplicate field id "${f.id}"`);
+    if (m.has(f.id)) throw new SchemaDiffError(`module "${schema.apiId}" field "${f.name}": duplicate field id "${f.id}"`);
     m.set(f.id, f);
   }
   return m;
@@ -118,7 +118,7 @@ function indexFields(schema: Schema): Map<string, FieldSchema> {
 function indexRelations(schema: Schema): Map<string, RelationSchema> {
   const m = new Map<string, RelationSchema>();
   for (const r of schema.relations ?? []) {
-    if (m.has(r.id)) throw new SchemaDiffError(`content-type "${schema.apiId}" relation "${r.field}": duplicate relation id "${r.id}"`);
+    if (m.has(r.id)) throw new SchemaDiffError(`module "${schema.apiId}" relation "${r.field}": duplicate relation id "${r.id}"`);
     m.set(r.id, r);
   }
   return m;
@@ -208,7 +208,7 @@ function diffMatchedType(typeId: string, p: Schema, n: Schema, alters: Change[],
     // Link-table names derive from the owner apiId, so renaming a type that owns relations would orphan
     // them. Deferred (loud) until link tables carry a stable name independent of the apiId.
     if ((p.relations?.length ?? 0) > 0 || (n.relations?.length ?? 0) > 0) {
-      throw new SchemaDiffError(`renaming a content-type that owns relations ("${p.apiId}" -> "${n.apiId}") is deferred — link-table names derive from the apiId`);
+      throw new SchemaDiffError(`renaming a module that owns relations ("${p.apiId}" -> "${n.apiId}") is deferred — link-table names derive from the apiId`);
     }
     alters.push({ kind: 'renameType', typeId, apiId, risk: 'safe', fromApiId: p.apiId, toApiId: n.apiId });
   }
@@ -274,7 +274,7 @@ function diffMatchedType(typeId: string, p: Schema, n: Schema, alters: Change[],
       continue;
     }
     if (pr.field !== nr.field || pr.kind !== nr.kind || pr.target.toLowerCase() !== nr.target.toLowerCase() || (pr.inverseField ?? null) !== (nr.inverseField ?? null)) {
-      throw new SchemaDiffError(`content-type "${n.apiId}" relation "${nr.field}": changing a relation (rename / kind / target / inverse) is deferred — drop and re-add it`);
+      throw new SchemaDiffError(`module "${n.apiId}" relation "${nr.field}": changing a relation (rename / kind / target / inverse) is deferred — drop and re-add it`);
     }
   }
   for (const [rid, pr] of prevRels) {

@@ -15,7 +15,7 @@ import { isSetOp } from './column.ts';
  *     cached bytes (both configurable, sane defaults). Overflow evicts least-recently-used. A
  *     near-unique query stream can never leak: the caps are hard.
  *  3. {@link ResponseCache.invalidateType} — the invalidation entry point: the engine calls it
- *     directly on a write to a content-type, DROPPING every cached entry for that type. (Single
+ *     directly on a write to a module, DROPPING every cached entry for that type. (Single
  *     instance — no pub/sub indirection; a cross-instance bus can be reintroduced later if needed.)
  */
 
@@ -94,7 +94,7 @@ function encodeSort(sort: SortKey[]): string {
  * Build the canonical cache key for `(typeName, opts)`.
  *
  * WHAT COUNTS AS "THE SAME QUERY":
- *  - same content-type name;
+ *  - same module name;
  *  - same set of top-level filter predicates (ORDER-INDEPENDENT — they AND together) with
  *    set-operator values (`in`/`notIn`) compared as ORDER-INDEPENDENT sets;
  *  - same filter TREE shape when `filterTree` is used (AND/OR children order-independent; NOT and
@@ -233,7 +233,7 @@ export class ResponseCache {
     return entry.buf;
   }
 
-  /** Store an assembled buffer for `key` under content-type `typeName`, then enforce the caps. */
+  /** Store an assembled buffer for `key` under module `typeName`, then enforce the caps. */
   set(key: string, typeName: string, buf: Buffer): void {
     if (!this.enabled) return;
     const existing = this.map.get(key);
@@ -276,7 +276,7 @@ export class ResponseCache {
     }
   }
 
-  /** Drop EVERY cached entry for one content-type (called directly by the engine on a write to it). */
+  /** Drop EVERY cached entry for one module (called directly by the engine on a write to it). */
   invalidateType(typeName: string): void {
     const set = this.byType.get(typeName);
     if (set === undefined) return;

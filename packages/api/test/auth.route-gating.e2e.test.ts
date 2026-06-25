@@ -375,7 +375,7 @@ test('checklist#11: POST /_files/upload is 401 no session / 403 viewer; GET /_fi
     const boundary = '----absurdtest';
     const body =
       `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="t.txt"\r\n` +
-      `Content-Type: text/plain\r\n\r\nhello-bytes\r\n--${boundary}--\r\n`;
+      `module: text/plain\r\n\r\nhello-bytes\r\n--${boundary}--\r\n`;
     return { body, ct: `multipart/form-data; boundary=${boundary}` };
   };
 

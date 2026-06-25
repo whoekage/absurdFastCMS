@@ -93,7 +93,7 @@ before(async () => {
   await rbac.rebuild();
   await teamView.rebuild();
 
-  const { engine, registry } = await store.loadFromSchemas([]); // files-first empty catalog (team E2E creates no content types)
+  const { engine, registry } = await store.loadFromSchemas([]); // files-first empty catalog (team E2E creates no modules)
   const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, teamView);
   token = await server.listen(port0);
   close = server.close;

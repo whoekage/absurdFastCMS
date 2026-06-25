@@ -307,7 +307,7 @@ export async function deleteEntry(sql: Sql | TransactionSql, def: ModuleDef, id:
 
 /**
  * be-05b RELATION-INSIDE-COMPONENT — the WRITE-side referential-integrity check for an inline relation
- * ref. Given candidate `id`s that a component's relation field points at the content-type `def`, return
+ * ref. Given candidate `id`s that a component's relation field points at the module `def`, return
  * the SUBSET that does NOT exist in `def`'s ct_ table (so the caller 400s naming the dangling ids). Mirror
  * of {@link import('./file.repository.ts').missingFileIds} but against the TARGET ct_ table — the table
  * identifier comes ONLY from the registry-built `def.tableName` (NEVER client input), the ids are bound.

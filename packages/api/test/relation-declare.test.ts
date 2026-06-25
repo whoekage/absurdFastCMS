@@ -280,7 +280,7 @@ test('R21 Registry.fromSchemas surfaces relation metadata without touching the t
 
 // --- self-referential create atomicity ---------------------------------------------------------
 
-test('R a content-type with a self-referential relation materializes the owner + link table atomically', async () => {
+test('R a module with a self-referential relation materializes the owner + link table atomically', async () => {
   const node = schema({ apiId: 'node', fields: [{ name: 'label', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'node', inverseField: 'children' }] });
   await migrate(sql, [node], { allowDestructive: true });
   assert.ok(await tableExists(sql, 'ct_node'));

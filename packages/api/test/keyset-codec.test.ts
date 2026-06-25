@@ -98,7 +98,7 @@ test('codec: sig mismatch on different filter is rejected', () => {
   assert.throws(() => codec.decode(sig('v:a:nl,id:a:nl', 'L(status|eq|x)'), fieldTypes, token), InvalidCursorError);
 });
 
-test('codec: cross-type replay is rejected (sig binds the content-type name)', () => {
+test('codec: cross-type replay is rejected (sig binds the module name)', () => {
   const codec = new CursorCodec(SECRET);
   const fieldTypes: SortFieldType[] = [{ type: 'i32' }];
   // Identical sort/filter/schemaVersion, only the type name differs.

@@ -3,7 +3,7 @@ import type { RelationKind } from '../ddl.ts';
 import type { Schema, FieldSchema, RelationSchema } from './model.ts';
 
 /**
- * THE CODE-FIRST AUTHORING DSL (pivot §11) — a `schema/<apiId>.ts` declares its content type via
+ * THE CODE-FIRST AUTHORING DSL (pivot §11) — a `schema/<apiId>.ts` declares its module via
  * {@link defineSchema} + the {@link c} field builders. Lifecycle hooks live in a SIBLING
  * `schema/<apiId>.hooks.ts` ({@link defineHooks}) — a clean machine/human split: the visual Builder OWNS +
  * regenerates `<apiId>.ts` wholesale (no AST surgery), and NEVER touches the dev-owned `.hooks.ts`. This is
@@ -143,7 +143,7 @@ export interface Hooks {
   afterDelete?: AfterHookFn;
 }
 
-/** The captured content-type definition (carries the field record + options as type params for inference). */
+/** The captured module definition (carries the field record + options as type params for inference). */
 export interface TypeDef<F extends FieldsRecord = FieldsRecord, O extends TypeOptions = TypeOptions> {
   readonly id?: string;
   readonly options?: O;
@@ -151,7 +151,7 @@ export interface TypeDef<F extends FieldsRecord = FieldsRecord, O extends TypeOp
 }
 
 /**
- * Author a content type. Identity helper (like `defineConfig`) — returns the def verbatim but captures the
+ * Author a module. Identity helper (like `defineConfig`) — returns the def verbatim but captures the
  * field record + options as generics so {@link InferType} can derive the typed entry. The `apiId` is the
  * FILE NAME (the loader supplies it); `id`/field ids are optional (see the DSL header). Lifecycle hooks go
  * in a sibling `schema/<apiId>.hooks.ts` ({@link defineHooks}), NOT here.
@@ -165,7 +165,7 @@ export function defineSchema<const F extends FieldsRecord, const O extends TypeO
 }
 
 /**
- * Author a content type's lifecycle hooks — the default export of `schema/<apiId>.hooks.ts`. Identity
+ * Author a module's lifecycle hooks — the default export of `schema/<apiId>.hooks.ts`. Identity
  * helper for type-checking. `before*` transform/veto inside the write tx; `after*` react post-commit
  * (see the Hooks types). The loader pairs this file with `<apiId>.ts` by name.
  */
@@ -181,7 +181,7 @@ type SystemFields<O> = { id: number; created_at: string; updated_at: string } & 
   : Record<never, never>) &
   (O extends { i18n: true } ? { document_id: number; locale: string } : Record<never, never>);
 
-/** The inferred entry type for a content type — system fields + each user field's wire type. */
+/** The inferred entry type for a module — system fields + each user field's wire type. */
 export type InferType<D> = D extends TypeDef<infer F, infer O>
   ? SystemFields<O> & { -readonly [K in keyof F]: InferBuilder<F[K]> }
   : never;

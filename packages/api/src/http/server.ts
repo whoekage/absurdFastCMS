@@ -34,7 +34,7 @@ function lcg(seedNum: number): () => number {
 }
 
 /**
- * Build an Engine and fill the `article` content-type with `n` deterministic rows — a benchmark / fixture
+ * Build an Engine and fill the `article` module with `n` deterministic rows — a benchmark / fixture
  * generator, NOT the production boot path (which loads from {@link PostgresStore}). `id` is a dense 1-based
  * serial so it matches a freshly-seeded Postgres table. Uses a static in-memory schema + the same index plan.
  */
