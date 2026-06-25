@@ -23,11 +23,18 @@ test('initProject scaffolds the two-file project + standard dirs', async () => {
       '.env.example',
       '.gitignore',
       'extensions/.gitkeep',
-      'schema/.gitkeep',
       'generated/.gitkeep',
+      // The demo module lives under modules/<apiId>/ (one folder per module) — the code-first source
+      // of truth (the old standalone `schema/` dir was replaced by this per-module bundle).
+      'modules/article/schema.ts',
+      'modules/article/hooks.ts',
+      'modules/article/services.ts',
+      'modules/article/controller.ts',
     ]) {
       assert.ok(existsSync(path.join(dir, f)), `${f} was created`);
     }
+    // The demo module schema is declared with the files-first `defineSchema` builder.
+    assert.match(await readFile(path.join(dir, 'modules/article/schema.ts'), 'utf8'), /defineSchema\(/);
     const config = await readFile(path.join(dir, 'conti.config.ts'), 'utf8');
     assert.match(config, /from '@conti\/core'/);
     assert.match(config, /defineConfig\(loadConfigFromEnv\(\)\)/);
