@@ -2,7 +2,7 @@
 //
 // Proves the integration harness end-to-end with NO MOCKS: startTestServer() clones a fresh per-file
 // Postgres from the golden template and boots a REAL @conti/api uWS server over it; withType() seeds the
-// canonical `article` module (the production ARTICLE_SEED_FIELDS spec) and live-syncs it into the
+// canonical `article` module (the production ARTICLE_FIELDS spec) and live-syncs it into the
 // running engine/registry. We then do a raw `fetch` GET against baseUrl/article (no SDK client yet — that
 // is Slice 3) and assert the real wire returns HTTP 200 with a `{ data, meta }` list envelope. close()
 // stops the listen socket and drops the per-file DB.
@@ -13,12 +13,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { startTestServer, withType } from './server.ts';
-import { ARTICLE_SEED_FIELDS } from '../../api/src/http/server.ts';
+import { ARTICLE_FIELDS } from './server.ts';
 
 test('harness boots a real server and serves the seeded article type', async () => {
   const server = await startTestServer('harness-smoke');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const res = await fetch(`${server.baseUrl}/${apiId}`);
       assert.equal(res.status, 200, 'GET /article should return HTTP 200');
 

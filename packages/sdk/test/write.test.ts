@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { startTestServer, withType } from './server.ts';
-import { ARTICLE_SEED_FIELDS } from '../../api/src/http/server.ts';
+import { ARTICLE_FIELDS } from './server.ts';
 import {
   createClient,
   BadRequestError,
@@ -34,7 +34,7 @@ function articleBody(over: Record<string, unknown> = {}): Record<string, unknown
 test('create() returns 201 SingleResponse and the row reads back', async () => {
   const server = await startTestServer('write-create');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
 
       const created = await client.create(apiId, articleBody({ title: 'Created' }));
@@ -54,7 +54,7 @@ test('create() returns 201 SingleResponse and the row reads back', async () => {
 test('create() with a missing required field throws BadRequestError (400)', async () => {
   const server = await startTestServer('write-create-required');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
       const bad = articleBody();
       delete bad.body; // `body` is NOT NULL without a default → required on create.
@@ -72,7 +72,7 @@ test('create() with a missing required field throws BadRequestError (400)', asyn
 test('update() is partial — only the supplied key changes; others keep their value', async () => {
   const server = await startTestServer('write-update');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
       const created = await client.create(apiId, articleBody({ title: 'Before', views: 1 }));
       const id = created.data.id as number;
@@ -93,7 +93,7 @@ test('update() is partial — only the supplied key changes; others keep their v
 test('update() of a missing id throws NotFoundError (404)', async () => {
   const server = await startTestServer('write-update-404');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
       await assert.rejects(
         () => client.update(apiId, 999999, { title: 'nope' }),
@@ -108,7 +108,7 @@ test('update() of a missing id throws NotFoundError (404)', async () => {
 test('update() with an empty body throws BadRequestError (400)', async () => {
   const server = await startTestServer('write-update-empty');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
       const created = await client.create(apiId, articleBody());
       await assert.rejects(
@@ -124,7 +124,7 @@ test('update() with an empty body throws BadRequestError (400)', async () => {
 test('delete() returns the deleted row (200) and a re-read is a 404', async () => {
   const server = await startTestServer('write-delete');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
       const created = await client.create(apiId, articleBody({ title: 'Doomed' }));
       const id = created.data.id as number;
@@ -143,7 +143,7 @@ test('delete() returns the deleted row (200) and a re-read is a 404', async () =
 test('delete() of a missing id throws NotFoundError (404)', async () => {
   const server = await startTestServer('write-delete-404');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
       await assert.rejects(
         () => client.delete(apiId, 999999),
@@ -164,7 +164,7 @@ test('relation ops: shorthand set, connect, disconnect, and {set:[]} clear', asy
         server,
         {
           apiId: 'article',
-          fields: ARTICLE_SEED_FIELDS,
+          fields: ARTICLE_FIELDS,
           relations: [{ field: 'tags', kind: 'manyToMany', target: tagId }],
         },
         async (apiId) => {
@@ -211,7 +211,7 @@ test('relation op with a nonexistent FK throws BadRequestError (400)', async () 
         server,
         {
           apiId: 'article',
-          fields: ARTICLE_SEED_FIELDS,
+          fields: ARTICLE_FIELDS,
           relations: [{ field: 'tags', kind: 'manyToMany', target: tagId }],
         },
         async (apiId) => {
@@ -231,7 +231,7 @@ test('relation op with a nonexistent FK throws BadRequestError (400)', async () 
 test('create() with an oversized body throws PayloadTooLargeError (413)', async () => {
   const server = await startTestServer('write-413');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
       // A multi-megabyte text body overruns the server's max-body limit.
       const huge = 'x'.repeat(8 * 1024 * 1024);

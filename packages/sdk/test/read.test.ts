@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { startTestServer, withType, type TestServer } from './server.ts';
-import { ARTICLE_SEED_FIELDS } from '../../api/src/http/server.ts';
+import { ARTICLE_FIELDS } from './server.ts';
 import { createClient, isKeysetPagination, type Entry } from '../src/index.ts';
 
 /** Seed one article over the real write path; returns the created row (with its server-assigned id). */
@@ -46,7 +46,7 @@ async function seedN(server: TestServer, apiId: string, n: number): Promise<void
 test('list() returns the data array + offset pagination meta with total', async () => {
   const server = await startTestServer('read-list');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       await seedN(server, apiId, 5);
       const client = createClient({ baseUrl: server.baseUrl });
 
@@ -64,7 +64,7 @@ test('list() returns the data array + offset pagination meta with total', async 
 test('list() honors filters + sort + pagination', async () => {
   const server = await startTestServer('read-list-params');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       await seedN(server, apiId, 10);
       const client = createClient({ baseUrl: server.baseUrl });
 
@@ -85,7 +85,7 @@ test('list() honors filters + sort + pagination', async () => {
 test('list() $contains + sort:desc + pagination[pageSize] over ~30 rows returns the expected subset/order', async () => {
   const server = await startTestServer('read-contains');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       // 30 rows: title=row-0..row-29. "row-1" is a substring of row-1 and every row-1X (10..19),
       // i.e. 11 matches: views 1, 10,11,12,13,14,15,16,17,18,19. sort views:desc, page of 5 → top 5.
       await seedN(server, apiId, 30);
@@ -108,7 +108,7 @@ test('list() $contains + sort:desc + pagination[pageSize] over ~30 rows returns 
 test('findOne() resolves by public id; findOneOrNull() returns null on 404', async () => {
   const server = await startTestServer('read-findone');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const created = await seedArticle(server.baseUrl, apiId, {
         title: 'hello',
         body: 'b',
@@ -139,7 +139,7 @@ test('findOne() resolves by public id; findOneOrNull() returns null on 404', asy
 test('fields: list AND findOne project to id + the requested scalar columns (Strapi v5)', async () => {
   const server = await startTestServer('read-fields');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const created = await seedArticle(server.baseUrl, apiId, {
         title: 'sparse', body: 'long body', status: 'published', views: 7, rating: 2.5, active: true,
         publishedAt: new Date(Date.UTC(2026, 0, 1)).toISOString(),
@@ -166,7 +166,7 @@ test('fields: list AND findOne project to id + the requested scalar columns (Str
 test('count() returns the filtered total without fetching rows', async () => {
   const server = await startTestServer('read-count');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       await seedN(server, apiId, 8);
       const client = createClient({ baseUrl: server.baseUrl });
 
@@ -181,7 +181,7 @@ test('count() returns the filtered total without fetching rows', async () => {
 test('listAll() iterates every row page-by-page in offset mode', async () => {
   const server = await startTestServer('read-listall');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       await seedN(server, apiId, 30);
       const client = createClient({ baseUrl: server.baseUrl });
 
@@ -204,7 +204,7 @@ test('listAll() iterates every row page-by-page in offset mode', async () => {
 test('listAll() stops cleanly on an exact-multiple total (empty trailing page)', async () => {
   const server = await startTestServer('read-listall-exact');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       await seedN(server, apiId, 6);
       const client = createClient({ baseUrl: server.baseUrl });
 
@@ -222,7 +222,7 @@ test('listAll() stops cleanly on an exact-multiple total (empty trailing page)',
 test('listAllKeyset() follows nextCursor until hasNextPage=false', async () => {
   const server = await startTestServer('read-listall-keyset');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       await seedN(server, apiId, 30);
       const client = createClient({ baseUrl: server.baseUrl });
 

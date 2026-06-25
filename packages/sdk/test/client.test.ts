@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { startTestServer, withType } from './server.ts';
-import { ARTICLE_SEED_FIELDS } from '../../api/src/http/server.ts';
+import { ARTICLE_FIELDS } from './server.ts';
 import {
   AbsurdClient,
   createClient,
@@ -33,7 +33,7 @@ class TestClient extends AbsurdClient {
 test('ctor strips a trailing slash from baseUrl (no double slash in the request URL)', async () => {
   const server = await startTestServer('client-baseurl');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const client = new TestClient({ baseUrl: `${server.baseUrl}/` });
       const body = await client.call<{ data: unknown[]; meta: unknown }>('GET', `/${apiId}`);
       assert.ok(Array.isArray(body.data), 'list read returns a data array even with a trailing-slash baseUrl');
@@ -147,7 +147,7 @@ test('GET /unknown-type throws NotFoundError with status 404 and the {error} mes
 test('non-GET on a known route throws MethodNotAllowedError (405)', async () => {
   const server = await startTestServer('client-405');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const client = new TestClient({ baseUrl: server.baseUrl });
       await assert.rejects(
         () => client.call('PATCH', `/${apiId}`),
@@ -179,7 +179,7 @@ test('errorFromResponse maps each status to its typed subclass', () => {
 test('createClient returns a working AbsurdClient', async () => {
   const server = await startTestServer('client-factory');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
       assert.ok(client instanceof AbsurdClient);
       // The factory client has no public read method yet (Slice 4) — prove it reaches the server via fetch.

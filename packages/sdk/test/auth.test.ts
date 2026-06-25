@@ -16,7 +16,7 @@ import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 
 import { startTestServer, withType } from './server.ts';
-import { ARTICLE_SEED_FIELDS } from '../../api/src/http/server.ts';
+import { ARTICLE_FIELDS } from './server.ts';
 import {
   createClient,
   AbsurdClient,
@@ -97,7 +97,7 @@ async function localServer(
 test('token option sends `Authorization: Bearer <token>` and the open api still answers 200', async () => {
   const server = await startTestServer('auth-token');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const rec = recordingFetch();
       const client = createClient({ baseUrl: server.baseUrl, fetch: rec.fetch, token: 'sekret' });
 
@@ -119,7 +119,7 @@ test('token option sends `Authorization: Bearer <token>` and the open api still 
 test('setToken() updates the Bearer header on subsequent real requests; undefined clears it', async () => {
   const server = await startTestServer('auth-settoken');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const rec = recordingFetch();
       const client = createClient({ baseUrl: server.baseUrl, fetch: rec.fetch });
 
@@ -141,7 +141,7 @@ test('setToken() updates the Bearer header on subsequent real requests; undefine
 test('getHeaders() is awaited, merged, and overrides the static token on `authorization`', async () => {
   const server = await startTestServer('auth-getheaders');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const rec = recordingFetch();
       const client = createClient({
         baseUrl: server.baseUrl,
@@ -164,7 +164,7 @@ test('getHeaders() is awaited, merged, and overrides the static token on `author
 test('the token header rides on a real WRITE (create) too, which still succeeds on the open api', async () => {
   const server = await startTestServer('auth-write');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const rec = recordingFetch();
       const client = createClient({ baseUrl: server.baseUrl, fetch: rec.fetch, token: 'admin' });
       const body: Record<string, unknown> = {

@@ -16,7 +16,7 @@ import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 
 import { startTestServer, withType } from './server.ts';
-import { ARTICLE_SEED_FIELDS } from '../../api/src/http/server.ts';
+import { ARTICLE_FIELDS } from './server.ts';
 import { createClient, ServerError, type Entry } from '../src/index.ts';
 
 interface Article extends Entry {
@@ -43,7 +43,7 @@ function articleBody(over: Record<string, unknown> = {}): Record<string, unknown
 test('collection<T>() binds the type across the full CRUD lifecycle', async () => {
   const server = await startTestServer('dx-collection');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
       const articles = client.collection<Article>(apiId);
 
@@ -88,7 +88,7 @@ test('collection<T>() binds the type across the full CRUD lifecycle', async () =
 test('onRequest / onResponse fire on real GET and POST with real status', async () => {
   const server = await startTestServer('dx-hooks');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_SEED_FIELDS }, async (apiId) => {
+    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const reqs: Array<{ method: string; attempt: number }> = [];
       const ress: Array<{ method: string; status: number }> = [];
       const client = createClient({

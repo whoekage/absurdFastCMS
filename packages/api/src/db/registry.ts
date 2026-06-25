@@ -700,4 +700,13 @@ export class Registry {
   removeType(apiId: string): boolean {
     return this.byApiId.delete(apiId);
   }
+
+  /**
+   * Install ONE already-built {@link ModuleDef} into the live registry (the files-first single-type add
+   * hook). Builds nothing — the caller resolves the def via {@link Registry.fromSchemas}. The counterpart of
+   * {@link removeType} for a live schema change without a full registry rebuild.
+   */
+  install(def: ModuleDef): void {
+    this.byApiId.set(def.apiId, def);
+  }
 }
