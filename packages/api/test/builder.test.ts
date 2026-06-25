@@ -1,9 +1,10 @@
 import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
+import { rm, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { Sql } from 'postgres';
 import { applySchemaEdit } from '../src/compose/builder.ts';
+import { MigrationDataLossError } from '../src/db/schema/migrate.ts';
 import { loadTypes } from '../src/db/schema/load.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { cleanCatalog, tableExists, physicalColumns } from './helpers.ts';
@@ -74,4 +75,25 @@ test('destructive edit is gated: blocked → nothing written/applied; allowDestr
   const ok = await applySchemaEdit(sql, genDir, dropDraft, { allowDestructive: true });
   assert.equal(ok.ok, true);
   assert.ok(!(await physicalColumns(sql, 'ct_widget')).some((c) => c.name === 'b'));
+});
+
+test('S2 atomicity: a migrate that fails AFTER lint leaves schema.ts untouched + orphans no temp file', async () => {
+  await applySchemaEdit(sql, genDir, { apiId: 'box', fields: [{ name: 'title', type: 'string', options: { length: 1024, nullable: true } }] });
+  await sql.unsafe(`INSERT INTO ct_box (title) VALUES ('${'y'.repeat(1024)}')`); // an over-long row
+  const created = (await loadTypes(genDir)).schemas.find((s) => s.apiId === 'box')!;
+
+  // Shrink title to 256 WITH allowDestructive: this PASSES migrateLint (the ack is given) so applySchemaEdit
+  // proceeds to write the temp file + migrate — but migrate's pre-flight throws MigrationDataLossError on the
+  // 1024-char row. The temp must be unlinked and schema.ts left at length 1024 (file never ahead of the DB).
+  const shrink = { apiId: 'box', id: created.id, fields: [{ id: created.fields[0]!.id, name: 'title', type: 'string' as const, options: { length: 256, nullable: true } }] };
+  await assert.rejects(() => applySchemaEdit(sql, genDir, shrink, { allowDestructive: true }), MigrationDataLossError);
+
+  // schema.ts UNTOUCHED: it still round-trips to length 1024 (the failed edit did not flip the file).
+  const reloaded = (await loadTypes(genDir)).schemas.find((s) => s.apiId === 'box')!;
+  assert.equal(reloaded.fields[0]!.options?.length, 1024, 'schema.ts still the pre-edit length');
+  // No orphan temp file left behind in the type's dir.
+  const entries = await readdir(fileURLToPath(new URL(`./fixtures/.gen-${process.pid}/box`, import.meta.url)));
+  assert.deepEqual(entries.filter((e) => e.includes('.tmp')), [], 'no leftover temp file');
+  // DB column still varchar(1024) — nothing applied.
+  assert.equal((await physicalColumns(sql, 'ct_box')).find((c) => c.name === 'title')?.type, 'character varying');
 });

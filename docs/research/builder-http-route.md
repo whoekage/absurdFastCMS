@@ -2,6 +2,12 @@
 
 # conti Builder HTTP Route — Design (FINAL)
 
+> **Maintainer decisions (2026-06-25), resolving the §9 open questions that gate the build:**
+> - **Prod Builder (Q2): default-OFF, enableable.** `builder.enabled` flag (off in prod by default), FS-writability precheck, 403-loud when disabled. (§5 / slice S11)
+> - **Live rebuild (Q3): INCREMENTAL from day one.** Per-type dispatch (create→`registerDetached`, update→`replaceType`/`rebuildType`, drop→`removeType`, + relation/inverse targets). The engine already has the primitives; O(change) not O(catalog) — avoids the R-1 big-data pressure. Slice **S13 is promoted into the core swap (S4)**, not a follow-up.
+> - **Legacy cutover (Q5): HARD 410 Gone, immediately.** No translate-and-forward window — `/content-types/*` and `/component-types/*` mutations return 410 pointing at `/builder/*`, and the meta-write path is deleted. (§7 / slice S12)
+> - **Build progress:** S1 (mutable `live` cell) + S2 (`applySchemaEdit` temp-write→migrate→rename atomicity) **DONE**. Remaining open questions: Q1 (D&P/i18n toggle), Q4 (version hash), Q6 (`lock_timeout`), Q7 (component parity timing), Q8 (idempotency TTL).
+
 The files-first Builder core (`applySchemaEdit`) is wired to nothing. This designs the HTTP route that wraps it, **replaces** the legacy meta path (`content-type.controller.ts` → `content-type.repository.ts` → `rebuildType`), and solves the make-it-LIVE-without-restart problem. One design is recommended throughout; rejected alternatives are noted inline.
 
 ---

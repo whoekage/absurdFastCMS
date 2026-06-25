@@ -374,7 +374,13 @@ export function createServer(
   hooks?: HookRegistry,
 ): UwsServer {
   const app = uWS.App();
-  const current = engine;
+  // S1 (Builder live-reload): the SINGLE mutable cell every schema-reading route closure reads through.
+  // A schema edit (Builder route, S4) rebuilds a fresh Engine/Registry off-side and swaps these three
+  // references in ONE synchronous assignment — JS is single-threaded, so no in-flight request observes a
+  // half-swap. At construction it holds exactly the passed engine/registry/hooks ⇒ ZERO behavior change;
+  // it exists so the swap has a place to land. The `live` OBJECT (not the values) is what later scopes
+  // capture, so a reassignment of `live.engine` is seen everywhere.
+  const live: { engine: Engine; registry: Registry | undefined; hooks: HookRegistry | undefined } = { engine, registry, hooks };
 
   /**
    * be-09b/be-09c — the per-request AUTH context. `principal` comes ONLY from {@link SessionCache.validate}
@@ -681,15 +687,15 @@ export function createServer(
    * asked, it always returns false => the existing zero-copy read path is byte-identical.
    */
   function mediaRead(res: uWS.HttpResponse, method: string, path: string, type: string, query: string): boolean {
-    if (registry === undefined || store === undefined) return false;
+    const reg = live.registry; // read the LIVE registry per-call so a post-swap type/field is seen
+    if (reg === undefined || store === undefined) return false;
     if (method.toUpperCase() !== 'GET') return false;
-    const def = registry.get(type);
+    const def = reg.get(type);
     if (def === undefined || (def.mediaFields.size === 0 && def.componentFields.size === 0)) return false;
     const mediaTargets = mediaPopulateTargets(def, query);
     const componentTargets = componentPopulateTargets(def, query);
     if (mediaTargets.size === 0 && componentTargets.size === 0) return false;
 
-    const reg = registry;
     const sql = store.sql;
     // Strip BOTH the media + component populate names so the engine's relation-only parser never 400s.
     const stripNames = new Set<string>([...mediaTargets.keys(), ...componentTargets.keys()]);
@@ -701,12 +707,12 @@ export function createServer(
     void (async () => {
       let result: CoreResponse;
       try {
-        const base = handleRequest(current, { method, path, query: strippedQuery });
+        const base = handleRequest(live.engine, { method, path, query: strippedQuery });
         // Only a successful read carries a value to resolve; a 400/404/405 passes straight through.
         if (base.status === 200) {
           let body = base.body;
           if (mediaTargets.size > 0) body = (await applyMediaPopulate(sql, body, mediaTargets)).body;
-          if (componentTargets.size > 0) body = (await applyComponentPopulate(sql, current, reg, body, componentTargets)).body;
+          if (componentTargets.size > 0) body = (await applyComponentPopulate(sql, live.engine, reg, body, componentTargets)).body;
           result = { status: 200, contentType: base.contentType, body };
         } else {
           result = base;
@@ -725,7 +731,7 @@ export function createServer(
   if (config.debugInspector) {
     // INDEX: every content-type + row count.
     app.get('/debug-inspect', (res) => {
-      writeJson(res, 200, listTypes(current));
+      writeJson(res, 200, listTypes(live.engine));
     });
     // ONE type: per-column storage/stats + relations + a decoded row window (?offset=&limit=).
     app.get('/debug-inspect/:type', (res, req) => {
@@ -733,7 +739,7 @@ export function createServer(
       const params = new URLSearchParams(req.getQuery() ?? '');
       const offset = toInt(params.get('offset'));
       const limit = toInt(params.get('limit'));
-      const result = inspectType(current, type, { offset, limit } as { offset?: number; limit?: number });
+      const result = inspectType(live.engine, type, { offset, limit } as { offset?: number; limit?: number });
       if (result === null) writeJson(res, 404, { error: `unknown content-type "${type}"` });
       else writeJson(res, 200, result);
     });
@@ -772,7 +778,7 @@ export function createServer(
     // UNLESS this is a media-populate read (registry present + a media field targeted), which needs an
     // async batched `files` lookup. mediaRead returns true iff it took the async path (else fall through).
     if (mediaRead(res, method, `/${type}`, type, query)) return;
-    writeResponse(res, handleRequest(current, { method, path: `/${type}`, query }));
+    writeResponse(res, handleRequest(live.engine, { method, path: `/${type}`, query }));
   });
 
   // SINGLE: /:type/:id
@@ -782,15 +788,15 @@ export function createServer(
     const id = req.getParameter(1) ?? '';
     const query = req.getQuery() ?? '';
     if (mediaRead(res, method, `/${type}/${id}`, type, query)) return;
-    writeResponse(res, handleRequest(current, { method, path: `/${type}/${id}`, query }));
+    writeResponse(res, handleRequest(live.engine, { method, path: `/${type}/${id}`, query }));
   });
 
   // WRITES (only when a store + registry are supplied): commit to Postgres, then rebuild ONLY the
   // written type's RAM storage in place (per-type rebuild + per-type cache invalidation).
   if (store && registry) {
     const ctx: WriteContext = {
-      engine: () => current,
-      registry: () => registry,
+      engine: () => live.engine,
+      registry: () => live.registry!,
       sql: store.sql,
       rebuild: async (type: string) => {
         // A DATA write never changes the schema, so re-stream the ALREADY-RESOLVED registry def — no
@@ -798,8 +804,8 @@ export function createServer(
         // changeFieldType) must call registry.rebuildType to re-read content_types/content_type_fields;
         // that is the future DDL hook, NOT this per-entry-write path. The def is guaranteed present: the
         // write core resolved it via registry.get(type) before any SQL ran.
-        const def = registry.get(type)!;
-        await rebuildType(store.sql, current, def, registry);
+        const def = live.registry!.get(type)!;
+        await rebuildType(store.sql, live.engine, def, live.registry!);
       },
       // Publish clock: real wall-clock by default; tests inject a fixed Date for deterministic fixtures.
       publishClock,
@@ -812,7 +818,7 @@ export function createServer(
     // Wired only here (store + registry present): a read-only server has no builder, so /content-types
     // falls to any('/*') -> 404. An unsupported verb on a builder path is not a registered (path,verb),
     // so it also falls to any('/*') -> the read core -> 404 (the spec-permitted method-mismatch handling).
-    const ctCtx: ContentTypeContext = { sql: store.sql, engine: () => current, registry: () => registry };
+    const ctCtx: ContentTypeContext = { sql: store.sql, engine: () => live.engine, registry: () => live.registry! };
 
     // be-09b — GATED content-type BUILDER mutation. Captures the sync params off `req` FIRST (req is
     // stack-allocated), then gate('builder.manage') buffers the body + applies the 401/403 split, and on
@@ -846,7 +852,7 @@ export function createServer(
     // be-05 COMPONENT-TYPE BUILDER (meta-only runtime schema over HTTP). Same `/component-types` literal-
     // prefix safety as `/content-types` ('-' is illegal in an api_id). No engine sync (components have no
     // engine presence) — the controller syncs only the registry's component store. GATED on builder.manage.
-    const cmpCtx: ComponentTypeContext = { sql: store.sql, registry: () => registry };
+    const cmpCtx: ComponentTypeContext = { sql: store.sql, registry: () => live.registry! };
     const cmpMutate = (method: string, opts: CtRouteOpts) => (res: uWS.HttpResponse, req: uWS.HttpRequest): void => {
       const apiId = opts.hasApiId ? (req.getParameter(0) ?? '') : undefined;
       const fieldName = opts.hasName ? (req.getParameter(1) ?? '') : undefined;
@@ -1393,7 +1399,7 @@ export function createServer(
     const method = req.getMethod();
     const url = req.getUrl();
     const query = req.getQuery() ?? '';
-    writeResponse(res, handleRequest(current, { method, path: url, query }));
+    writeResponse(res, handleRequest(live.engine, { method, path: url, query }));
   });
 
   return {

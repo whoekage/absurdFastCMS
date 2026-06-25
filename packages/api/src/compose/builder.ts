@@ -1,4 +1,4 @@
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { Sql } from 'postgres';
 import { mintId, type ContentTypeSchema, type FieldSchema, type RelationSchema } from '../db/schema/model.ts';
@@ -71,10 +71,23 @@ export async function applySchemaEdit(
   const { blocked } = await migrateLint(sql, next, opts);
   if (blocked.length > 0) return { ok: false, blocked };
 
-  // Write the file (source of truth) + migrate the DB. Both consistent on success.
+  // ATOMICITY (S2): the file flip + the DB migrate must be all-or-nothing. Write the generated source to a
+  // TEMP file FIRST, run migrate(), and only on a successful commit `rename` the temp over `schema.ts` (an
+  // atomic same-dir flip). If migrate() throws, the DB tx rolls back AND the temp is unlinked, leaving the
+  // existing `schema.ts` UNTOUCHED — never the file-ahead-of-DB drift the old write-then-migrate order risked.
+  // (The sub-ms crash window between commit and rename — file BEHIND the DB — is handled by the boot guard, S3.)
   const dir = path.join(entitiesDir, schema.apiId);
   await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, 'schema.ts'), generateSchemaSource(schema));
-  const result = await migrate(sql, next, opts);
+  const target = path.join(dir, 'schema.ts');
+  const tmp = `${target}.${process.pid}.tmp`;
+  await writeFile(tmp, generateSchemaSource(schema));
+  let result: Awaited<ReturnType<typeof migrate>>;
+  try {
+    result = await migrate(sql, next, opts);
+  } catch (err) {
+    await unlink(tmp).catch(() => {}); // best-effort cleanup; never mask the original migrate error
+    throw err;
+  }
+  await rename(tmp, target); // commit succeeded — flip the source of truth into place
   return { ok: true, applied: result.applied, schema };
 }
