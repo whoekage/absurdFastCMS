@@ -20,6 +20,7 @@ import {
   type FileListResponse,
   type FileListParams,
 } from './types.ts';
+import { projectSchemas, type BuilderListResponse } from './modules.ts';
 import { decodeEntry, type DecodeOptions } from './serde.ts';
 
 /**
@@ -309,11 +310,46 @@ export class AssetsApi {
   }
 }
 
-// NOTE (legacy-meta teardown): the runtime-DDL Builder clients (ModulesApi + ComponentTypesApi:
-// create/addField/updateField/dropField/drop/addRelation/get/list) were REMOVED. Their server routes
-// (POST /content-types, /content-types/:apiId/fields, /component-types…) were deleted — schema management
-// is files-first (entities edited as code; the visual Builder writes them via /builder/modules). The SDK
-// is a DATA-access client only (read/write entries, assets/media, auth).
+// NOTE (legacy-meta teardown): the runtime-DDL Builder *write* clients (the old ModulesApi +
+// ComponentTypesApi: create/addField/updateField/dropField/drop/addRelation) were REMOVED. Their server
+// routes (POST /content-types, /content-types/:apiId/fields, /component-types…) were deleted — schema
+// MUTATION is files-first now (entities edited as code; the visual Builder PUTs them via /builder/modules).
+// What survives is READ-ONLY introspection over the files-first catalog, below.
+
+/**
+ * Files-first MODULE introspection — READ-ONLY. Reuses this client's {@link request} pipeline against the
+ * surviving `/builder/modules` GET routes and projects the wire Schema IR into the richer
+ * {@link ModuleDefinition} (system fields synthesized + two-way inverse relations folded in — see
+ * {@link projectSchemas}) that the admin consumes. There is NO write surface: schema mutation is
+ * files-first (edit `schema/<apiId>.json`; the visual Builder PUTs it).
+ */
+export class ModulesApi {
+  private readonly request: RequestFn;
+
+  constructor(request: RequestFn) {
+    this.request = request;
+  }
+
+  /** LIST every module's projected definition. `GET /builder/modules`. */
+  async list(signal?: AbortSignal): Promise<ModuleDefinition[]> {
+    const opts: RequestOptions = {};
+    if (signal) opts.signal = signal;
+    const res = await this.request<BuilderListResponse>('GET', '/builder/modules', opts);
+    return projectSchemas(res.schemas);
+  }
+
+  /**
+   * GET one module's projected definition. Throws {@link NotFoundError} (404) when unknown. Projects from
+   * the FULL list (not the single `/builder/modules/:apiId` GET) so two-way INVERSE relations declared by
+   * other modules are folded in — exactly matching the old server-side `projectDef`.
+   */
+  async get(apiId: string, signal?: AbortSignal): Promise<ModuleDefinition> {
+    const all = await this.list(signal);
+    const def = all.find((d) => d.apiId === apiId);
+    if (def === undefined) throw new NotFoundError(404, `module "${apiId}" does not exist`, undefined);
+    return def;
+  }
+}
 
 
 /**
@@ -342,6 +378,12 @@ export class AbsurdClient {
   protected readonly timeout: number | undefined;
   /** Slice 8.3 — default retry policy (idempotent GET only). */
   protected readonly retry: RetryOptions | undefined;
+
+  /**
+   * Files-first MODULE introspection (`client.modules`) — READ-ONLY `list` / `get` over the surviving
+   * `/builder/modules` GET routes, projected to {@link ModuleDefinition}. See {@link ModulesApi}.
+   */
+  readonly modules: ModulesApi;
 
   /**
    * be-04 MEDIA — the asset-library namespace (`client.assets`): `list` / `get` / `delete` over the
@@ -373,6 +415,7 @@ export class AbsurdClient {
     this.retry = options.retry;
 
     // Bind request so the namespace keeps the right `this` while calling the protected pipeline.
+    this.modules = new ModulesApi(this.request.bind(this));
     this.assets = new AssetsApi(this.request.bind(this));
   }
 

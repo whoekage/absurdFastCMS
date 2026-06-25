@@ -60,6 +60,7 @@ export type {
 export {
   AbsurdClient,
   Collection,
+  ModulesApi,
   AssetsApi,
   createClient,
   ApiError,
@@ -88,3 +89,13 @@ export {
 // --- Slice 8: ergonomics — fluent filter builder ---
 export type { FilterLike } from './builder.ts';
 export { FieldBuilder, FilterBuilder, f, and, or, not } from './builder.ts';
+
+// --- files-first module introspection (read-only over /builder/modules) ---
+export { projectSchemas } from './modules.ts';
+export type {
+  ModuleSchema,
+  SchemaField,
+  SchemaRelation,
+  BuilderListResponse,
+  BuilderGetResponse,
+} from './modules.ts';
