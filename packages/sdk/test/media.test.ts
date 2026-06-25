@@ -128,22 +128,6 @@ test('VALIDATION: a non-existent / non-positive media id is a 400', async () => 
   );
 });
 
-test('media field is projected with cmsType + multiple flag', async () => {
-  const client = createClient({ baseUrl: server.baseUrl });
-  await withType(
-    server,
-    { apiId: 'asset_owner', fields: [
-      { name: 'single', cmsType: 'media' },
-      { name: 'many', cmsType: 'media', options: { multiple: true } },
-    ] },
-    async (apiId) => {
-      const def = await client.modules.get(apiId);
-      const single = def.fields.find((f) => f.name === 'single')!;
-      const many = def.fields.find((f) => f.name === 'many')!;
-      assert.equal(single.cmsType, 'media');
-      assert.equal(single.multiple, false);
-      assert.equal(many.cmsType, 'media');
-      assert.equal(many.multiple, true);
-    },
-  );
-});
+// NOTE (legacy-meta teardown): the test 'media field is projected with cmsType + multiple flag' was
+// dropped — it asserted the wire projection returned by the Builder route GET /modules/:apiId, which
+// was removed. Media write/read behaviour stays covered by the tests above (real wire, real Postgres).

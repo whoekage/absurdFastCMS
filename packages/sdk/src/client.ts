@@ -16,13 +16,6 @@ import {
   type SingleResponse,
   type WriteBody,
   type ModuleDefinition,
-  type CreateModuleInput,
-  type FieldSpec,
-  type UpdateFieldInput,
-  type DropResult,
-  type DeclareRelationInput,
-  type ComponentTypeDefinition,
-  type CreateComponentTypeInput,
   type FileAsset,
   type FileListResponse,
   type FileListParams,
@@ -133,7 +126,7 @@ export interface ClientOptions {
   /**
    * Slice 9.1 — optional per-request header provider (the formal auth/token seam — see
    * {@link HeaderProvider}). Its headers are merged AFTER the built-in ones AND after the {@link token}
-   * header (so it can override `module` / `authorization` if it really wants to). May be async.
+   * header (so it can override `content-type` / `authorization` if it really wants to). May be async.
    */
   getHeaders?: HeaderProvider | undefined;
   /**
@@ -167,7 +160,7 @@ export interface ClientOptions {
 export interface RequestOptions {
   /** The already-built query string WITHOUT a leading `?` (Slice 2 `buildQueryString` output). Empty = omit. */
   query?: string | undefined;
-  /** The JSON request body. Serialized with `JSON.stringify`; `module: application/json` is set. */
+  /** The JSON request body. Serialized with `JSON.stringify`; `content-type: application/json` is set. */
   body?: unknown;
   /** An `AbortSignal` to cancel the in-flight request, threaded straight into `fetch` (combined with any timeout). */
   signal?: AbortSignal | undefined;
@@ -262,7 +255,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * The bound transport seam the {@link ModulesApi} namespace calls. `AbsurdClient` passes its own
+ * The bound transport seam the namespace classes (e.g. {@link AssetsApi}) call. `AbsurdClient` passes its own
  * `request<T>` here so the namespace reuses the exact same URL build / header merge / typed-error tower
  * without re-implementing the pipeline or widening `request`'s visibility past the package.
  */
@@ -316,215 +309,12 @@ export class AssetsApi {
   }
 }
 
-/**
- * Slice 6 — the module BUILDER namespace (`client.modules`). Covers the meta / runtime-DDL
- * routes: `GET/POST /modules`, `GET/DELETE /modules/:apiId`, `POST .../fields`, and
- * `PUT/DELETE .../fields/:name`. Every 2xx body is a {@link ModuleDefinition} (the `projectDef`
- * shape) except a type drop, which returns {@link DropResult}. Path segments (`:apiId`, `:name`) are
- * URL-encoded. Errors surface as the Slice 3 typed subclasses: {@link ConflictError} (409 exists /
- * conflict), {@link NotFoundError} (404), {@link BadRequestError} (400 invalid identifier / unknown
- * cmsType / enum / option / forbidden type-change).
- *
- * ⚠️ The builder routes are only mounted by the server when it is started WITH a store + registry
- * (runtime DDL). Against a read-only server these calls answer 404/405.
- */
-export class ModulesApi {
-  /** The owning client's bound {@link AbsurdClient.request} pipeline. */
-  private readonly request: RequestFn;
+// NOTE (legacy-meta teardown): the runtime-DDL Builder clients (ModulesApi + ComponentTypesApi:
+// create/addField/updateField/dropField/drop/addRelation/get/list) were REMOVED. Their server routes
+// (POST /content-types, /content-types/:apiId/fields, /component-types…) were deleted — schema management
+// is files-first (entities edited as code; the visual Builder writes them via /builder/modules). The SDK
+// is a DATA-access client only (read/write entries, assets/media, auth).
 
-  constructor(request: RequestFn) {
-    this.request = request;
-  }
-
-  /**
-   * 6.1 — LIST. `GET /modules` → every module's projected definition (system fields first,
-   * then user fields in `sort` order).
-   */
-  list(signal?: AbortSignal): Promise<ModuleDefinition[]> {
-    const opts: RequestOptions = {};
-    if (signal) opts.signal = signal;
-    return this.request<ModuleDefinition[]>('GET', '/modules', opts);
-  }
-
-  /**
-   * 6.1 — GET one. `GET /modules/:apiId` → its projected definition. Throws {@link NotFoundError}
-   * (404) when no module carries the api_id.
-   */
-  get(apiId: string, signal?: AbortSignal): Promise<ModuleDefinition> {
-    const opts: RequestOptions = {};
-    if (signal) opts.signal = signal;
-    return this.request<ModuleDefinition>('GET', `/modules/${encodeURIComponent(apiId)}`, opts);
-  }
-
-  /**
-   * 6.2 — CREATE. `POST /modules` with `{ apiId, fields }` → the new type's projected definition
-   * (HTTP 201, canonical stored casing on `apiId`). Throws {@link ConflictError} (409) when the api_id
-   * already exists and {@link BadRequestError} (400) on an invalid identifier / unknown cmsType / bad
-   * enum or option.
-   */
-  create(input: CreateModuleInput, signal?: AbortSignal): Promise<ModuleDefinition> {
-    const opts: RequestOptions = { body: input };
-    if (signal) opts.signal = signal;
-    return this.request<ModuleDefinition>('POST', '/modules', opts);
-  }
-
-  /**
-   * 6.3 — DROP a type. `DELETE /modules/:apiId` (DROP TABLE + catalog row + RAM removal) →
-   * `{ apiId, dropped: true }`. Throws {@link NotFoundError} (404) when the api_id is unknown.
-   */
-  drop(apiId: string, signal?: AbortSignal): Promise<DropResult> {
-    const opts: RequestOptions = {};
-    if (signal) opts.signal = signal;
-    return this.request<DropResult>('DELETE', `/modules/${encodeURIComponent(apiId)}`, opts);
-  }
-
-  /**
-   * 6.4 — ADD a field. `POST /modules/:apiId/fields` with a {@link FieldSpec} → the updated
-   * projected definition (HTTP 201). Throws {@link ConflictError} (409) when the field name already
-   * exists, {@link NotFoundError} (404) when the type is unknown, {@link BadRequestError} (400) on an
-   * invalid name / unknown cmsType / bad enum or option.
-   */
-  addField(apiId: string, field: FieldSpec, signal?: AbortSignal): Promise<ModuleDefinition> {
-    const opts: RequestOptions = { body: field };
-    if (signal) opts.signal = signal;
-    return this.request<ModuleDefinition>(
-      'POST',
-      `/modules/${encodeURIComponent(apiId)}/fields`,
-      opts,
-    );
-  }
-
-  /**
-   * 6.4 — UPDATE a field. `PUT /modules/:apiId/fields/:name` with a {@link UpdateFieldInput}
-   * (`newName` and/or `cmsType` + `options`) → the updated projected definition (HTTP 200). The server
-   * renames FIRST then changes type on the new name. Throws {@link BadRequestError} (400) on an empty
-   * change / invalid newName / forbidden type-change, {@link ConflictError} (409) on a name clash,
-   * {@link NotFoundError} (404) when the type or field is unknown.
-   */
-  updateField(
-    apiId: string,
-    name: string,
-    change: UpdateFieldInput,
-    signal?: AbortSignal,
-  ): Promise<ModuleDefinition> {
-    const opts: RequestOptions = { body: change };
-    if (signal) opts.signal = signal;
-    return this.request<ModuleDefinition>(
-      'PUT',
-      `/modules/${encodeURIComponent(apiId)}/fields/${encodeURIComponent(name)}`,
-      opts,
-    );
-  }
-
-  /**
-   * 6.4 — DROP a field. `DELETE /modules/:apiId/fields/:name` → the updated projected definition
-   * (HTTP 200). Throws {@link NotFoundError} (404) when the type or field is unknown.
-   */
-  dropField(apiId: string, name: string, signal?: AbortSignal): Promise<ModuleDefinition> {
-    const opts: RequestOptions = {};
-    if (signal) opts.signal = signal;
-    return this.request<ModuleDefinition>(
-      'DELETE',
-      `/modules/${encodeURIComponent(apiId)}/fields/${encodeURIComponent(name)}`,
-      opts,
-    );
-  }
-
-  /**
-   * DECLARE a relation. `POST /modules/:apiId/relations` with a {@link DeclareRelationInput}
-   * (`field`, `kind`, `target`, optional `inverseField`) → the owner's updated projected definition
-   * (HTTP 201), now carrying the new entry in `relations`. The relation goes LIVE immediately for both
-   * deep filtering (`?filters[field][...]`) and `?populate=field`. Throws {@link NotFoundError} (404)
-   * when the owner or target type is unknown, {@link ConflictError} (409) on a field/relation name clash,
-   * {@link BadRequestError} (400) on an invalid identifier / reserved name / unknown kind.
-   */
-  addRelation(apiId: string, input: DeclareRelationInput, signal?: AbortSignal): Promise<ModuleDefinition> {
-    const opts: RequestOptions = { body: input };
-    if (signal) opts.signal = signal;
-    return this.request<ModuleDefinition>(
-      'POST',
-      `/modules/${encodeURIComponent(apiId)}/relations`,
-      opts,
-    );
-  }
-}
-
-/**
- * be-05 — the COMPONENT-TYPE BUILDER namespace (`client.componentTypes`). A component type is a reusable
- * field group (no physical table / no engine presence). Covers `GET/POST /component-types`,
- * `GET/DELETE /component-types/:apiId`, `POST .../fields`, and `DELETE .../fields/:name`. Every 2xx body
- * is a {@link ComponentTypeDefinition} (the `projectComponentDef` shape) except a drop ({@link DropResult}).
- * Errors surface as the typed subclasses: {@link ConflictError} (409 exists / in-use / field clash),
- * {@link NotFoundError} (404), {@link BadRequestError} (400 invalid identifier / unknown cmsType / malformed
- * component spec / dangling ref / reference cycle).
- *
- * ⚠️ Like the module builder, these routes are only mounted on a server started WITH a store +
- * registry; a read-only server answers 404/405.
- */
-export class ComponentTypesApi {
-  private readonly request: RequestFn;
-
-  constructor(request: RequestFn) {
-    this.request = request;
-  }
-
-  /** LIST. `GET /component-types` → every component-type's projected definition. */
-  list(signal?: AbortSignal): Promise<ComponentTypeDefinition[]> {
-    const opts: RequestOptions = {};
-    if (signal) opts.signal = signal;
-    return this.request<ComponentTypeDefinition[]>('GET', '/component-types', opts);
-  }
-
-  /** GET one. `GET /component-types/:apiId`. Throws {@link NotFoundError} (404) when unknown. */
-  get(apiId: string, signal?: AbortSignal): Promise<ComponentTypeDefinition> {
-    const opts: RequestOptions = {};
-    if (signal) opts.signal = signal;
-    return this.request<ComponentTypeDefinition>('GET', `/component-types/${encodeURIComponent(apiId)}`, opts);
-  }
-
-  /**
-   * CREATE. `POST /component-types` with `{ apiId, fields }` → the new component's definition (201).
-   * Throws {@link ConflictError} (409) when the api_id exists, {@link BadRequestError} (400) on an invalid
-   * identifier / unknown cmsType / malformed component field / dangling component ref / reference cycle.
-   */
-  create(input: CreateComponentTypeInput, signal?: AbortSignal): Promise<ComponentTypeDefinition> {
-    const opts: RequestOptions = { body: input };
-    if (signal) opts.signal = signal;
-    return this.request<ComponentTypeDefinition>('POST', '/component-types', opts);
-  }
-
-  /**
-   * DROP a component. `DELETE /component-types/:apiId` → `{ apiId, dropped: true }`. Throws
-   * {@link ConflictError} (409) when the component is still referenced by a module / component
-   * field, {@link NotFoundError} (404) when the api_id is unknown.
-   */
-  drop(apiId: string, signal?: AbortSignal): Promise<DropResult> {
-    const opts: RequestOptions = {};
-    if (signal) opts.signal = signal;
-    return this.request<DropResult>('DELETE', `/component-types/${encodeURIComponent(apiId)}`, opts);
-  }
-
-  /**
-   * ADD a field. `POST /component-types/:apiId/fields` with a {@link FieldSpec} → the updated definition
-   * (201). Throws {@link ConflictError} (409) on a name clash, {@link NotFoundError} (404) when the
-   * component is unknown, {@link BadRequestError} (400) on an invalid spec / dangling ref / cycle.
-   */
-  addField(apiId: string, field: FieldSpec, signal?: AbortSignal): Promise<ComponentTypeDefinition> {
-    const opts: RequestOptions = { body: field };
-    if (signal) opts.signal = signal;
-    return this.request<ComponentTypeDefinition>('POST', `/component-types/${encodeURIComponent(apiId)}/fields`, opts);
-  }
-
-  /**
-   * DROP a field. `DELETE /component-types/:apiId/fields/:name` → the updated definition (200). Throws
-   * {@link NotFoundError} (404) when the component or field is unknown.
-   */
-  dropField(apiId: string, name: string, signal?: AbortSignal): Promise<ComponentTypeDefinition> {
-    const opts: RequestOptions = {};
-    if (signal) opts.signal = signal;
-    return this.request<ComponentTypeDefinition>('DELETE', `/component-types/${encodeURIComponent(apiId)}/fields/${encodeURIComponent(name)}`, opts);
-  }
-}
 
 /**
  * The transport client. Holds the normalized base URL, the resolved `fetch`, and the optional header
@@ -552,18 +342,6 @@ export class AbsurdClient {
   protected readonly timeout: number | undefined;
   /** Slice 8.3 — default retry policy (idempotent GET only). */
   protected readonly retry: RetryOptions | undefined;
-
-  /**
-   * Slice 6 — the module builder namespace. Reuses this client's {@link request} pipeline (same
-   * URL build / header merge / typed-error tower) for the meta / runtime-DDL routes.
-   */
-  readonly modules: ModulesApi;
-
-  /**
-   * be-05 — the component-type builder namespace (`client.componentTypes`). Reuses this client's
-   * {@link request} pipeline for the reusable-component meta routes (`/component-types...`).
-   */
-  readonly componentTypes: ComponentTypesApi;
 
   /**
    * be-04 MEDIA — the asset-library namespace (`client.assets`): `list` / `get` / `delete` over the
@@ -595,8 +373,6 @@ export class AbsurdClient {
     this.retry = options.retry;
 
     // Bind request so the namespace keeps the right `this` while calling the protected pipeline.
-    this.modules = new ModulesApi(this.request.bind(this));
-    this.componentTypes = new ComponentTypesApi(this.request.bind(this));
     this.assets = new AssetsApi(this.request.bind(this));
   }
 
@@ -621,7 +397,7 @@ export class AbsurdClient {
 
   /**
    * The single request pipeline. Builds the URL (`baseUrl + path`, with `?query` only when non-empty),
-   * merges headers (`module: application/json` when a body is present, then the async
+   * merges headers (`content-type: application/json` when a body is present, then the async
    * {@link getHeaders} on top), JSON-stringifies the body, threads the `AbortSignal`, then reads the
    * response as text and `JSON.parse`s it. On a non-2xx status it throws the typed {@link ApiError}
    * built from the status + the `{ error }` message; on success it returns the parsed JSON as `T`.
@@ -1003,7 +779,7 @@ export class AbsurdClient {
    * {@link PayloadTooLargeError} (413, over the server's upload cap), or a generic {@link ApiError}
    * (415, a non-multipart body — not reachable through this method) on the respective failures.
    *
-   * Transport note: this does NOT reuse the JSON {@link request} pipeline (which sets a JSON module
+   * Transport note: this does NOT reuse the JSON {@link request} pipeline (which sets a JSON content-type
    * and stringifies the body). It builds `FormData` and lets `fetch` set the multipart boundary; the auth
    * token / `getHeaders` / hooks still apply. Uploads are NOT retried (a non-idempotent POST).
    */
@@ -1033,7 +809,7 @@ export class AbsurdClient {
 
     const url = `${this.baseUrl}/_files/upload`;
     const headers: Record<string, string> = {};
-    // NO module here — fetch derives `multipart/form-data; boundary=...` from the FormData body.
+    // NO content-type here — fetch derives `multipart/form-data; boundary=...` from the FormData body.
     if (this.token !== undefined) headers['authorization'] = `Bearer ${this.token}`;
     if (this.apiKey !== undefined) headers['x-api-key'] = this.apiKey; // be-09c — the api-key slot
     if (this.getHeaders) {

@@ -19,6 +19,7 @@ import {
   isLosslessBigDecode,
   assertNoNumberCoercion,
   type ModuleDefinition,
+  type FieldDefinition,
 } from '../src/index.ts';
 
 /** A module exercising every lossy-prone wire type. */
@@ -36,12 +37,33 @@ const BIG = '9007199254740993'; // 2^53 + 1 — the canonical IEEE-754 collision
 const HUGE = '92233720368547758'; // far beyond 2^53.
 const PRICE = '1234567890.55';
 
+// NOTE (legacy-meta teardown): the Builder route GET /modules/:apiId (which returned the projected
+// def) was removed — the SDK no longer fetches defs over the wire. decodeEntry only needs each field's
+// { name, cmsType }, so we build the decode def locally from WIRE_FIELDS (system fields prepended).
+function wireDef(apiId: string): ModuleDefinition {
+  const sys = (name: string, cmsType: FieldDefinition['cmsType']): FieldDefinition => ({ name, cmsType, nullable: name !== 'id', system: true });
+  return {
+    apiId,
+    relations: [],
+    fields: [
+      sys('id', 'integer'), sys('created_at', 'datetime'), sys('updated_at', 'datetime'),
+      ...WIRE_FIELDS.map((f): FieldDefinition => ({
+        name: f.name,
+        cmsType: f.cmsType,
+        nullable: (f as { options?: { nullable?: boolean } }).options?.nullable ?? true,
+        system: false,
+        ...((f as { options?: { scale?: number } }).options?.scale !== undefined ? { scale: (f as { options: { scale: number } }).options.scale } : {}),
+      })),
+    ],
+  };
+}
+
 test('biginteger > 2^53 round-trips lossless as a string; BigInt opt-in is exact', async () => {
   const server = await startTestServer('serde-bigint');
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
-      const def = await client.modules.get(apiId);
+      const def = wireDef(apiId);
 
       const created = await client.create(apiId, {
         big: HUGE,
@@ -84,7 +106,7 @@ test('decimal keeps its fixed scale as a string and is never widened', async () 
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
-      const def = await client.modules.get(apiId);
+      const def = wireDef(apiId);
 
       const created = await client.create(apiId, {
         big: '1',
@@ -115,7 +137,7 @@ test('json round-trips byte-exact (nested values)', async () => {
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
-      const def = await client.modules.get(apiId);
+      const def = wireDef(apiId);
 
       const payload = { s: 'héllo', n: 3.14, arr: [1, 2, { deep: true }], nul: null, o: { x: { y: 'z' } } };
       const created = await client.create(apiId, {
@@ -142,7 +164,7 @@ test('date/datetime arrive as ISO strings; { dates: true } yields a Date', async
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
-      const def = await client.modules.get(apiId);
+      const def = wireDef(apiId);
 
       const at = new Date(Date.UTC(2026, 5, 18, 9, 30, 0));
       const created = await client.create(apiId, {
@@ -174,7 +196,7 @@ test('encodeEntry lowers Date -> ISO and bigint -> string; the api accepts the b
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
-      const def = await client.modules.get(apiId);
+      const def = wireDef(apiId);
 
       const at = new Date(Date.UTC(2026, 5, 18, 0, 0, 0));
       const body = encodeEntry(def, {
@@ -206,7 +228,7 @@ test('listDecoded / findOneDecoded apply decodeEntry with a supplied def', async
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
       const client = createClient({ baseUrl: server.baseUrl });
-      const def: ModuleDefinition = await client.modules.get(apiId);
+      const def: ModuleDefinition = wireDef(apiId);
 
       const created = await client.create(apiId, {
         big: HUGE,

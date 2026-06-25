@@ -103,7 +103,7 @@ test('createVariant errors: duplicate locale → 400, missing sibling → 404, n
   }
 });
 
-test('i18n composes with Draft & Publish (locale=fr & status=published) + projected def exposes flags', async () => {
+test('i18n composes with Draft & Publish (locale=fr & status=published)', async () => {
   const server = await startTestServer('i18n-dp');
   try {
     await withType(server, { apiId: 'page', fields: PAGE_FIELDS, i18n: true, draftPublish: true }, async (apiId) => {
@@ -119,13 +119,9 @@ test('i18n composes with Draft & Publish (locale=fr & status=published) + projec
       // The en variant is still a draft → excluded from the default (published-only) read.
       assert.equal((await client.list(apiId)).data.length, 0);
 
-      // The projected def exposes i18n + per-field localized.
-      const def = await client.modules.get(apiId);
-      assert.equal(def.i18n, true);
-      assert.equal(def.fields.find((f) => f.name === 'title')!.localized, true);
-      assert.equal(def.fields.find((f) => f.name === 'slug')!.localized, false);
-      assert.ok(def.fields.find((f) => f.name === 'document_id'));
-      assert.ok(def.fields.find((f) => f.name === 'locale'));
+      // NOTE (legacy-meta teardown): the projected-def assertions (def.i18n / per-field localized /
+      // document_id+locale) were dropped — the Builder route GET /modules/:apiId that returned the
+      // projection was removed. i18n behaviour above is still exercised end-to-end over the live wire.
     });
   } finally {
     await server.close();
