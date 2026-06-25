@@ -142,7 +142,7 @@ const GITIGNORE_TEMPLATE = `node_modules
 .env
 `;
 
-// The demo content-type, code-first: `schema/<apiId>.ts` is the SOURCE OF TRUTH (committed, dev-edited or
+// The demo module, code-first: `schema/<apiId>.ts` is the SOURCE OF TRUTH (committed, dev-edited or
 // Builder-edited, git-reviewed). `conti migrate` applies it; createConti builds the registry from it at
 // boot; the entry type is inferred. Add lifecycle hooks alongside the fields.
 const SCHEMA_ARTICLE_TEMPLATE = `import { defineSchema, c } from '@conti/core';
@@ -232,7 +232,7 @@ export async function initProject(dir: string, opts: { name?: string } = {}): Pr
     await mkdir(path.join(dir, sub), { recursive: true });
     await writeFile(path.join(dir, sub, '.gitkeep'), '');
   }
-  // modules/<apiId>/ ships the demo `article` (one folder per content-type): schema + hooks + custom-logic
+  // modules/<apiId>/ ships the demo `article` (one folder per module): schema + hooks + custom-logic
   // placeholders. This is the code-first source of truth.
   const articleDir = path.join(dir, 'modules', 'article');
   await mkdir(articleDir, { recursive: true });
