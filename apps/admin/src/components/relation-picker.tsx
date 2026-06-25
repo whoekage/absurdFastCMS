@@ -18,7 +18,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // Relation picker.
 //
-// Searches the TARGET content-type (api.list with a `$containsi` on its label field), shows the
+// Searches the TARGET module (api.list with a `$containsi` on its label field), shows the
 // currently-linked entries, and lets the operator connect/disconnect (to-many) or select-one (to-one).
 // It is a CONTROLLED widget over the SELECTED ID SET: the parent owns `value` (an array of related-row
 // ids) and gets `onChange(ids)` back. The entry form lowers that id set into the relation-op write body
@@ -68,7 +68,7 @@ export function RelationPicker({
   // Resolve the target type's definition so we can pick a sensible label/search column.
   const targetDefQuery = useQuery({
     queryKey: contentKeys.definition(config.target),
-    queryFn: ({ signal }) => api.contentTypes.get(config.target, signal),
+    queryFn: ({ signal }) => api.modules.get(config.target, signal),
   });
 
   const labelField = useMemo(

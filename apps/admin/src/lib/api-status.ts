@@ -13,7 +13,7 @@ import { api } from '@/lib/api';
  *   - probe throws ApiError     -> 'online'  (server reachable, just returned an error status)
  *   - probe throws anything else-> 'offline' (network/transport error)
  *
- * The probe itself is the cheapest reachable GET the SDK offers: `contentTypes.list()`. The admin
+ * The probe itself is the cheapest reachable GET the SDK offers: `modules.list()`. The admin
  * already calls it for the sidebar, so this adds no new endpoint and reuses the same query-cache
  * semantics. We do NOT need its data here — only whether the request reached the server.
  */
@@ -56,7 +56,7 @@ export function useApiStatus(): ApiStatusResult {
       // We only care that the request reaches the server; the payload is irrelevant. We time the probe
       // around the fetch so the top bar can show a REAL measured round-trip (never a fabricated number).
       const started = performance.now();
-      await api.contentTypes.list(signal);
+      await api.modules.list(signal);
       return { latencyMs: Math.round(performance.now() - started) };
     },
     retry: false,

@@ -25,7 +25,7 @@ import { JsonEditor } from '@/components/json-editor';
 //   • fromForm — the form field's value → the write-body wire value.
 //
 // The article type only exercises a subset, but every one of the 16 CmsTypes is wired so adding a
-// new content-type needs no code here.
+// new module needs no code here.
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The controlled value carried by a form field. Inputs are string-based; boolean is the exception. */
@@ -506,7 +506,7 @@ export function getFieldHandler(cmsType: CmsType | ComponentFieldKind): FieldTyp
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
-// Content-type BUILDER metadata.
+// Module BUILDER metadata.
 //
 // The list of every CmsType (single source of truth — derived from the registry so it can never
 // drift) plus, per type, which `FieldOptions` keys are meaningful. The builder forms read this to
@@ -517,10 +517,10 @@ export function getFieldHandler(cmsType: CmsType | ComponentFieldKind): FieldTyp
 export const CMS_TYPES: readonly CmsType[] = Object.keys(registry) as CmsType[];
 
 /**
- * cmsTypes the API genuinely supports end-to-end, hence offerable in the content-type builder.
+ * cmsTypes the API genuinely supports end-to-end, hence offerable in the module builder.
  * `time` is excluded: it maps to engineType i32 but the engine's load path rejects it outright
  * (packages/api/src/store/registry.ts — "time is not supported on the load path"), so creating a
- * `time` field would brick its content-type on the next registry reload. The registry above still
+ * `time` field would brick its module on the next registry reload. The registry above still
  * carries a `time` handler so any pre-existing column renders defensively; new ones just can't be made.
  */
 const UNSUPPORTED_BUILDER_TYPES: ReadonlySet<CmsType> = new Set<CmsType>(['time']);

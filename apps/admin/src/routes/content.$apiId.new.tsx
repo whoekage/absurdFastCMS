@@ -22,7 +22,7 @@ function NewEntryPage() {
 
   const defQuery = useQuery({
     queryKey: contentKeys.definition(apiId),
-    queryFn: ({ signal }) => api.contentTypes.get(apiId, signal),
+    queryFn: ({ signal }) => api.modules.get(apiId, signal),
     retry: (count, err) => !(err instanceof NotFoundError) && count < 3,
   });
 

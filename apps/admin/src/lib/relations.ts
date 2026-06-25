@@ -2,7 +2,7 @@ import type {
   RelationInput,
   RelationId,
   Entry,
-  ContentTypeDefinition,
+  ModuleDefinition,
   RelationDefinition,
   RelationKind,
 } from '@conti/sdk';
@@ -10,17 +10,15 @@ import type {
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // Relation discovery (API-driven) + relation-op body builders.
 //
-// The @conti/api server now EXPOSES relations on the content-type schema (`projectDef` folds a
-// `relations: RelationDefinition[]` array onto every definition) AND lets a client DECLARE a relation
-// over HTTP (`POST /content-types/:apiId/relations`, `client.contentTypes.addRelation`). So the admin
-// DISCOVERS relations straight from `def.relations` and the builder declares real ones — no more
-// out-of-band/localStorage mirroring.
+// The admin DISCOVERS relations straight from `def.relations` — the SDK projects them from the files-first
+// catalog (`client.modules`, which ports the api's old `projectDef`: owner relations PLUS the two-way
+// inverse side folded onto each target module). The admin no longer DECLARES relations over HTTP: the
+// runtime-DDL Builder routes (`POST /content-types/:apiId/relations`) were removed — a relation is declared
+// in the module's `schema/<apiId>.json` file (files-first).
 //
-// REMOVED (fe-06 cleanup): the old localStorage relation-config path (the `RelationConfig` map, the
-// `loadRelationConfig`/`saveRelationConfig` persistence, the `relationFieldsFor`/`relationFieldMap`/
-// `populateFor` config readers, and the `lib/use-relation-config.ts` hook) is GONE. Every consumer now
-// derives relations from the API-projected `def.relations` via {@link relationFieldsFromDef} /
-// {@link populateFromDef}; the builder ({@link RelationConfigEditor}) declares real ones over HTTP.
+// REMOVED: the old localStorage relation-config path AND the in-app relation Builder (the deleted
+// `RelationConfigEditor`). Every consumer derives relations from `def.relations` via
+// {@link relationFieldsFromDef} / {@link populateFromDef}.
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A relation's cardinality, as the picker needs to know it (to-one selects one id; to-many many). */
@@ -36,14 +34,14 @@ export function cardinalityOf(kind: RelationKind): RelationCardinality {
 }
 
 /**
- * Derive the picker-ready relation field configs for a content-type STRAIGHT FROM the API-projected
+ * Derive the picker-ready relation field configs for a module STRAIGHT FROM the API-projected
  * `def.relations` — the single source of truth (replaces the old localStorage mirror). Each declared
  * relation (owner OR inverse side) becomes a pickable field; `cardinality` is derived from this side's
  * `kind`. `labelField` is intentionally omitted (the picker falls back to the target's first stringy
  * field, then `id`).
  */
 export function relationFieldsFromDef(
-  def: ContentTypeDefinition | undefined,
+  def: ModuleDefinition | undefined,
 ): RelationFieldConfig[] {
   if (!def) return [];
   return def.relations.map((r: RelationDefinition) => ({
@@ -54,14 +52,14 @@ export function relationFieldsFromDef(
 }
 
 /** The populate spec (relation field names) for a def's declared relations, or undefined when none. */
-export function populateFromDef(def: ContentTypeDefinition | undefined): string[] | undefined {
+export function populateFromDef(def: ModuleDefinition | undefined): string[] | undefined {
   const names = relationFieldsFromDef(def).map((r) => r.field);
   return names.length > 0 ? names : undefined;
 }
 
 /**
- * One configured relation field on a content-type. `field` is the write-body key (and the populate
- * name); `target` is the api_id of the related content-type the picker searches; `cardinality` drives
+ * One configured relation field on a module. `field` is the write-body key (and the populate
+ * name); `target` is the api_id of the related module the picker searches; `cardinality` drives
  * single-select vs multi-select. `labelField` (optional) is the target column the picker shows / searches
  * with `$containsi`; when absent the picker falls back to the target's own search field, then `id`.
  */
@@ -184,12 +182,12 @@ export function relatedRowLabel(row: RelatedRow, labelField?: string): string {
 }
 
 /**
- * Pick the best label/search column for a TARGET content-type: an explicitly-configured `labelField`,
+ * Pick the best label/search column for a TARGET module: an explicitly-configured `labelField`,
  * else the first user-defined string/text field, else `id`. Used by the picker for the `$containsi`
  * search and option labels.
  */
 export function targetLabelField(
-  def: ContentTypeDefinition | undefined,
+  def: ModuleDefinition | undefined,
   configured?: string,
 ): string {
   if (configured) return configured;

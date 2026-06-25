@@ -4,7 +4,7 @@ import type { VisibilityState } from '@tanstack/react-table';
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // Per-type persistence of TABLE VIEW preferences (column visibility + density). Unlike list state
 // (filters/sort/page) — which lives in the shareable URL — these are *operator preferences* about
-// how the table is rendered, so they belong in localStorage, scoped per content-type `apiId`. A
+// how the table is rendered, so they belong in localStorage, scoped per module `apiId`. A
 // hand-edited / corrupt blob is tolerated: parsing falls back to the supplied default.
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -36,7 +36,7 @@ function writeJSON(key: string, value: unknown): void {
 /**
  * A localStorage-backed `useState` keyed by `apiId`. Reads the persisted value lazily on mount and
  * writes back on every change. Keying the initializer + effect on `storageKey` means switching to a
- * different content-type re-hydrates that type's saved view.
+ * different module re-hydrates that type's saved view.
  */
 function usePersistentState<T>(storageKey: string, initial: T): [T, React.Dispatch<React.SetStateAction<T>>] {
   const [state, setState] = React.useState<T>(() => readJSON(storageKey, initial));

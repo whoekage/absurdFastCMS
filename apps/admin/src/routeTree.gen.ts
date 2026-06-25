@@ -12,10 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as MediaIndexRouteImport } from './routes/media.index'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
-import { Route as ContentTypesIndexRouteImport } from './routes/content-types.index'
 import { Route as ArticlesIndexRouteImport } from './routes/articles.index'
-import { Route as ContentTypesNewRouteImport } from './routes/content-types.new'
-import { Route as ContentTypesApiIdRouteImport } from './routes/content-types.$apiId'
 import { Route as ArticlesNewRouteImport } from './routes/articles.new'
 import { Route as ArticlesIdRouteImport } from './routes/articles.$id'
 import { Route as ContentApiIdIndexRouteImport } from './routes/content.$apiId.index'
@@ -39,24 +36,9 @@ const DashboardIndexRoute = DashboardIndexRouteImport.update({
   path: '/dashboard/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ContentTypesIndexRoute = ContentTypesIndexRouteImport.update({
-  id: '/content-types/',
-  path: '/content-types/',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ArticlesIndexRoute = ArticlesIndexRouteImport.update({
   id: '/articles/',
   path: '/articles/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ContentTypesNewRoute = ContentTypesNewRouteImport.update({
-  id: '/content-types/new',
-  path: '/content-types/new',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ContentTypesApiIdRoute = ContentTypesApiIdRouteImport.update({
-  id: '/content-types/$apiId',
-  path: '/content-types/$apiId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ArticlesNewRoute = ArticlesNewRouteImport.update({
@@ -99,10 +81,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
-  '/content-types/$apiId': typeof ContentTypesApiIdRoute
-  '/content-types/new': typeof ContentTypesNewRoute
   '/articles/': typeof ArticlesIndexRoute
-  '/content-types/': typeof ContentTypesIndexRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/media/': typeof MediaIndexRoute
   '/articles/$id/edit': typeof ArticlesIdEditRoute
@@ -115,10 +94,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
-  '/content-types/$apiId': typeof ContentTypesApiIdRoute
-  '/content-types/new': typeof ContentTypesNewRoute
   '/articles': typeof ArticlesIndexRoute
-  '/content-types': typeof ContentTypesIndexRoute
   '/dashboard': typeof DashboardIndexRoute
   '/media': typeof MediaIndexRoute
   '/articles/$id/edit': typeof ArticlesIdEditRoute
@@ -132,10 +108,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
-  '/content-types/$apiId': typeof ContentTypesApiIdRoute
-  '/content-types/new': typeof ContentTypesNewRoute
   '/articles/': typeof ArticlesIndexRoute
-  '/content-types/': typeof ContentTypesIndexRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/media/': typeof MediaIndexRoute
   '/articles/$id/edit': typeof ArticlesIdEditRoute
@@ -150,10 +123,7 @@ export interface FileRouteTypes {
     | '/'
     | '/articles/$id'
     | '/articles/new'
-    | '/content-types/$apiId'
-    | '/content-types/new'
     | '/articles/'
-    | '/content-types/'
     | '/dashboard/'
     | '/media/'
     | '/articles/$id/edit'
@@ -166,10 +136,7 @@ export interface FileRouteTypes {
     | '/'
     | '/articles/$id'
     | '/articles/new'
-    | '/content-types/$apiId'
-    | '/content-types/new'
     | '/articles'
-    | '/content-types'
     | '/dashboard'
     | '/media'
     | '/articles/$id/edit'
@@ -182,10 +149,7 @@ export interface FileRouteTypes {
     | '/'
     | '/articles/$id'
     | '/articles/new'
-    | '/content-types/$apiId'
-    | '/content-types/new'
     | '/articles/'
-    | '/content-types/'
     | '/dashboard/'
     | '/media/'
     | '/articles/$id/edit'
@@ -199,10 +163,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ArticlesIdRoute: typeof ArticlesIdRouteWithChildren
   ArticlesNewRoute: typeof ArticlesNewRoute
-  ContentTypesApiIdRoute: typeof ContentTypesApiIdRoute
-  ContentTypesNewRoute: typeof ContentTypesNewRoute
   ArticlesIndexRoute: typeof ArticlesIndexRoute
-  ContentTypesIndexRoute: typeof ContentTypesIndexRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
   MediaIndexRoute: typeof MediaIndexRoute
   ContentApiIdIdRoute: typeof ContentApiIdIdRouteWithChildren
@@ -233,32 +194,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/content-types/': {
-      id: '/content-types/'
-      path: '/content-types'
-      fullPath: '/content-types/'
-      preLoaderRoute: typeof ContentTypesIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/articles/': {
       id: '/articles/'
       path: '/articles'
       fullPath: '/articles/'
       preLoaderRoute: typeof ArticlesIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/content-types/new': {
-      id: '/content-types/new'
-      path: '/content-types/new'
-      fullPath: '/content-types/new'
-      preLoaderRoute: typeof ContentTypesNewRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/content-types/$apiId': {
-      id: '/content-types/$apiId'
-      path: '/content-types/$apiId'
-      fullPath: '/content-types/$apiId'
-      preLoaderRoute: typeof ContentTypesApiIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/articles/new': {
@@ -341,10 +281,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ArticlesIdRoute: ArticlesIdRouteWithChildren,
   ArticlesNewRoute: ArticlesNewRoute,
-  ContentTypesApiIdRoute: ContentTypesApiIdRoute,
-  ContentTypesNewRoute: ContentTypesNewRoute,
   ArticlesIndexRoute: ArticlesIndexRoute,
-  ContentTypesIndexRoute: ContentTypesIndexRoute,
   DashboardIndexRoute: DashboardIndexRoute,
   MediaIndexRoute: MediaIndexRoute,
   ContentApiIdIdRoute: ContentApiIdIdRouteWithChildren,

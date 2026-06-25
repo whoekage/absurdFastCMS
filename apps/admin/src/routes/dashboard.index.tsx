@@ -8,7 +8,7 @@ import {
   ArrowUpRight,
   type LucideIcon,
 } from 'lucide-react';
-import type { ContentTypeDefinition } from '@conti/sdk';
+import type { ModuleDefinition } from '@conti/sdk';
 import { api } from '@/lib/api';
 import {
   dashboardKeys,
@@ -65,14 +65,14 @@ function DashboardPage() {
 /* ------------------------------------------------------------------ stat cards */
 
 /**
- * The 4-card stat row. The 1st card is always the live content-type count (catalog length); the next
+ * The 4-card stat row. The 1st card is always the live module count (catalog length); the next
  * three are per-type row counts from `api.count()` for the preferred/first types. Real numbers only —
  * loading skeletons, error tile, and a single empty tile when no types exist.
  */
 function StatCards() {
   const typesQuery = useQuery({
     queryKey: dashboardKeys.types(),
-    queryFn: ({ signal }) => api.contentTypes.list(signal),
+    queryFn: ({ signal }) => api.modules.list(signal),
   });
 
   const defs = typesQuery.data ?? [];
@@ -98,26 +98,22 @@ function StatCards() {
   if (typesQuery.isError) {
     return (
       <Card className="shadow-card p-5 text-sm text-destructive" title={errorMessage(typesQuery.error)}>
-        Failed to load content types.
+        Failed to load modules.
       </Card>
     );
   }
 
   if (defs.length === 0) {
+    // The "New module" CTA was removed — schema is files-first now (no runtime-DDL Builder UI).
+    // A module appears here once its schema/<apiId>.json is committed and applied.
     return (
       <Card className="shadow-card flex items-center justify-between p-5">
         <div>
-          <p className="font-display text-lg font-semibold">No content types yet</p>
+          <p className="font-display text-lg font-semibold">No modules yet</p>
           <p className="text-sm text-muted-foreground">
-            Create your first type to start seeing live counts here.
+            Define a module in <code className="font-mono">schema/&lt;apiId&gt;.json</code> to start seeing live counts here.
           </p>
         </div>
-        <Link
-          to="/content-types/new"
-          className="text-sm font-medium text-primary hover:underline"
-        >
-          New content type
-        </Link>
       </Card>
     );
   }
@@ -128,7 +124,7 @@ function StatCards() {
         icon={Boxes}
         value={formatCount(defs.length)}
         unit={defs.length === 1 ? 'type' : 'types'}
-        label="Content types"
+        label="Modules"
         caption="Defined in the builder"
       />
       {cardTypes.map((apiId, i) => {
@@ -232,12 +228,12 @@ function StatCardSkeleton() {
 function ResumeStrip() {
   const typesQuery = useQuery({
     queryKey: dashboardKeys.types(),
-    queryFn: ({ signal }) => api.contentTypes.list(signal),
+    queryFn: ({ signal }) => api.modules.list(signal),
   });
 
   const defs = typesQuery.data ?? [];
   const sourceTypes = resumeSourceTypes(defs);
-  const defByApiId = new Map<string, ContentTypeDefinition>(defs.map((d) => [d.apiId, d]));
+  const defByApiId = new Map<string, ModuleDefinition>(defs.map((d) => [d.apiId, d]));
 
   const recentQueries = useQueries({
     queries: sourceTypes.map((apiId) => ({
@@ -260,7 +256,7 @@ function ResumeStrip() {
   if (typesQuery.isError) {
     return (
       <Card className="shadow-card p-5 text-sm text-destructive" title={errorMessage(typesQuery.error)}>
-        Failed to load content types.
+        Failed to load modules.
       </Card>
     );
   }

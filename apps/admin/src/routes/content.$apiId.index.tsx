@@ -114,7 +114,7 @@ function EntryListPage() {
   const [localeFilter, setLocaleFilter] = useState<string>('*');
 
   // Row selection is scoped to the exact result set: when ANYTHING that changes which rows are shown
-  // changes — the content type (the route reuses this component instance, so apiId can change without
+  // changes — the module (the route reuses this component instance, so apiId can change without
   // a remount), the page, OR the query (q/filters/sort/pageSize, which can mutate the result set while
   // staying on page 1) — drop selection. Otherwise stale ids leak: getRowId uses the per-type public
   // id, so ids collide across types/filters and a row could render pre-selected against the wrong set.
@@ -137,7 +137,7 @@ function EntryListPage() {
 
   const defQuery = useQuery({
     queryKey: contentKeys.definition(apiId),
-    queryFn: ({ signal }) => api.contentTypes.get(apiId, signal),
+    queryFn: ({ signal }) => api.modules.get(apiId, signal),
     retry: (count, err) => !(err instanceof NotFoundError) && count < 3,
   });
 
@@ -318,7 +318,7 @@ function EntryListPage() {
     getCoreRowModel: getCoreRowModel(),
   });
 
-  // Unknown content-type → friendly 404-ish state.
+  // Unknown module → friendly 404-ish state.
   if (defQuery.error instanceof NotFoundError) {
     return <UnknownType apiId={apiId} />;
   }
@@ -330,7 +330,7 @@ function EntryListPage() {
   if (defQuery.isError || !def) {
     return (
       <div className="rounded-md border border-destructive/40 bg-destructive/5 p-6 text-sm">
-        <p className="font-medium text-destructive">Could not load this content type</p>
+        <p className="font-medium text-destructive">Could not load this module</p>
         <p className="mt-1 text-muted-foreground">{errorMessage(defQuery.error)}</p>
         <Button className="mt-3" variant="outline" size="sm" onClick={() => defQuery.refetch()}>
           Retry

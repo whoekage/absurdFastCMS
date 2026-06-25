@@ -1,4 +1,4 @@
-import type { ContentTypeDefinition, Entry } from '@conti/sdk';
+import type { ModuleDefinition, Entry } from '@conti/sdk';
 
 // Re-export the shared error-message extractor so the dashboard feature has one import surface.
 export { errorMessage } from '@/lib/errors';
@@ -9,7 +9,7 @@ export { errorMessage } from '@/lib/errors';
  */
 export const dashboardKeys = {
   all: ['dashboard'] as const,
-  /** The content-type catalog the dashboard aggregates over. */
+  /** The module catalog the dashboard aggregates over. */
   types: () => ['dashboard', 'types'] as const,
   /** The live row count for one type (drives a stat card). */
   count: (apiId: string) => ['dashboard', 'count', apiId] as const,
@@ -18,13 +18,13 @@ export const dashboardKeys = {
 };
 
 /**
- * Pick which types get a stat card (cap ~4). We prefer the canonical content types — article, product,
+ * Pick which types get a stat card (cap ~4). We prefer the canonical modules — article, product,
  * author — when they exist, then backfill with the remaining types in catalog order, so a fresh project
  * still shows real cards. Returns the ordered api_ids.
  */
 const PREFERRED_TYPES = ['article', 'product', 'author'] as const;
 
-export function statCardTypes(defs: readonly ContentTypeDefinition[], cap = 3): string[] {
+export function statCardTypes(defs: readonly ModuleDefinition[], cap = 3): string[] {
   const present = new Set(defs.map((d) => d.apiId));
   const preferred = PREFERRED_TYPES.filter((t) => present.has(t));
   const rest = defs.map((d) => d.apiId).filter((id) => !preferred.includes(id as never));
@@ -35,7 +35,7 @@ export function statCardTypes(defs: readonly ContentTypeDefinition[], cap = 3): 
  * Pick which types to pull recent entries from for the resume strip. Same preference ordering as the
  * stat cards but a touch wider so the merge has enough candidates to surface the 3 globally-newest.
  */
-export function resumeSourceTypes(defs: readonly ContentTypeDefinition[], cap = 5): string[] {
+export function resumeSourceTypes(defs: readonly ModuleDefinition[], cap = 5): string[] {
   const present = new Set(defs.map((d) => d.apiId));
   const preferred = PREFERRED_TYPES.filter((t) => present.has(t));
   const rest = defs.map((d) => d.apiId).filter((id) => !preferred.includes(id as never));
@@ -60,7 +60,7 @@ export interface RecentEntry {
  */
 const TITLE_FIELD_CANDIDATES = ['title', 'name', 'label', 'heading', 'slug'] as const;
 
-export function entryTitle(entry: Entry, def: ContentTypeDefinition): string {
+export function entryTitle(entry: Entry, def: ModuleDefinition): string {
   for (const key of TITLE_FIELD_CANDIDATES) {
     const v = entry[key];
     if (typeof v === 'string' && v.trim() !== '') return v;
@@ -79,7 +79,7 @@ export function entryTitle(entry: Entry, def: ContentTypeDefinition): string {
  * (`published_at != null`) ONLY when the type opted into Draft & Publish; otherwise it is null (no pill).
  * `bigint`/`decimal` ids stay strings.
  */
-export function toRecentEntry(entry: Entry, def: ContentTypeDefinition): RecentEntry {
+export function toRecentEntry(entry: Entry, def: ModuleDefinition): RecentEntry {
   const updated = entry.updated_at;
   const status: RecentEntry['status'] = def.draftPublish
     ? entry.published_at != null

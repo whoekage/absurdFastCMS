@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type {
   CmsType,
-  ContentTypeDefinition,
+  ModuleDefinition,
   FieldDefinition,
   FilterCondition,
   FilterObject,
@@ -228,7 +228,7 @@ export const EMPTY_LIST_SEARCH: ListSearch = {
  * Choose the field a free-text search box targets: the FIRST string/text user field, falling back to
  * any text-kind field, else `undefined` (no search box shown). Pure derivation from the definition.
  */
-export function searchField(def: ContentTypeDefinition): FieldDefinition | undefined {
+export function searchField(def: ModuleDefinition): FieldDefinition | undefined {
   const userFields = def.fields.filter((f) => !f.system && isFilterableField(f));
   const stringy = userFields.find((f) => f.cmsType === 'string' || f.cmsType === 'text');
   if (stringy) return stringy;
@@ -289,7 +289,7 @@ function rowCondition(row: FilterRow, field: FieldDefinition): FilterCondition |
  */
 export function buildFilters(
   search: ListSearch,
-  def: ContentTypeDefinition,
+  def: ModuleDefinition,
   byName: Map<string, FieldDefinition>,
 ): FilterObject | undefined {
   const clauses: FilterObject[] = [];
@@ -329,7 +329,7 @@ export function buildSort(search: ListSearch): string[] | undefined {
  */
 export function toQueryParams(
   search: ListSearch,
-  def: ContentTypeDefinition,
+  def: ModuleDefinition,
   byName: Map<string, FieldDefinition>,
 ): QueryParams {
   const params: QueryParams = {

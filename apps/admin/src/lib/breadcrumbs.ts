@@ -14,8 +14,6 @@ export interface Crumb {
  * Derive breadcrumbs from the current matched route + its params, e.g.:
  *   /content/$apiId/$id/edit  with { apiId: 'article', id: '3' }
  *     -> Content / article / #3 / Edit
- *   /content-types/$apiId     with { apiId: 'article' }
- *     -> Content-Type Builder / article
  *
  * We read the LEAF match (the most specific route) — its `routeId` selects a builder below and its
  * `params` fill in the dynamic segments. Static-data on routes is intentionally avoided so this stays
@@ -30,7 +28,7 @@ export function useBreadcrumbs(): Crumb[] {
 }
 
 const CONTENT: Crumb = { label: 'Content', to: '/' };
-const BUILDER: Crumb = { label: 'Content-Type Builder', to: '/content-types' };
+// The Module Builder crumb was removed with the Builder routes (schema is files-first).
 
 /** Map a leaf route id (from routeTree.gen) + its params to an ordered crumb list. */
 function crumbsForRoute(routeId: string, params: Record<string, string | undefined>): Crumb[] {
@@ -67,13 +65,7 @@ function crumbsForRoute(routeId: string, params: Record<string, string | undefin
         { label: 'Edit' },
       ];
 
-    // --- Content-Type Builder ---
-    case '/content-types/':
-      return [BUILDER];
-    case '/content-types/new':
-      return [BUILDER, { label: 'New type' }];
-    case '/content-types/$apiId':
-      return [BUILDER, { label: apiId ?? 'Type' }];
+    // (The Module Builder routes were removed — schema is files-first.)
 
     default:
       return [CONTENT];

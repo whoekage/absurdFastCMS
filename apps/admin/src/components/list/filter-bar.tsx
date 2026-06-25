@@ -1,5 +1,5 @@
 import { Plus, X } from 'lucide-react';
-import type { ContentTypeDefinition, FieldDefinition, FilterOperator } from '@conti/sdk';
+import type { ModuleDefinition, FieldDefinition, FilterOperator } from '@conti/sdk';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -25,7 +25,7 @@ import { FilterValueInput } from './filter-value-input';
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 
 interface FilterBarProps {
-  def: ContentTypeDefinition;
+  def: ModuleDefinition;
   byName: Map<string, FieldDefinition>;
   rows: FilterRow[];
   onChange: (rows: FilterRow[]) => void;
@@ -36,7 +36,7 @@ interface FilterBarProps {
  * are json/array fields — the API rejects ALL filtering on json columns, so offering them would
  * guarantee a 400 (see {@link isFilterableField}).
  */
-function filterableFields(def: ContentTypeDefinition): FieldDefinition[] {
+function filterableFields(def: ModuleDefinition): FieldDefinition[] {
   return def.fields.filter((f) => !f.system && isFilterableField(f));
 }
 

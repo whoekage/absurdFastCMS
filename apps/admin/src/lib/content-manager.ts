@@ -1,10 +1,10 @@
-import type { ContentTypeDefinition, FieldDefinition } from '@conti/sdk';
+import type { ModuleDefinition, FieldDefinition } from '@conti/sdk';
 
 // Re-export the shared error-message extractor so the content-manager feature has one import surface.
 export { errorMessage } from '@/lib/errors';
 
 /**
- * TanStack Query keys for the generic content manager, NAMESPACED PER content-type api_id.
+ * TanStack Query keys for the generic content manager, NAMESPACED PER module api_id.
  *
  * Every key is rooted at `['content', apiId, ...]` so a mutation on one type can invalidate only that
  * type's queries (`contentKeys.all(apiId)`) without disturbing any other type's cache. The schema
@@ -13,7 +13,7 @@ export { errorMessage } from '@/lib/errors';
 export const contentKeys = {
   /** Root for one type — invalidate this after any create/update/delete to refetch lists + details. */
   all: (apiId: string) => ['content', apiId] as const,
-  /** The content-type definition (schema) used to render columns + the form. */
+  /** The module definition (schema) used to render columns + the form. */
   definition: (apiId: string) => ['content', apiId, 'definition'] as const,
   /**
    * A page of rows, keyed by the SERIALIZED list query (filters / sort / pagination) so each distinct
@@ -26,7 +26,7 @@ export const contentKeys = {
 };
 
 /** System columns are loaded + materialized but never writable — they lead the projected field list. */
-export function systemFields(def: ContentTypeDefinition): FieldDefinition[] {
+export function systemFields(def: ModuleDefinition): FieldDefinition[] {
   return def.fields.filter((f) => f.system);
 }
 
@@ -39,13 +39,13 @@ export function systemFields(def: ContentTypeDefinition): FieldDefinition[] {
  * remain visible on the read-only view page. The returned names are field names; the matching
  * {@link FieldDefinition} is looked up via {@link fieldMap} for per-cell formatting.
  */
-export function listColumns(def: ContentTypeDefinition, maxUserColumns = 5): string[] {
+export function listColumns(def: ModuleDefinition, maxUserColumns = 5): string[] {
   const userCols = def.fields.filter((f) => !f.system).map((f) => f.name);
   return ['id', ...userCols.slice(0, maxUserColumns)];
 }
 
 /** Index a definition's fields by name for O(1) lookup when rendering cells. */
-export function fieldMap(def: ContentTypeDefinition): Map<string, FieldDefinition> {
+export function fieldMap(def: ModuleDefinition): Map<string, FieldDefinition> {
   return new Map(def.fields.map((f) => [f.name, f]));
 }
 

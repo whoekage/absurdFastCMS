@@ -1,8 +1,8 @@
 import { Link } from '@tanstack/react-router';
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { FileStack, Layers, Plus, Image, LayoutDashboard, Search, Sparkles } from 'lucide-react';
+import { FileStack, Image, LayoutDashboard, Search, Sparkles } from 'lucide-react';
 import { api } from '@/lib/api';
-import { contentTypeKeys, errorMessage } from '@/lib/content-types';
+import { moduleKeys, errorMessage } from '@/lib/modules';
 import { formatCount } from '@/lib/dashboard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
@@ -19,15 +19,15 @@ const groupLabel =
 /**
  * The persistent Lua left sidebar. A brand block (gradient glyph + product name), a styled
  * "Search or jump to… ⌘K" affordance, a top "Dashboard" link, a COLLECTIONS group listing every
- * content type from `api.contentTypes.list()` — each with a REAL right-aligned `api.count()` (a subtle
- * skeleton until it loads, never a fabricated number) — a SYSTEM group (Schema Builder / Media Library),
+ * module from `api.modules.list()` — each with a REAL right-aligned `api.count()` (a subtle
+ * skeleton until it loads, never a fabricated number) — a SYSTEM group (Media Library),
  * and a user footer. The type list lives in a scroll-area so a long catalog never pushes SYSTEM
- * off-screen. The list refetches whenever the builder invalidates `contentTypeKeys.all`.
+ * off-screen. The list refetches whenever module introspection invalidates `moduleKeys.all`.
  */
 export function Sidebar() {
   const typesQuery = useQuery({
-    queryKey: contentTypeKeys.list(),
-    queryFn: ({ signal }) => api.contentTypes.list(signal),
+    queryKey: moduleKeys.list(),
+    queryFn: ({ signal }) => api.modules.list(signal),
   });
 
   const defs = typesQuery.data ?? [];
@@ -95,7 +95,7 @@ export function Sidebar() {
               Failed to load types
             </p>
           ) : defs.length === 0 ? (
-            <p className="px-2.5 py-1.5 text-sm text-muted-foreground">No content types yet.</p>
+            <p className="px-2.5 py-1.5 text-sm text-muted-foreground">No modules yet.</p>
           ) : (
             defs.map((def, i) => {
               const c = counts[i];
@@ -122,14 +122,7 @@ export function Sidebar() {
 
       <div className={groupLabel}>System</div>
       <nav className="space-y-0.5 px-3 pb-2">
-        <Link to="/content-types" className={navItem} activeOptions={{ exact: true }}>
-          <Layers className="h-4 w-4 shrink-0" />
-          Schema Builder
-        </Link>
-        <Link to="/content-types/new" className={navItem}>
-          <Plus className="h-4 w-4 shrink-0" />
-          New content type
-        </Link>
+        {/* The runtime-DDL Schema Builder UI was removed — schema is files-first (edit schema/<apiId>.json). */}
         <Link to="/media" className={navItem} activeOptions={{ exact: true }}>
           <Image className="h-4 w-4 shrink-0" />
           Media Library

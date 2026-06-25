@@ -1,4 +1,4 @@
-import type { ContentTypeDefinition, FieldDefinition, FileAsset, WriteBody } from '@conti/sdk';
+import type { ModuleDefinition, FieldDefinition, FileAsset, WriteBody } from '@conti/sdk';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // be-04 MEDIA — media-field discovery (API-driven) + write-body helpers, mirroring lib/relations.ts.
@@ -10,7 +10,7 @@ import type { ContentTypeDefinition, FieldDefinition, FileAsset, WriteBody } fro
 // echo the raw id(s); a populate read inlines the FileAsset(s) — used to seed the picker on edit.
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 
-/** One media field on a content-type, picker-ready. `multiple` drives single-select vs multi-select. */
+/** One media field on a module, picker-ready. `multiple` drives single-select vs multi-select. */
 export interface MediaFieldConfig {
   field: string;
   multiple: boolean;
@@ -22,8 +22,8 @@ export function isMediaField(field: FieldDefinition): boolean {
   return field.cmsType === 'media';
 }
 
-/** Derive the media-field configs for a content-type straight from its projected `def.fields`. */
-export function mediaFieldsFromDef(def: ContentTypeDefinition | undefined): MediaFieldConfig[] {
+/** Derive the media-field configs for a module straight from its projected `def.fields`. */
+export function mediaFieldsFromDef(def: ModuleDefinition | undefined): MediaFieldConfig[] {
   if (!def) return [];
   return def.fields
     .filter((f) => !f.system && isMediaField(f))
@@ -31,7 +31,7 @@ export function mediaFieldsFromDef(def: ContentTypeDefinition | undefined): Medi
 }
 
 /** The populate names for a def's media fields (so an edit read inlines the current asset(s)). */
-export function mediaPopulateFromDef(def: ContentTypeDefinition | undefined): string[] {
+export function mediaPopulateFromDef(def: ModuleDefinition | undefined): string[] {
   return mediaFieldsFromDef(def).map((m) => m.field);
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useForm } from '@tanstack/react-form';
 import { useBlocker } from '@tanstack/react-router';
-import type { ContentTypeDefinition, FieldDefinition, FileAsset, RelationId, WriteBody } from '@conti/sdk';
+import type { ModuleDefinition, FieldDefinition, FileAsset, RelationId, WriteBody } from '@conti/sdk';
 import { getFieldHandler, type FormFieldValue } from '@/lib/field-types';
 import {
   asRelatedRows,
@@ -36,7 +36,7 @@ import {
  * <MediaPicker> and their value is merged into the body separately (mirroring how relations are handled
  * out-of-band). Excluding them here keeps buildInitialValues / toWriteBody on the scalar path only.
  */
-export function editableFields(def: ContentTypeDefinition): FieldDefinition[] {
+export function editableFields(def: ModuleDefinition): FieldDefinition[] {
   return def.fields.filter((f) => !f.system && !isMediaField(f));
 }
 
@@ -45,7 +45,7 @@ export type EntryFormValues = Record<string, FormFieldValue>;
 
 /** Seed controlled values from an existing wire row (edit) or empties (create). */
 export function buildInitialValues(
-  def: ContentTypeDefinition,
+  def: ModuleDefinition,
   row?: Record<string, unknown>,
 ): EntryFormValues {
   const values: EntryFormValues = {};
@@ -110,7 +110,7 @@ export function buildInitialRelationRows(
 }
 
 /** Lower the controlled form values back into a flat write body (wire-shaped scalars). */
-export function toWriteBody(def: ContentTypeDefinition, values: EntryFormValues): WriteBody {
+export function toWriteBody(def: ModuleDefinition, values: EntryFormValues): WriteBody {
   const body: WriteBody = {};
   for (const field of editableFields(def)) {
     const handler = getFieldHandler(field.cmsType);
@@ -139,7 +139,7 @@ export function applyRelationOps(
 }
 
 interface EntryFormProps {
-  def: ContentTypeDefinition;
+  def: ModuleDefinition;
   initialValues: EntryFormValues;
   /** Configured relation fields for this type (empty when none / the API can't declare them). */
   relationFields?: RelationFieldConfig[];
