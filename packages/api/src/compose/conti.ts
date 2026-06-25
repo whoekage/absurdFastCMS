@@ -91,7 +91,7 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     const { schemas, hooks } = await reconcileBoot(store.sql, entitiesDir, filesIR, filesHooks);
     const hookRegistry = new HookRegistry(hooks);
     // Keyset cursor codec (HMAC over the configured secret) wired once at the composition root.
-    const { engine, registry } = await store.loadFromSchemas(schemas, { cursorCodec: new CursorCodec(config.cursor.secret) });
+    const { engine, registry } = await store.loadFromSchemas(schemas, [], { cursorCodec: new CursorCodec(config.cursor.secret) });
 
     // AUTH (be-09a/b/f): build over the SAME postgres.js handle. teamView BEFORE auth (auth's user hooks call
     // teamView.rebuild) and BEFORE the session cache (caps a team member's cached TTL); the cache references

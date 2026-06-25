@@ -3,7 +3,7 @@ import type { Engine } from '../store/engine.ts';
 import type { HookRegistry } from './schema/hooks.ts';
 import { Registry } from './registry.ts';
 import { buildDetached, loadAllRelations } from './engine.loader.ts';
-import type { ContentTypeSchema } from './schema/model.ts';
+import type { ContentTypeSchema, ComponentSchema } from './schema/model.ts';
 import type { Change } from './schema/diff.ts';
 
 /**
@@ -42,9 +42,10 @@ export async function swapFromIR(
   next: ContentTypeSchema[],
   applied: readonly Change[],
   nextHooks: HookRegistry,
+  nextComponents: ComponentSchema[] = [],
 ): Promise<void> {
   // The new registry, built PURELY from the in-memory IR (no DB, no files). A throw here touches nothing.
-  const nextReg = Registry.fromSchemas(next);
+  const nextReg = Registry.fromSchemas(next, nextComponents);
 
   // Partition the touched apiIds by the kind of engine op each needs. `setTypeOption` is intentionally
   // absent: migrate always throws MigrationUnsupportedError for it, so it can never reach a committed
