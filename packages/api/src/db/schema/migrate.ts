@@ -11,6 +11,7 @@ import {
   compileAlterColumnType,
   compileDropColumn,
   compileDropTable,
+  compileCreateLinkTable,
 } from '../ddl.ts';
 import { resolveFields } from '../content-type.repository.ts';
 import { contentTypeSchemaZ, type ContentTypeSchema } from './model.ts';
@@ -91,6 +92,8 @@ export function describeChange(c: Change): string {
     case 'retypeField': return `retype ${c.apiId}.${c.name} (${c.classification})`;
     case 'setFieldNullable': return `set ${c.apiId}.${c.name} ${c.to ? 'NULL' : 'NOT NULL'}`;
     case 'reorderFields': return `reorder ${c.apiId} fields (wire-only)`;
+    case 'addRelation': return `add relation ${c.apiId}.${c.field} -> ${c.target} (${c.relKind})`;
+    case 'dropRelation': return `DROP relation ${c.apiId}.${c.field}`;
   }
 }
 
@@ -142,6 +145,13 @@ async function applyOne(tx: Sql, c: Change): Promise<void> {
       return;
     case 'dropType':
       await run(tx, compileDropTable(deriveTableName(c.apiId)));
+      return;
+    case 'addRelation':
+      // The link table FKs both endpoint ct_ tables; the diff orders addRelation after every addType.
+      await run(tx, compileCreateLinkTable(c.linkTable, deriveTableName(c.apiId), deriveTableName(c.target), c.relKind));
+      return;
+    case 'dropRelation':
+      await run(tx, compileDropTable(c.linkTable)); // a link table is a plain table — drop it (edges lost).
       return;
     case 'reorderFields':
       // WIRE-ONLY: the file order drives the registry projection; there is no physical column position.

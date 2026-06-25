@@ -5,7 +5,8 @@ import {
   classifyTypeChange,
   type ResolvedType,
 } from '../type.catalog.ts';
-import type { ContentTypeSchema, FieldSchema } from './model.ts';
+import { deriveLinkTableName, type RelationKind } from '../ddl.ts';
+import type { ContentTypeSchema, FieldSchema, RelationSchema } from './model.ts';
 
 /**
  * THE PURE DIFF ENGINE (§S3) — `diff(prev, next)` over two sets of files-first schemas, matching
@@ -77,10 +78,15 @@ export interface RetypeField extends BaseChange { readonly kind: 'retypeField'; 
 export interface SetFieldNullable extends BaseChange { readonly kind: 'setFieldNullable'; readonly fieldId: string; readonly name: string; readonly from: boolean; readonly to: boolean; }
 /** The common fields' relative ORDER changed → re-`sort` (WIRE-ONLY, no DDL). `order` = next field ids. */
 export interface ReorderFields extends BaseChange { readonly kind: 'reorderFields'; readonly order: readonly string[]; }
+/** A new owner relation → CREATE its link table (after BOTH endpoint tables exist). Additive ⇒ safe. */
+export interface AddRelation extends BaseChange { readonly kind: 'addRelation'; readonly relationId: string; readonly field: string; readonly relKind: RelationKind; readonly target: string; readonly inverseField?: string; readonly linkTable: string; }
+/** Drop an owner relation → DROP its link table (DESTRUCTIVE: the edges are lost). */
+export interface DropRelation extends BaseChange { readonly kind: 'dropRelation'; readonly relationId: string; readonly field: string; readonly linkTable: string; }
 
 export type Change =
   | AddType | DropType | RenameType | SetTypeOption
-  | AddField | DropField | RenameField | RetypeField | SetFieldNullable | ReorderFields;
+  | AddField | DropField | RenameField | RetypeField | SetFieldNullable | ReorderFields
+  | AddRelation | DropRelation;
 
 export interface ChangeSet {
   readonly changes: readonly Change[];
@@ -92,9 +98,9 @@ export interface ChangeSet {
 function indexTypes(schemas: ContentTypeSchema[]): Map<string, ContentTypeSchema> {
   const m = new Map<string, ContentTypeSchema>();
   for (const s of schemas) {
-    if (s.relations && s.relations.length > 0) throw new SchemaDiffError(`content-type "${s.apiId}": relations in schema files are deferred to a later slice`);
     if (m.has(s.id)) throw new SchemaDiffError(`duplicate content-type id "${s.id}" (ids are the identity and must be unique)`);
     indexFields(s); // validate field-id uniqueness for EVERY schema (added or matched), not just matched ones.
+    indexRelations(s); // and relation-id uniqueness.
     m.set(s.id, s);
   }
   return m;
@@ -107,6 +113,27 @@ function indexFields(schema: ContentTypeSchema): Map<string, FieldSchema> {
     m.set(f.id, f);
   }
   return m;
+}
+
+function indexRelations(schema: ContentTypeSchema): Map<string, RelationSchema> {
+  const m = new Map<string, RelationSchema>();
+  for (const r of schema.relations ?? []) {
+    if (m.has(r.id)) throw new SchemaDiffError(`content-type "${schema.apiId}" relation "${r.field}": duplicate relation id "${r.id}"`);
+    m.set(r.id, r);
+  }
+  return m;
+}
+
+function addRelationChange(owner: ContentTypeSchema, rel: RelationSchema): AddRelation {
+  const base: AddRelation = {
+    kind: 'addRelation', typeId: owner.id, apiId: owner.apiId, risk: 'safe',
+    relationId: rel.id, field: rel.field, relKind: rel.kind, target: rel.target, linkTable: deriveLinkTableName(owner.apiId, rel.field),
+  };
+  return rel.inverseField !== undefined ? { ...base, inverseField: rel.inverseField } : base;
+}
+
+function dropRelationChange(owner: ContentTypeSchema, rel: RelationSchema): DropRelation {
+  return { kind: 'dropRelation', typeId: owner.id, apiId: owner.apiId, risk: 'destructive', relationId: rel.id, field: rel.field, linkTable: deriveLinkTableName(owner.apiId, rel.field) };
 }
 
 /** Resolve a field's physical type through the SAME catalog the meta writer uses (scalar or component kind). */
@@ -145,32 +172,46 @@ const retypeRisk = (c: 'metadata-only' | 'rewrite' | 'forbidden'): ChangeRisk =>
 export function diff(prev: ContentTypeSchema[], next: ContentTypeSchema[]): ChangeSet {
   const prevTypes = indexTypes(prev);
   const nextTypes = indexTypes(next);
-  const creates: Change[] = [];
-  const alters: Change[] = [];
-  const drops: Change[] = [];
+  const creates: Change[] = []; // CREATE TABLE (all tables first)
+  const relAdds: Change[] = []; // CREATE link table (after every endpoint table exists)
+  const alters: Change[] = []; // column add/rename/retype/nullable/reorder + type rename
+  const relDrops: Change[] = []; // DROP link table (before any endpoint table is dropped)
+  const drops: Change[] = []; // DROP column / DROP TABLE (last)
 
-  // New content-types (id present only in next) — a fresh empty table; its NOT NULL fields are safe.
+  // New content-types (id only in next) — a fresh empty table; its relations become link tables in relAdds.
   for (const [id, n] of nextTypes) {
-    if (!prevTypes.has(id)) creates.push({ kind: 'addType', typeId: id, apiId: n.apiId, risk: 'safe', schema: n });
+    if (prevTypes.has(id)) continue;
+    creates.push({ kind: 'addType', typeId: id, apiId: n.apiId, risk: 'safe', schema: n });
+    for (const rel of n.relations ?? []) relAdds.push(addRelationChange(n, rel));
   }
-  // Dropped content-types (id present only in prev) — DESTRUCTIVE, emitted last.
+  // Dropped content-types (id only in prev) — DROP its link tables first, then the table.
   for (const [id, p] of prevTypes) {
-    if (!nextTypes.has(id)) drops.push({ kind: 'dropType', typeId: id, apiId: p.apiId, risk: 'destructive' });
+    if (nextTypes.has(id)) continue;
+    for (const rel of p.relations ?? []) relDrops.push(dropRelationChange(p, rel));
+    drops.push({ kind: 'dropType', typeId: id, apiId: p.apiId, risk: 'destructive' });
   }
-  // Matched content-types (same id) — diff their labels, flags, and fields.
+  // Matched content-types (same id) — diff labels, flags, fields, and relations.
   for (const [id, n] of nextTypes) {
     const p = prevTypes.get(id);
     if (!p) continue;
-    diffMatchedType(id, p, n, alters, drops);
+    diffMatchedType(id, p, n, alters, drops, relAdds, relDrops);
   }
 
-  return { changes: [...creates, ...alters, ...drops] };
+  // Topological order: tables → link tables → column alters → drop link tables → drop columns/tables.
+  return { changes: [...creates, ...relAdds, ...alters, ...relDrops, ...drops] };
 }
 
-function diffMatchedType(typeId: string, p: ContentTypeSchema, n: ContentTypeSchema, alters: Change[], drops: Change[]): void {
+function diffMatchedType(typeId: string, p: ContentTypeSchema, n: ContentTypeSchema, alters: Change[], drops: Change[], relAdds: Change[], relDrops: Change[]): void {
   const apiId = n.apiId;
   // apiId rename → table rename (lossless). collectionName/info are presentation-only → no DDL.
-  if (p.apiId !== n.apiId) alters.push({ kind: 'renameType', typeId, apiId, risk: 'safe', fromApiId: p.apiId, toApiId: n.apiId });
+  if (p.apiId !== n.apiId) {
+    // Link-table names derive from the owner apiId, so renaming a type that owns relations would orphan
+    // them. Deferred (loud) until link tables carry a stable name independent of the apiId.
+    if ((p.relations?.length ?? 0) > 0 || (n.relations?.length ?? 0) > 0) {
+      throw new SchemaDiffError(`renaming a content-type that owns relations ("${p.apiId}" -> "${n.apiId}") is deferred — link-table names derive from the apiId`);
+    }
+    alters.push({ kind: 'renameType', typeId, apiId, risk: 'safe', fromApiId: p.apiId, toApiId: n.apiId });
+  }
 
   // Per-type structural flags. ON = additive (safe); OFF = drop the system column (destructive → drops).
   for (const option of ['draftAndPublish', 'i18n'] as const) {
@@ -217,6 +258,24 @@ function diffMatchedType(typeId: string, p: ContentTypeSchema, n: ContentTypeSch
   const commonNext = n.fields.filter((f) => pFields.has(f.id)).map((f) => f.id);
   if (commonPrev.length === commonNext.length && commonPrev.some((id, i) => id !== commonNext[i])) {
     alters.push({ kind: 'reorderFields', typeId, apiId, risk: 'safe', order: n.fields.map((f) => f.id) });
+  }
+
+  // Relations matched by stable id: add (id only in next) / drop (id only in prev). A relation that
+  // CHANGES (field rename / kind / target / inverse-flip) is deferred — drop and re-add it instead.
+  const prevRels = indexRelations(p);
+  const nextRels = indexRelations(n);
+  for (const [rid, nr] of nextRels) {
+    const pr = prevRels.get(rid);
+    if (!pr) {
+      relAdds.push(addRelationChange(n, nr));
+      continue;
+    }
+    if (pr.field !== nr.field || pr.kind !== nr.kind || pr.target.toLowerCase() !== nr.target.toLowerCase() || (pr.inverseField ?? null) !== (nr.inverseField ?? null)) {
+      throw new SchemaDiffError(`content-type "${n.apiId}" relation "${nr.field}": changing a relation (rename / kind / target / inverse) is deferred — drop and re-add it`);
+    }
+  }
+  for (const [rid, pr] of prevRels) {
+    if (!nextRels.has(rid)) relDrops.push(dropRelationChange(p, pr));
   }
 }
 

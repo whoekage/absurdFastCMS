@@ -133,6 +133,37 @@ test('RETYPE is gated as data-dependent and preserves data when acked', async ()
   assert.equal(String(row?.views), '5'); // value carried across the cast (int8 comes back as a string)
 });
 
+test('relation: migrate creates the link table after both ct_ tables; idempotent; drop removes it', async () => {
+  await write({ id: 'ct_w', apiId: 'writer', fields: [f('f_nm', 'name', 'string', { nullable: true })] });
+  await write({
+    id: 'ct_p',
+    apiId: 'post',
+    fields: [f('f_ti', 'title', 'string', { nullable: true })],
+    relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' }],
+  } as ContentTypeSchema);
+
+  const r = await migrate(sql, dir);
+  assert.ok(r.applied.map((c) => c.kind).includes('addRelation'));
+  assert.equal(await tableExists(sql, 'ct_writer'), true);
+  assert.equal(await tableExists(sql, 'ct_post'), true);
+  assert.equal(await tableExists(sql, 'post_author_lnk'), true); // link table created (after both ct_ tables)
+
+  // the link-table FKs are real: insert both endpoints + an edge.
+  const [w] = await sql<{ id: number }[]>`INSERT INTO ct_writer (name) VALUES ('w') RETURNING id`;
+  const [p] = await sql<{ id: number }[]>`INSERT INTO ct_post (title) VALUES ('p') RETURNING id`;
+  await sql.unsafe(`INSERT INTO post_author_lnk (owner_id, related_id) VALUES (${p!.id}, ${w!.id})`);
+  assert.equal((await sql`SELECT 1 FROM post_author_lnk`).length, 1);
+
+  assert.equal((await migrate(sql, dir)).noop, true); // idempotent
+
+  // drop the relation: link table gone (destructive → ack required)
+  await write({ id: 'ct_p', apiId: 'post', fields: [f('f_ti', 'title', 'string', { nullable: true })] });
+  await assert.rejects(migrate(sql, dir), MigrationBlockedError);
+  const r2 = await migrate(sql, dir, { allowDestructive: true });
+  assert.deepEqual(r2.applied.map((c) => c.kind), ['dropRelation']);
+  assert.equal(await tableExists(sql, 'post_author_lnk'), false);
+});
+
 test('migrateLint reports the blocked changes WITHOUT applying', async () => {
   await write(ct('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true }), f('f_n', 'note', 'text', { nullable: true })]));
   await migrate(sql, dir);

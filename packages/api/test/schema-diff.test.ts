@@ -168,9 +168,30 @@ test('riskyChanges + forbiddenChanges select the right subset', () => {
   assert.equal(forbiddenChanges(cs).length, 0);
 });
 
-test('relations + duplicate ids fail LOUD', () => {
-  const withRel: ContentTypeSchema = { ...base, relations: [{ id: 'rel_a', field: 'author', kind: 'manyToOne', target: 'user' }] };
-  assert.throws(() => diff([base], [withRel]), SchemaDiffError);
+test('relations add/drop by stable id (add safe, drop destructive)', () => {
+  const withRel: ContentTypeSchema = { ...base, relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' }] };
+  const add = diff([base], [withRel]);
+  assert.deepEqual(add.changes.map((c) => c.kind), ['addRelation']);
+  const ar = add.changes[0] as Extract<Change, { kind: 'addRelation' }>;
+  assert.equal(ar.risk, 'safe');
+  assert.equal(ar.field, 'author');
+  assert.equal(ar.target, 'writer');
+  assert.equal(ar.inverseField, 'posts');
+
+  const drop = diff([withRel], [base]);
+  assert.deepEqual(drop.changes.map((c) => c.kind), ['dropRelation']);
+  assert.equal(drop.changes[0]!.risk, 'destructive');
+});
+
+test('a relation CHANGE and a rename-of-a-relation-owner are deferred (loud)', () => {
+  const r1: ContentTypeSchema = { ...base, relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer' }] };
+  const renamedField: ContentTypeSchema = { ...base, relations: [{ id: 'rel_au', field: 'editor', kind: 'manyToOne', target: 'writer' }] }; // same id, field changed
+  assert.throws(() => diff([r1], [renamedField]), SchemaDiffError);
+  const renamedType: ContentTypeSchema = { ...base, apiId: 'gazette', relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer' }] };
+  assert.throws(() => diff([r1], [renamedType]), SchemaDiffError);
+});
+
+test('duplicate ids fail LOUD', () => {
   const dupType = [base, ct('ct_a', 'other', [])];
   assert.throws(() => diff([], dupType), SchemaDiffError);
   const dupField = ct('ct_b', 'b', [f('f_d', 'a', 'integer'), f('f_d', 'b', 'integer')]);
