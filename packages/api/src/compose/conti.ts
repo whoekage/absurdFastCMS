@@ -113,7 +113,11 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     await rbac.rebuild();
     await teamView.rebuild();
 
-    const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: hookRegistry, modulesDir, basePath: API_BASE, adminDir: config.adminDir });
+    // Same-origin (publicUrl unset) → undefined → the admin uses a relative `/api`. Cross-origin admin →
+    // inject the absolute API base (publicUrl + the API prefix) so the admin reaches the API across origins.
+    const publicUrl = config.server.publicUrl?.replace(/\/+$/, '');
+    const adminApiBase = publicUrl ? `${publicUrl}${API_BASE}` : undefined;
+    const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: hookRegistry, modulesDir, basePath: API_BASE, adminDir: config.adminDir, adminApiBase });
     close = server.close;
     listenToken = await server.listen(config.server.port);
     const rows = engine.has('article') ? engine.rowCount('article') : 0;

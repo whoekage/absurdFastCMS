@@ -70,7 +70,10 @@ test('GET / serves the admin index.html (no-cache)', async () => {
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-type') ?? '', /text\/html/);
   assert.equal(res.headers.get('cache-control'), 'no-cache');
-  assert.match(await res.text(), new RegExp(MARKER));
+  const html = await res.text();
+  assert.match(html, new RegExp(MARKER));
+  // Same-origin (no adminApiBase): the index is served untouched — no runtime-config injection.
+  assert.doesNotMatch(html, /__CONTI__/, 'same-origin admin HTML must be byte-identical (no injected config)');
 });
 
 test('GET a hashed asset serves it immutably', async () => {

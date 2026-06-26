@@ -124,8 +124,14 @@ const CONFIG_TEMPLATE = `import { defineConfig, loadConfigFromEnv, adminBundleDi
 
 // Server config-as-code. Env-driven by default (.env). \`adminDir\` serves the prebuilt admin SPA shipped
 // in @conti/core at the root — drop that line to run headless (API only), or point it at a custom build.
-// Override any field inline, e.g.: defineConfig({ ...loadConfigFromEnv(), server: { port: 8080 } }).
-export default defineConfig({ ...loadConfigFromEnv(), adminDir: adminBundleDir() });
+export default defineConfig({
+  ...loadConfigFromEnv(),
+  adminDir: adminBundleDir(),
+  // server.publicUrl: set ONLY if the admin is served from a DIFFERENT origin than the API (e.g. the admin
+  // on admin.example.com, the API on example.com). Same-origin (one process / reverse proxy) needs nothing —
+  // the admin calls a relative '/api'. When set, the admin's API base is injected at runtime (no rebuild).
+  // server: { ...loadConfigFromEnv().server, publicUrl: 'https://example.com' },
+});
 `;
 
 const BOOTSTRAP_TEMPLATE = `import { defineBootstrap } from '@conti/core';

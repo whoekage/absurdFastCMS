@@ -42,10 +42,31 @@ const MIME: Record<string, string> = {
 const mimeFor = (name: string): string => MIME[path.extname(name).toLowerCase()] ?? 'application/octet-stream';
 
 /**
- * Read every file under `dir` into an in-memory bundle keyed by URL path ('/' + relative path), plus the
- * SPA entry at '/'. Returns null when `dir` is missing/empty or has no index.html (not a real build).
+ * Inject runtime config into the SPA's index.html so the admin discovers WHERE the API lives at load time
+ * instead of having it baked into the bundle at OUR build time. A single classic inline `<script>` sets
+ * `window.__CONTI__` before the deferred app module runs (classic inline scripts execute during parse;
+ * `type=module` scripts are deferred), so the value is always present when the app reads it. Only used when
+ * an absolute `apiBase` is supplied (cross-origin admin); same-origin deploys leave the HTML untouched.
  */
-export function loadAdminBundle(dir: string): AdminBundle | null {
+function injectRuntimeConfig(html: Buffer, apiBase: string): Buffer {
+  // Replace every "<" with its unicode JSON escape so a value containing a closing-script sequence cannot
+  // terminate the inline tag and inject markup (JSON.stringify alone does NOT escape "<"). It parses back to
+  // the identical string in JS — the standard safe-JSON-in-script pattern. publicUrl is operator config, but
+  // escape defensively anyway.
+  const json = JSON.stringify({ apiBase }).replace(/</g, '\\u003c');
+  const tag = `<script>window.__CONTI__=${json};</script>`;
+  const s = html.toString('utf8');
+  const i = s.indexOf('</head>');
+  return Buffer.from(i === -1 ? tag + s : s.slice(0, i) + tag + s.slice(i), 'utf8');
+}
+
+/**
+ * Read every file under `dir` into an in-memory bundle keyed by URL path ('/' + relative path), plus the
+ * SPA entry at '/'. Returns null when `dir` is missing/empty or has no index.html (not a real build). When
+ * `apiBase` is given (the admin runs on a different origin than the API), it is injected into the served
+ * index.html as `window.__CONTI__.apiBase`; omit it for same-origin (the admin defaults to relative `/api`).
+ */
+export function loadAdminBundle(dir: string, apiBase?: string): AdminBundle | null {
   if (!dir || !existsSync(dir) || !statSync(dir).isDirectory()) return null;
   const bundle: AdminBundle = new Map();
   const walk = (abs: string, rel: string): void => {
@@ -63,8 +84,12 @@ export function loadAdminBundle(dir: string): AdminBundle | null {
     }
   };
   walk(dir, '');
-  const index = bundle.get('/index.html');
+  let index = bundle.get('/index.html');
   if (!index) return null; // not an SPA build — refuse rather than serve a half-bundle.
+  if (apiBase) {
+    index = { ...index, body: injectRuntimeConfig(index.body, apiBase) };
+    bundle.set('/index.html', index); // a direct GET /index.html carries the config too
+  }
   bundle.set('/', { ...index, immutable: false });
   return bundle;
 }

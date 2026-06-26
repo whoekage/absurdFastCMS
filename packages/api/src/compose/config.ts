@@ -16,7 +16,16 @@ import { config } from '../config.ts';
  */
 export interface ContiConfig {
   readonly database: { readonly url: string };
-  readonly server: { readonly port: number };
+  readonly server: {
+    readonly port: number;
+    /**
+     * The PUBLIC origin this server is reachable at from a browser, e.g. `https://example.com`. Leave
+     * UNDEFINED for the same-origin norm (admin at `/` + API at `/api`, one process behind a reverse
+     * proxy) — the admin then calls a relative `/api`. Set it ONLY when the admin SPA is served from a
+     * DIFFERENT origin than the API (e.g. `admin.example.com`), so the admin reaches the API absolutely.
+     */
+    readonly publicUrl?: string | undefined;
+  };
   /** better-auth provider secret (cookie signing + at-rest hashing). */
   readonly auth: { readonly secret: string };
   /** HMAC secret for the keyset cursor codec. */
@@ -69,7 +78,7 @@ export function defineConfig(config: ContiConfig): ContiConfig {
 export function loadConfigFromEnv(cliPort?: string): ContiConfig {
   return {
     database: { url: config.databaseUrl },
-    server: { port: config.port(cliPort) },
+    server: { port: config.port(cliPort), publicUrl: config.publicUrl },
     auth: { secret: config.authSecret },
     cursor: { secret: config.cursorSecret },
     storage: {

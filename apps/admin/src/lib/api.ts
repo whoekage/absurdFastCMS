@@ -1,9 +1,9 @@
 import { createClient } from '@conti/sdk';
+import { resolveApiBase } from './runtime-config.ts';
 
-// Single shared SDK client instance.
-// In dev, the relative '/api' base is handled by the Vite proxy (-> http://localhost:3000,
-// stripping the /api prefix). In prod, VITE_API_URL can point at the real API origin.
-const baseUrl = import.meta.env.VITE_API_URL ?? '/api';
+// Single shared SDK client instance. The API base is resolved at runtime (server-injected → VITE_API_URL →
+// relative '/api'); in dev the relative '/api' is handled by the Vite proxy (-> :3000, stripping /api).
+const baseUrl = resolveApiBase();
 
 // be-09b — the api now gates the Builder + writes + media upload behind a better-auth session (reads stay
 // public). The session cookie rides automatically (the SDK sends `credentials: 'include'`). `onUnauthorized`

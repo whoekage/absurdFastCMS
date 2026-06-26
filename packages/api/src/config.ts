@@ -207,6 +207,19 @@ function getPublicBaseUrl(): string {
 }
 
 /**
+ * The PUBLIC origin at which this conti server is reachable from a browser (CONTI_PUBLIC_URL), e.g.
+ * `https://example.com`. UNDEFINED by default — same-origin deploys (the norm: admin at `/`, API at `/api`,
+ * one process behind a reverse proxy) need nothing, and the admin then calls the API at a relative `/api`.
+ * Set it ONLY when the admin SPA is served from a DIFFERENT origin than the API (e.g. `admin.example.com`),
+ * so the admin can reach the API at an absolute URL. Distinct from PUBLIC_BASE_URL (media), which is always
+ * concrete; this one is opt-in.
+ */
+function getServerPublicUrl(): string | undefined {
+  const fromEnv = process.env.CONTI_PUBLIC_URL?.trim();
+  return fromEnv && fromEnv.length > 0 ? fromEnv : undefined;
+}
+
+/**
  * be-04 MEDIA — the max upload size in bytes (UPLOAD_MAX_BYTES). Separate from the 1 MiB JSON-body cap;
  * defaults to 25 MiB. The multipart parser enforces it natively and rejects an oversized file with 413.
  */
@@ -326,6 +339,10 @@ export const config = {
 
   get publicBaseUrl(): string {
     return getPublicBaseUrl();
+  },
+
+  get publicUrl(): string | undefined {
+    return getServerPublicUrl();
   },
 
   get uploadMaxBytes(): number {

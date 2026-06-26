@@ -370,6 +370,12 @@ export interface ServerDeps {
   basePath?: string;
   /** When set, serve the prebuilt admin SPA from this dir at the ROOT (every non-API path). */
   adminDir?: string | undefined;
+  /**
+   * Absolute API base injected into the served admin index.html (`window.__CONTI__.apiBase`) — set ONLY when
+   * the admin runs on a different origin than the API (e.g. `https://example.com/api`). Omit for same-origin:
+   * the admin then defaults to a relative `/api` and the HTML is served byte-for-byte unchanged.
+   */
+  adminApiBase?: string | undefined;
 }
 
 /**
@@ -383,7 +389,7 @@ export interface ServerDeps {
  * WRITE / builder / media routes are gated by the wired RBAC.
  */
 export function createServer(deps: ServerDeps): Server {
-  const { engine, store, registry, publishClock = () => new Date(), auth, sessionCache, rbac, teamView, hooks, modulesDir, basePath = '', adminDir } = deps;
+  const { engine, store, registry, publishClock = () => new Date(), auth, sessionCache, rbac, teamView, hooks, modulesDir, basePath = '', adminDir, adminApiBase } = deps;
   const app = uWS.App();
   // Every API route registers under `basePath` (default '' = root). createConti sets '/api' so the admin
   // SPA can own the root. Route handlers reconstruct the core path from getParameter(), so the prefix is
@@ -1566,7 +1572,7 @@ export function createServer(deps: ServerDeps): Server {
   // the more-specific basePath routes win. Only when an adminDir is supplied (createConti) — the test/SDK
   // harness passes none, so the root stays the content API and behavior is byte-identical.
   if (adminDir !== undefined) {
-    const bundle = loadAdminBundle(adminDir);
+    const bundle = loadAdminBundle(adminDir, adminApiBase);
     if (bundle) mountAdmin(app, bundle);
   }
 

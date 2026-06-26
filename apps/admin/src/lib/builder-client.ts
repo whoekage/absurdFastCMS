@@ -1,4 +1,5 @@
 import type { CmsType, ComponentFieldKind } from '@conti/sdk';
+import { resolveApiBase } from './runtime-config.ts';
 
 /**
  * THE BUILDER WRITE-CLIENT (files-first). The public `@conti/sdk` is deliberately READ-ONLY for schema
@@ -11,8 +12,8 @@ import type { CmsType, ComponentFieldKind } from '@conti/sdk';
  * on `builder.manage`. A 401 surfaces as a {@link BuilderError} the caller can route to sign-in.
  */
 
-// In dev the relative '/api' base is proxied by Vite (-> :3000, /api stripped); prod sets VITE_API_URL.
-const baseUrl = import.meta.env.VITE_API_URL ?? '/api';
+// Resolved at runtime (server-injected → VITE_API_URL → relative '/api'); in dev Vite proxies '/api' -> :3000.
+const baseUrl = resolveApiBase();
 
 // ── wire types (mirror packages/api/src/db/schema/model.ts + compose/builder.ts + db/schema/diff.ts) ──
 
