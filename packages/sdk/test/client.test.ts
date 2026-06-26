@@ -180,7 +180,7 @@ test('createClient returns a working AbsurdClient', async () => {
   const server = await startTestServer('client-factory');
   try {
     await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
       assert.ok(client instanceof AbsurdClient);
       // The factory client has no public read method yet (Slice 4) — prove it reaches the server via fetch.
       const res = await fetch(`${server.baseUrl}/${apiId}`);

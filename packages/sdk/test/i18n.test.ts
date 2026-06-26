@@ -19,7 +19,7 @@ test('create (default locale) → createVariant (fr): same document_id, distinct
   const server = await startTestServer('i18n-variant');
   try {
     await withType(server, { apiId: 'page', fields: PAGE_FIELDS, i18n: true }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
 
       const en = await client.create(apiId, { title: 'Home', slug: 'home' });
       assert.equal(en.data.locale, DEFAULT_LOCALE, 'a plain create uses the default locale');
@@ -54,7 +54,7 @@ test('shared-field update fans out to all variants; localized-field update stays
   const server = await startTestServer('i18n-fanout');
   try {
     await withType(server, { apiId: 'page', fields: PAGE_FIELDS, i18n: true }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
       const en = await client.create(apiId, { title: 'Home', slug: 'home' });
       const enId = en.data.id as number;
       const fr = await client.createVariant(apiId, enId, 'fr', { title: 'Accueil' });
@@ -77,7 +77,7 @@ test('createVariant errors: duplicate locale → 400, missing sibling → 404, n
   const server = await startTestServer('i18n-errors');
   try {
     await withType(server, { apiId: 'page', fields: PAGE_FIELDS, i18n: true }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
       const en = await client.create(apiId, { title: 'Home', slug: 'home' });
       const enId = en.data.id as number;
       await client.createVariant(apiId, enId, 'fr', { title: 'Accueil' });
@@ -90,7 +90,7 @@ test('createVariant errors: duplicate locale → 400, missing sibling → 404, n
 
     // Variant create + locale param on a NON-i18n type.
     await withType(server, { apiId: 'plain', fields: [{ name: 'title', cmsType: 'string' as const }] }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
       const row = await client.create(apiId, { title: 'x' });
       await assert.rejects(client.createVariant(apiId, row.data.id as number, 'fr'), BadRequestError);
       // locale is a no-op on a non-i18n type (byte-identical to omitting it); document_id/locale not emitted.
@@ -107,7 +107,7 @@ test('i18n composes with Draft & Publish (locale=fr & status=published)', async 
   const server = await startTestServer('i18n-dp');
   try {
     await withType(server, { apiId: 'page', fields: PAGE_FIELDS, i18n: true, draftPublish: true }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
 
       const en = await client.create(apiId, { title: 'Home', slug: 'home' });
       const fr = await client.createVariant(apiId, en.data.id as number, 'fr', { title: 'Accueil' });

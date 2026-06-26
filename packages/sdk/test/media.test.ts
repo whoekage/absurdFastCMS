@@ -33,7 +33,7 @@ after(async () => {
 });
 
 test('upload() returns a FileAsset; assets.list/get/delete round-trip', async () => {
-  const client = createClient({ baseUrl: server.baseUrl });
+  const client = server.mkClient();
   const asset = await client.upload(pngBytes(64, 48), 'hero.png');
   assert.ok(asset.id > 0);
   assert.equal(asset.mime, 'image/png');
@@ -54,7 +54,7 @@ test('upload() returns a FileAsset; assets.list/get/delete round-trip', async ()
 });
 
 test('upload() dedups identical bytes to the same asset id', async () => {
-  const client = createClient({ baseUrl: server.baseUrl });
+  const client = server.mkClient();
   const bytes = pngBytes(16, 16);
   const a = await client.upload(bytes, 'a.png');
   const b = await client.upload(bytes, 'b-different-name.png');
@@ -62,7 +62,7 @@ test('upload() dedups identical bytes to the same asset id', async () => {
 });
 
 test('SINGLE media field: write an id, read raw, read populated to a FileAsset object', async () => {
-  const client = createClient({ baseUrl: server.baseUrl });
+  const client = server.mkClient();
   await withType(
     server,
     { apiId: 'product', fields: [
@@ -87,7 +87,7 @@ test('SINGLE media field: write an id, read raw, read populated to a FileAsset o
 });
 
 test('MULTIPLE media field: write an id array, populate to an ordered FileAsset[] ', async () => {
-  const client = createClient({ baseUrl: server.baseUrl });
+  const client = server.mkClient();
   await withType(
     server,
     { apiId: 'gallery', fields: [
@@ -113,7 +113,7 @@ test('MULTIPLE media field: write an id array, populate to an ordered FileAsset[
 });
 
 test('VALIDATION: a non-existent / non-positive media id is a 400', async () => {
-  const client = createClient({ baseUrl: server.baseUrl });
+  const client = server.mkClient();
   await withType(
     server,
     { apiId: 'doc', fields: [

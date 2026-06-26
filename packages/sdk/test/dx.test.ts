@@ -44,7 +44,7 @@ test('collection<T>() binds the type across the full CRUD lifecycle', async () =
   const server = await startTestServer('dx-collection');
   try {
     await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
       const articles = client.collection<Article>(apiId);
 
       assert.equal(articles.type, apiId);
@@ -93,6 +93,7 @@ test('onRequest / onResponse fire on real GET and POST with real status', async 
       const ress: Array<{ method: string; status: number }> = [];
       const client = createClient({
         baseUrl: server.baseUrl,
+        getHeaders: () => ({ cookie: server.cookie }), // authed: the create() below is a gated write
         onRequest: (r) => {
           reqs.push({ method: r.method, attempt: r.attempt });
           r.headers['x-correlation-id'] = 'abc'; // mutate-in-place seam

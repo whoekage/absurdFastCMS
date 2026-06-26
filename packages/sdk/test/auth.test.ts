@@ -161,12 +161,14 @@ test('getHeaders() is awaited, merged, and overrides the static token on `author
   }
 });
 
-test('the token header rides on a real WRITE (create) too, which still succeeds on the open api', async () => {
+test('the token header rides on a real WRITE (create) too; the write succeeds when authed', async () => {
   const server = await startTestServer('auth-write');
   try {
     await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
       const rec = recordingFetch();
-      const client = createClient({ baseUrl: server.baseUrl, fetch: rec.fetch, token: 'admin' });
+      // The server now GATES writes, so authenticate via the super-admin cookie (getHeaders); the static
+      // Bearer token still rides along on the POST (the api ignores it — it reads the session cookie / api key).
+      const client = createClient({ baseUrl: server.baseUrl, fetch: rec.fetch, token: 'admin', getHeaders: () => ({ cookie: server.cookie }) });
       const body: Record<string, unknown> = {
         title: 'Hello',
         body: 'b',
@@ -177,7 +179,7 @@ test('the token header rides on a real WRITE (create) too, which still succeeds 
         publishedAt: new Date(Date.UTC(2026, 0, 1)).toISOString(),
       };
       const created = await client.create(apiId, body);
-      assert.ok(created.data.id, 'create succeeds against the open api');
+      assert.ok(created.data.id, 'create succeeds (authed via the cookie; the Bearer header rides along)');
       assert.equal(rec.headers[0]!['authorization'], 'Bearer admin', 'Bearer header sent on the POST');
       assert.equal(rec.headers[0]!['content-type'], 'application/json', 'content-type still set on a body');
     });

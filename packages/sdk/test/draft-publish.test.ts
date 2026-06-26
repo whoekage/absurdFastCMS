@@ -13,7 +13,7 @@ test('create → draft (hidden by default), status=draft shows it, publish → v
   const server = await startTestServer('dp-lifecycle');
   try {
     await withType(server, { apiId: 'post', fields: POST_FIELDS, draftPublish: true }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
 
       const created = await client.create(apiId, { title: 'Hello' });
       assert.equal(created.data.published_at, null, 'a new entry is a draft');
@@ -49,7 +49,7 @@ test('publish/unpublish on a non-D&P type → BadRequestError (400)', async () =
   const server = await startTestServer('dp-non-dp');
   try {
     await withType(server, { apiId: 'plain', fields: POST_FIELDS }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
       const created = await client.create(apiId, { title: 'x' });
       const id = created.data.id as number;
       await assert.rejects(client.publish(apiId, id), BadRequestError);

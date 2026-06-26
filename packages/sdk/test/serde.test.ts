@@ -62,7 +62,7 @@ test('biginteger > 2^53 round-trips lossless as a string; BigInt opt-in is exact
   const server = await startTestServer('serde-bigint');
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
       const def = wireDef(apiId);
 
       const created = await client.create(apiId, {
@@ -105,7 +105,7 @@ test('decimal keeps its fixed scale as a string and is never widened', async () 
   const server = await startTestServer('serde-decimal');
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
       const def = wireDef(apiId);
 
       const created = await client.create(apiId, {
@@ -136,7 +136,7 @@ test('json round-trips byte-exact (nested values)', async () => {
   const server = await startTestServer('serde-json');
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
       const def = wireDef(apiId);
 
       const payload = { s: 'héllo', n: 3.14, arr: [1, 2, { deep: true }], nul: null, o: { x: { y: 'z' } } };
@@ -163,7 +163,7 @@ test('date/datetime arrive as ISO strings; { dates: true } yields a Date', async
   const server = await startTestServer('serde-dates');
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
       const def = wireDef(apiId);
 
       const at = new Date(Date.UTC(2026, 5, 18, 9, 30, 0));
@@ -195,7 +195,7 @@ test('encodeEntry lowers Date -> ISO and bigint -> string; the api accepts the b
   const server = await startTestServer('serde-encode');
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
       const def = wireDef(apiId);
 
       const at = new Date(Date.UTC(2026, 5, 18, 0, 0, 0));
@@ -227,7 +227,7 @@ test('listDecoded / findOneDecoded apply decodeEntry with a supplied def', async
   const server = await startTestServer('serde-client-convenience');
   try {
     await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
-      const client = createClient({ baseUrl: server.baseUrl });
+      const client = server.mkClient();
       const def: ModuleDefinition = wireDef(apiId);
 
       const created = await client.create(apiId, {

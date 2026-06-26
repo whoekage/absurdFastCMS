@@ -1,9 +1,14 @@
 import net from 'node:net';
+import { mkdtemp } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import type { Sql } from 'postgres';
 import { createFileDatabase, dropFileDatabase, type FileDatabase } from '../../api/test/db-per-file.ts';
-import { schema as buildSchema, type SchemaSpec } from '../../api/test/helpers.ts';
+import { schema as buildSchema, type SchemaSpec, assembleAuth } from '../../api/test/helpers.ts';
 import { PostgresStore } from '../../api/src/db/postgres.store.ts';
-import { createServer } from '../../api/src/http/server.ts';
+import { createServer, type ServerDeps } from '../../api/src/http/server.ts';
+import { HookRegistry } from '../../api/src/db/schema/hooks.ts';
+import { closeAuth } from '../../api/src/auth/auth.dialect.ts';
 import {
   loadType,
   loadAllRelations,
@@ -15,6 +20,7 @@ import { Registry } from '../../api/src/db/registry.ts';
 import type { Schema } from '../../api/src/db/schema/model.ts';
 import type { FieldSpec, RelationSpec } from '../../api/src/db/module.fields.ts';
 import type { Engine } from '../../api/src/store/engine.ts';
+import { createClient, type AbsurdClient, type ClientOptions } from '../src/index.ts';
 
 /**
  * Slice 3.5 — the mock-free integration harness for @conti/sdk.
@@ -41,6 +47,23 @@ export interface TestServer {
   engine: Engine;
   /** The live registry the server's write path resolves defs from. */
   registry: Registry;
+  /**
+   * The super-admin session cookie, bootstrapped at boot. The full server now ALWAYS gates writes/builder/
+   * media (reality), so a client must carry it. Reads stay public.
+   */
+  cookie: string;
+  /**
+   * Build an {@link AbsurdClient} pre-authenticated as the bootstrapped super-admin (the cookie is sent via
+   * `getHeaders`), so a test's writes pass the gate. Pass extra {@link ClientOptions} to override (e.g.
+   * `timeout`/`retry`); for an UNauthenticated client (testing 401/403) call `createClient` directly.
+   */
+  mkClient: (opts?: Partial<ClientOptions>) => AbsurdClient;
+  /**
+   * A raw `fetch` PRE-AUTHENTICATED as the super-admin (the cookie is attached) — for tests that seed/poke
+   * the wire directly (e.g. a raw POST) rather than through an {@link AbsurdClient}. `path` may be absolute
+   * or `/`-relative to {@link baseUrl}. Reads are public, so a plain global `fetch` also works for GETs.
+   */
+  fetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
 /** Reserve an ephemeral OS port (bind :0, read it back, release) for the server to listen on next. */
@@ -69,36 +92,70 @@ const ACTIVE = new WeakMap<Sql, Map<string, Schema>>();
  */
 export async function startTestServer(label = 'sdk'): Promise<TestServer> {
   const file: FileDatabase = await createFileDatabase(label);
-  let store: PostgresStore;
-  let engine: Engine;
-  let registry: Registry;
   try {
-    store = new PostgresStore(file.sql);
-    // Wire the keyset cursor codec exactly as the production composition root does (server.ts), so
-    // keyset pagination is enabled end-to-end (an unwired engine throws InvalidCursorError on EVERY
-    // keyset read, even the empty-cursor first-page bootstrap). The secret comes from .env.test.
-    ({ engine, registry } = await store.loadFromSchemas([], [], { cursorCodec: cursorCodecFromEnv() }));
+    const store = new PostgresStore(file.sql);
+    const port = await freePort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const modulesDir = await mkdtemp(path.join(os.tmpdir(), 'sdk-harness-')); // empty dir ⇒ Builder routes register
+
+    // Assemble the FULL real auth contour (mirrors conti.ts via the api harness's assembleAuth): the auth
+    // dialect runs over THIS per-file sql, teamView before the lazy session cache, rbac rebuilt.
+    const { auth, sessionCache, rbac, teamView } = await assembleAuth(file.sql, baseUrl);
+
+    // Wire the keyset cursor codec exactly as the production composition root does, so keyset pagination is
+    // enabled end-to-end (an unwired engine throws InvalidCursorError on EVERY keyset read). Secret from .env.test.
+    const { engine, registry } = await store.loadFromSchemas([], [], { cursorCodec: cursorCodecFromEnv() });
+
+    // createServer now requires the FULL ServerDeps bundle (no optionals) — boot the real, gated server.
+    const deps: ServerDeps = { engine, store, registry, auth, sessionCache, rbac, teamView, hooks: new HookRegistry(), modulesDir };
+    const server = createServer(deps);
+    const token = await server.listen(port);
+
+    // Bootstrap the super-admin: the first sign-up fires the first-admin advisory-lock bootstrap; we ALSO
+    // grant super-admin explicitly (idempotent) so the captured session cookie authorizes gated writes.
+    const adminEmail = `sdk-admin-${Date.now()}-${Math.random().toString(36).slice(2)}@test.local`;
+    const su = await fetch(`${baseUrl}/auth/sign-up/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: baseUrl },
+      body: JSON.stringify({ email: adminEmail, password: 'correct-horse-battery-staple', name: 'Admin' }),
+    });
+    if (su.status !== 200) throw new Error(`sdk harness: admin sign-up failed ${su.status} ${await su.clone().text()}`);
+    const cookie = su.headers.getSetCookie().map((c) => c.split(';')[0]).filter((c): c is string => c !== undefined && c.includes('=')).join('; ');
+    const [row] = await file.sql<{ id: string }[]>`SELECT id FROM "user" WHERE email = ${adminEmail}`;
+    if (row) {
+      await file.sql`INSERT INTO user_roles (user_id, role_id) SELECT ${row.id}, id FROM roles WHERE name = 'super-admin' ON CONFLICT DO NOTHING`;
+      await rbac.rebuild();
+    }
+
+    // A client pre-authenticated as the super-admin (cookie via getHeaders) so a test's writes pass the gate.
+    const mkClient = (opts: Partial<ClientOptions> = {}): AbsurdClient =>
+      createClient({ baseUrl, getHeaders: () => ({ cookie }), ...opts });
+
+    // An authed raw fetch (cookie attached) for tests that seed/poke the wire directly.
+    const authedFetch = (p: string, init: RequestInit = {}): Promise<Response> => {
+      const headers = new Headers(init.headers);
+      headers.set('cookie', cookie);
+      return fetch(p.startsWith('http') ? p : `${baseUrl}${p}`, { ...init, headers });
+    };
+
+    let closed = false;
+    const close = async (): Promise<void> => {
+      if (closed) return;
+      closed = true;
+      server.close(token);
+      sessionCache.stop();
+      await closeAuth();
+      await file.sql.end({ timeout: 5 }).catch(() => {});
+      await dropFileDatabase(file.name);
+    };
+
+    return { baseUrl, close, sql: file.sql, engine, registry, cookie, mkClient, fetch: authedFetch };
   } catch (err) {
-    // Boot failed before we owned a socket — release the DB handle + drop the clone, don't leak it.
+    // Boot failed — release the DB handle + drop the clone, don't leak it.
     await file.sql.end({ timeout: 5 }).catch(() => {});
     await dropFileDatabase(file.name);
     throw err;
   }
-
-  const server = createServer(engine, store, registry);
-  const port = await freePort();
-  const token = await server.listen(port);
-
-  let closed = false;
-  const close = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
-    server.close(token);
-    await file.sql.end({ timeout: 5 }).catch(() => {});
-    await dropFileDatabase(file.name);
-  };
-
-  return { baseUrl: `http://127.0.0.1:${port}`, close, sql: file.sql, engine, registry };
 }
 
 /** The shape {@link withType} accepts: an api_id plus its field (and optional relation) specs. */
