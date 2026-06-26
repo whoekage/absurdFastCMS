@@ -1,7 +1,11 @@
 import { CATALOG, type ErrorCode } from './catalog.ts';
 
-/** The supported locales, in preference order. `en` is the default + the byte-identical log/throw locale. */
-export const LOCALES = ['en', 'ru'] as const;
+/**
+ * The supported locales, in preference order. `en` is the default + the byte-identical log/throw locale.
+ * (`ky` = Kyrgyz — the ISO 639-1 code, not the country code `kg`; `kk` Kazakh, `uz` Uzbek (Latin), `es`
+ * Spanish, `ja` Japanese, `ko` Korean.)
+ */
+export const LOCALES = ['en', 'ru', 'ky', 'kk', 'uz', 'es', 'ja', 'ko'] as const;
 export type Locale = (typeof LOCALES)[number];
 
 /**
