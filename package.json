@@ -16,7 +16,7 @@
     "build:admin": "npm run build --workspace @conti/admin && node -e \"const fs=require('fs');fs.rmSync('packages/api/admin',{recursive:true,force:true});fs.cpSync('apps/admin/dist','packages/api/admin',{recursive:true})\"",
     "registry": "docker rm -f conti-verdaccio >/dev/null 2>&1 || true; docker run -d --name conti-verdaccio -p 4873:4873 -v \"$PWD/verdaccio.yaml:/verdaccio/conf/config.yaml:ro\" -v conti-verdaccio-storage:/verdaccio/storage verdaccio/verdaccio:6 && echo 'verdaccio up on http://localhost:4873 (docker: conti-verdaccio) — `npm run registry:stop` to remove'",
     "registry:stop": "docker rm -f conti-verdaccio",
-    "publish:local": "npm run build:admin && npm publish --workspace @conti/core --workspace @conti/cli",
+    "publish:local": "npm run build:admin && node scripts/publish-local.mjs",
     "test": "npm test --workspace @conti/core",
     "bench": "npm run bench --workspace @conti/core",
     "db:up": "npm run db:up --workspace @conti/core",

@@ -142,12 +142,16 @@ const GITIGNORE_TEMPLATE = `node_modules
 .env
 `;
 
-// PRE-PUBLISH distribution: @conti/* aren't on public npm yet, so this scopes them to the LOCAL Verdaccio
-// registry (start it with `npm run registry` in the conti repo, then `npm run publish:local`). Everything
-// else still resolves from npmjs. When @conti goes public, delete this file and `npm install` as usual.
-const NPMRC_TEMPLATE = `# @conti/* are served from a local Verdaccio registry until they're published to public npm.
-# Start it from the conti repo: \`npm run registry\` + \`npm run publish:local\`. Delete this once @conti is public.
-@conti:registry=http://localhost:4873/
+// PRE-PUBLISH distribution: @conti/* aren't on public npm yet, so the DEFAULT registry points at the local
+// Verdaccio (start it in the conti repo: `npm run registry` + `npm run publish:local`). Verdaccio serves
+// @conti/* AND uWebSockets.js locally (the latter as a tarball, so npm never git-clones its 125 MB github
+// repo), and proxies+caches everything else from npmjs — so repeat installs are fast. `legacy-peer-deps`
+// skips better-auth's huge optional-peer graph (next/svelte/drizzle/prisma/… — never installed anyway).
+// When @conti goes public: delete this file and `npm install` as usual.
+const NPMRC_TEMPLATE = `# @conti/* + uWebSockets.js are served from a local Verdaccio registry until @conti is on public npm.
+# Start it from the conti repo: \`npm run registry\` + \`npm run publish:local\`. Delete this file once @conti is public.
+registry=http://localhost:4873/
+legacy-peer-deps=true
 `;
 
 // The demo module, code-first: `schema/<apiId>.ts` is the SOURCE OF TRUTH (committed, dev-edited or

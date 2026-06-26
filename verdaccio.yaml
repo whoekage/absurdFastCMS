@@ -7,6 +7,8 @@
 # Paths are CONTAINER paths (the image runs at /verdaccio): the named volume mounts at /verdaccio/storage,
 # which the image pre-creates owned by the verdaccio user — so the volume is writable with no chown dance.
 storage: /verdaccio/storage
+# uWebSockets.js is published as a ~100 MB tarball (all-platform prebuilt binaries) — raise the default 10mb cap.
+max_body_size: 300mb
 auth:
   htpasswd:
     file: /verdaccio/storage/htpasswd
