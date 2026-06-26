@@ -6,3 +6,4 @@ dist/
 .DS_Store
 .storage/
 .auth-schema.sql
+api-dependency-graph.html

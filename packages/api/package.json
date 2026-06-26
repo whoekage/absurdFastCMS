@@ -17,6 +17,8 @@
     "start": "conti start",
     "test": "node --env-file=.env.test --test --test-global-setup=./test/global-setup.ts",
     "bench": "node bench/scan.bench.ts",
+    "vis": "node tools/build-graph.mjs && open api-dependency-graph.html",
+    "vis:build": "node tools/build-graph.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
