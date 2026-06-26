@@ -6,6 +6,9 @@ dist/
 
 # Prebuilt admin SPA copied into @conti/core for serving/publish (`npm run build:admin`) — not committed.
 packages/api/admin/
+
+# Local Verdaccio registry storage (`npm run registry`).
+.verdaccio/
 *.log
 
 # Playwright E2E artifacts (apps/admin).

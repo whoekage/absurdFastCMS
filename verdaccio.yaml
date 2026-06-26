@@ -1,0 +1,31 @@
+# Local registry for pre-publish distribution of @conti/* — runs in DOCKER via `npm run registry`
+# (container `conti-verdaccio`, storage in the named volume `conti-verdaccio-storage`). `npm run registry:stop`
+# removes it. @conti/* are served LOCALLY (so a project can `npm install` them without public npm); everything
+# else proxies npmjs. Anonymous publish/unpublish is enabled (LOCAL DEV ONLY) so `npm run publish:local`
+# needs no login. To go public later: publish @conti/* to npmjs and drop the scaffold's .npmrc scope.
+#
+# Paths are CONTAINER paths (the image runs at /verdaccio): the named volume mounts at /verdaccio/storage,
+# which the image pre-creates owned by the verdaccio user — so the volume is writable with no chown dance.
+storage: /verdaccio/storage
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+    max_users: -1
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+packages:
+  '@conti/*':
+    access: $all
+    publish: $all
+    unpublish: $all
+  '@*/*':
+    access: $all
+    publish: $all
+    proxy: npmjs
+  '**':
+    access: $all
+    publish: $all
+    proxy: npmjs
+log: { type: stdout, format: pretty, level: warn }
+listen: 0.0.0.0:4873

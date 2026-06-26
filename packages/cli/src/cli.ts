@@ -142,6 +142,14 @@ const GITIGNORE_TEMPLATE = `node_modules
 .env
 `;
 
+// PRE-PUBLISH distribution: @conti/* aren't on public npm yet, so this scopes them to the LOCAL Verdaccio
+// registry (start it with `npm run registry` in the conti repo, then `npm run publish:local`). Everything
+// else still resolves from npmjs. When @conti goes public, delete this file and `npm install` as usual.
+const NPMRC_TEMPLATE = `# @conti/* are served from a local Verdaccio registry until they're published to public npm.
+# Start it from the conti repo: \`npm run registry\` + \`npm run publish:local\`. Delete this once @conti is public.
+@conti:registry=http://localhost:4873/
+`;
+
 // The demo module, code-first: `schema/<apiId>.ts` is the SOURCE OF TRUTH (committed, dev-edited or
 // Builder-edited, git-reviewed). `conti migrate` applies it; createConti builds the registry from it at
 // boot; the entry type is inferred. Add lifecycle hooks alongside the fields.
@@ -249,6 +257,7 @@ export async function initProject(dir: string, opts: { name?: string } = {}): Pr
     envExampleTemplate(randomBytes(32).toString('hex'), randomBytes(32).toString('hex')),
   );
   await writeFile(path.join(dir, '.gitignore'), GITIGNORE_TEMPLATE);
+  await writeFile(path.join(dir, '.npmrc'), NPMRC_TEMPLATE);
 }
 
 /**
@@ -288,7 +297,8 @@ async function main(argv: string[]): Promise<void> {
       await initProject(target);
       console.log(
         `conti: scaffolded a project in ${target}\n` +
-          "next: cp .env.example .env, set DATABASE_URL, then run 'conti dev'.",
+          'next: 1) npm install   2) cp .env.example .env (set DATABASE_URL)   3) npm run dev\n' +
+          '(@conti/* install from the local Verdaccio registry — run `npm run registry` + `npm run publish:local` in the conti repo first.)',
       );
       break;
     }

@@ -1,8 +1,11 @@
 {
   "name": "@conti/core",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
+  "//publishConfig": "Pins publishes to the LOCAL Verdaccio registry — a bare `npm publish` can never reach public npm. Remove this block (and bump access) to go public later.",
+  "publishConfig": {
+    "registry": "http://localhost:4873/"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",

@@ -1,19 +1,22 @@
 {
   "name": "@conti/cli",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
+  "publishConfig": {
+    "registry": "http://localhost:4873/"
+  },
   "engines": {
     "node": ">=24"
   },
   "bin": {
     "conti": "./src/cli.ts"
   },
+  "files": ["src"],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test test/*.test.ts"
   },
   "dependencies": {
-    "@conti/core": "*"
+    "@conti/core": "^0.1.0"
   }
 }
