@@ -6,7 +6,7 @@ import type { Sql, JSONValue } from 'postgres';
  * Persisted (not in-memory) so it survives the crash/restart it exists to protect against. Single-instance,
  * so a plain table + opportunistic TTL prune (no background job) suffices.
  *
- * The success row is written from the ADAPTER, INSIDE the writer mutex, AFTER the post-apply version
+ * The success row is written from the SERVER, INSIDE the writer mutex, AFTER the post-apply version
  * recompute — NOT inside the migrate tx — because (a) `migrate()` returns before its tx on a no-op apply, so
  * an in-tx INSERT would never fire for a keyed no-op, and (b) the correct envelope `version` is only known
  * after the file rename + recompute. The accepted trade-off: a crash between the migrate commit and this

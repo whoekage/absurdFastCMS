@@ -14,9 +14,9 @@ import {
 } from '../db/file.repository.ts';
 
 /**
- * be-04 MEDIA — the framework-agnostic CORE for the asset endpoints. Mirrors the other cores' shape:
- * pure-ish functions returning a {@link CoreResponse} `{status,contentType,body}`. The uWS adapter does
- * only transport (read the multipart stream into a buffer, call here, cork the response).
+ * be-04 MEDIA — the pure CORE for the asset endpoints. Mirrors the other cores' shape:
+ * pure-ish functions returning a {@link CoreResponse} `{status,contentType,body}`. The server (`server.ts`)
+ * does only uWS plumbing (read the multipart stream into a buffer, call here, cork the response).
  *
  *   handleUpload   — POST /_files/upload : sniff metadata, dedup by hash, put bytes, insert the row.
  *   handleListFiles— GET  /_files        : paged list (offset meta).
@@ -28,7 +28,7 @@ export interface FileContext {
   provider: StorageProvider;
 }
 
-/** A successfully-parsed multipart upload, handed to {@link handleUpload} by the adapter's busboy stream. */
+/** A successfully-parsed multipart upload, handed to {@link handleUpload} by the server's busboy stream. */
 export interface ParsedUpload {
   /** The single file's bytes (already bounded by the upload cap). */
   bytes: Buffer;
