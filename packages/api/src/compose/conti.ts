@@ -11,7 +11,7 @@ import { setAuthSql } from '../auth/auth.dialect.ts';
 import { SessionCache } from '../auth/session.cache.ts';
 import { RbacRegistry } from '../auth/rbac.registry.ts';
 import { TeamView } from '../auth/team.view.ts';
-import type { ContiConfig } from './config.ts';
+import { normalizePublicUrl, type ContiConfig } from './config.ts';
 
 /**
  * The composition root: turn the single-process boot into a LIBRARY entry. `createConti(config)` wires the
@@ -114,9 +114,10 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     await teamView.rebuild();
 
     // Same-origin (publicUrl unset) → undefined → the admin uses a relative `/api`. Cross-origin admin →
-    // inject the absolute API base (publicUrl + the API prefix) so the admin reaches the API across origins.
-    const publicUrl = config.server.publicUrl?.replace(/\/+$/, '');
-    const adminApiBase = publicUrl ? `${publicUrl}${API_BASE}` : undefined;
+    // inject the absolute API base (validated origin + the API prefix) so the admin reaches the API across
+    // origins. normalizePublicUrl throws on a malformed value, failing the boot loud instead of silently
+    // serving an admin that calls the wrong API.
+    const adminApiBase = config.server.publicUrl ? `${normalizePublicUrl(config.server.publicUrl)}${API_BASE}` : undefined;
     const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: hookRegistry, modulesDir, basePath: API_BASE, adminDir: config.adminDir, adminApiBase });
     close = server.close;
     listenToken = await server.listen(config.server.port);

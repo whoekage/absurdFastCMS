@@ -65,6 +65,39 @@ export function defineConfig(config: ContiConfig): ContiConfig {
 }
 
 /**
+ * Validate `server.publicUrl` (CONTI_PUBLIC_URL) and return its canonical ORIGIN (`https://example.com`,
+ * port preserved only when non-default, no trailing slash). It MUST be an absolute http(s) origin and
+ * nothing more — a bare host (`example.com`) is treated as a RELATIVE path by the browser, and a path
+ * (`…/cms`) implies sub-path mounting, which conti does not support (the prebuilt admin references its
+ * assets at an absolute `/assets/…`). Throws a descriptive error on boot so a misconfigured cross-origin
+ * deploy fails fast and loud instead of silently serving an admin that calls the wrong API. Learned from
+ * Payload's serverURL footguns (doubled origin #14900, path-in-serverURL #24) and Directus's PUBLIC_URL
+ * boot warning.
+ */
+export function normalizePublicUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(
+      `conti: server.publicUrl (CONTI_PUBLIC_URL) must be an absolute URL like "https://example.com" — got ${JSON.stringify(value)}`,
+    );
+  }
+  const bad: string[] = [];
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') bad.push(`protocol must be http or https (got "${url.protocol}")`);
+  if (url.pathname !== '/' && url.pathname !== '') bad.push('it must be a bare ORIGIN with no path (conti does not serve the admin under a sub-path)');
+  if (url.search) bad.push('it must not contain a query string');
+  if (url.hash) bad.push('it must not contain a fragment');
+  if (url.username || url.password) bad.push('it must not contain credentials');
+  if (bad.length > 0) {
+    throw new Error(
+      `conti: server.publicUrl (CONTI_PUBLIC_URL) = ${JSON.stringify(value)} is invalid — ${bad.join('; ')}. Use a bare origin like "https://example.com".`,
+    );
+  }
+  return url.origin;
+}
+
+/**
  * Build a {@link ContiConfig} from the environment — the DEFAULT config source (`.env` in dev,
  * `.env.test` in test). It DELEGATES to the existing env-reading `config` module rather than re-reading
  * `process.env`, so every value (validation, defaults, dev-secret fallbacks, the `AUTH_SECRET` ↔

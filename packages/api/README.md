@@ -162,9 +162,14 @@ example.com {
 
 **Separate admin origin** (e.g. `admin.example.com` + API on `example.com`). The admin's API base can't be
 baked into the prebuilt bundle, so it is discovered at **runtime**: set `CONTI_PUBLIC_URL=https://example.com`
-and the server injects `window.__CONTI__.apiBase = https://example.com/api` into the served `index.html` — no
-rebuild. (CORS + cross-subdomain auth cookies for this split are not wired yet; same-origin is the supported
-default.)
+(a bare origin — validated at boot) and the server injects `window.__CONTI__.apiBase = https://example.com/api`
+into the served `index.html` — no rebuild. (CORS + cross-subdomain auth cookies for this split are not wired
+yet; same-origin is the supported default.)
+
+> **Sub-path mounting is not supported.** The admin is served at the origin **root** only — the prebuilt
+> bundle references its assets at an absolute `/assets/…`, so hosting it under a path (`example.com/cms`)
+> would break asset loading. Give it its own (sub)domain instead. This is why `CONTI_PUBLIC_URL` must be a
+> bare origin with no path.
 
 ## Roadmap
 
