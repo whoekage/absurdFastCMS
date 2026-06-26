@@ -37,6 +37,13 @@ export interface ContiConfig {
    * {@link loadConfigFromEnv} (relative to the project dir = cwd), so the CLI and direct callers agree.
    */
   readonly modules?: { readonly dir: string };
+
+  /**
+   * Directory of the prebuilt admin SPA to serve at the root. Defaults (in {@link createConti}) to the
+   * admin bundle shipped inside the installed `@conti/core` package (or the monorepo dev build), resolved
+   * by the core config's `adminDir`. Set this only to override with a custom admin build.
+   */
+  readonly adminDir?: string;
 }
 
 /**

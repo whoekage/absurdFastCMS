@@ -5,6 +5,7 @@ import { loadTypes } from '../db/schema/load.ts';
 import { reconcileBoot } from './boot-reconcile.ts';
 import { HookRegistry } from '../db/schema/hooks.ts';
 import { createServer, type ListenToken } from '../http/server.ts';
+import { config as coreConfig } from '../config.ts';
 import { CursorCodec } from '../store/cursor.codec.ts';
 import { buildAuth } from '../auth/auth.ts';
 import { setAuthSql } from '../auth/auth.dialect.ts';
@@ -113,7 +114,7 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     await rbac.rebuild();
     await teamView.rebuild();
 
-    const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: hookRegistry, modulesDir, basePath: API_BASE, adminDir: config.adminDir });
+    const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: hookRegistry, modulesDir, basePath: API_BASE, adminDir: config.adminDir ?? coreConfig.adminDir });
     close = server.close;
     listenToken = await server.listen(config.server.port);
     const rows = engine.has('article') ? engine.rowCount('article') : 0;

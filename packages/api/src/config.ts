@@ -182,14 +182,15 @@ export interface S3Config {
 }
 
 /**
- * be-04 MEDIA — the local-filesystem storage base dir (LOCAL_STORAGE_PATH). Dev default: `<api>/.storage`;
- * `.env.test` points it at an os-tmpdir subdir so tests never touch the dev dir. Cached on first access.
+ * be-04 MEDIA — the local-filesystem storage base dir (LOCAL_STORAGE_PATH). Default: `<cwd>/.storage` (the
+ * PROJECT dir, like `modules/`); `.env.test` points it at an os-tmpdir subdir so tests never touch it.
+ * Cached on first access. (Was package-relative via import.meta.url — that resolved INTO node_modules for an
+ * installed @conti/core; the project's cwd is the right base, and matches how `modules/` is resolved.)
  */
 function getLocalStoragePath(): string {
   if ('localStoragePath' in cache) return cache.localStoragePath as string;
   const fromEnv = process.env.LOCAL_STORAGE_PATH?.trim();
-  // Default to <api package>/.storage — fileURLToPath of the package root relative to this module.
-  const fallback = new URL('../.storage', import.meta.url).pathname;
+  const fallback = path.join(process.cwd(), '.storage');
   const result = fromEnv && fromEnv.length > 0 ? fromEnv : fallback;
   cache.localStoragePath = result;
   return result;

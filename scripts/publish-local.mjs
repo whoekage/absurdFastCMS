@@ -51,7 +51,7 @@ const targets = [
       p.dependencies['uWebSockets.js'] = uwsVersion;
       p.exports = { '.': { types: './dist/index.d.ts', default: './dist/index.js' } };
       p.types = './dist/index.d.ts';
-      p.files = ['dist', 'admin'];
+      p.files = ['dist', 'admin', 'migrations'];
     },
   },
   {

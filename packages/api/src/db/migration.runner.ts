@@ -1,5 +1,6 @@
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { readdir, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import postgres from 'postgres';
 import { config } from '../config.ts';
@@ -10,7 +11,21 @@ import { config } from '../config.ts';
  * own transaction (Postgres DDL is transactional). Runs from the `db:migrate` scripts AND from test
  * `before()` hooks — mock-free, env-file-driven. SQL is authored by hand (these are real .sql files).
  */
-const MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations/', import.meta.url));
+// Resolve <package-root>/migrations INDEPENDENTLY of bundling depth. In the workspace this module is
+// `src/db/migration.runner.ts` (package root = packages/api); published+bundled it is `dist/index.js`
+// (package root = @conti/core). A fixed `../../` relative path breaks across those depths, so walk up to
+// the nearest package.json either way, then `migrations/` (shipped in the package's `files`).
+function findMigrationsDir(): string {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(path.join(dir, 'package.json'))) return path.join(dir, 'migrations');
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return path.join(process.cwd(), 'migrations'); // last resort
+}
+const MIGRATIONS_DIR = findMigrationsDir();
 
 export async function runMigrations(url = config.databaseUrl): Promise<void> {
   const sql = postgres(url, { max: 1, onnotice: () => {} });

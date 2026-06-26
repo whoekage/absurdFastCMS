@@ -369,7 +369,7 @@ export interface ServerDeps {
   /** API route prefix, e.g. '/api'. Default '' = routes at root (the test/SDK harness). */
   basePath?: string;
   /** When set, serve the prebuilt admin SPA from this dir at the ROOT (every non-API path). */
-  adminDir?: string;
+  adminDir?: string | undefined;
 }
 
 /**
