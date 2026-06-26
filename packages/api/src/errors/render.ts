@@ -26,7 +26,10 @@ export function interpolate(tpl: string, params: Record<string, unknown>): strin
  * `en` render of a cataloged code is BYTE-IDENTICAL to the message its class historically threw.
  */
 export function render(code: string, params: Record<string, unknown>, locale: Locale): string {
-  const entry = CATALOG[code as ErrorCode] as { status: number; messages: Record<Locale, string> } | undefined;
-  const tpl = entry?.messages[locale] ?? entry?.messages.en ?? code;
+  const entry = CATALOG[code as ErrorCode] as { status: number; messages: string | Record<Locale, string> } | undefined;
+  const msgs = entry?.messages;
+  // A bare STRING means "same template in every locale" (the freeform `{detail}` passthrough — no need to
+  // enumerate all 8 locales). A per-locale map picks `locale`, falling back to `en`, then the bare `code`.
+  const tpl = typeof msgs === 'string' ? msgs : (msgs?.[locale] ?? msgs?.en ?? code);
   return interpolate(tpl, params);
 }

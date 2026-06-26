@@ -16,12 +16,14 @@ import type { Locale } from './render.ts';
  *     array also rides in params as a wire extra (see http.ts WIRE_EXTRAS).
  *   - the `db.registry.invalid_field` / `db.schema.adapt` templates carry LITERAL double quotes around
  *     `{apiId}`/`{field}` exactly as the originals did (raw interpolation, no JSON.stringify).
- *   - every freeform class maps its `message: string` arg to `{ detail: message }`; ALL locales are `{detail}`
- *     (the detail string is server English — promotable to real per-locale codes later).
+ *   - every freeform class maps its `message: string` arg to `{ detail: message }`; its `messages` is the
+ *     bare string `'{detail}'` — a SHORTHAND meaning "same template in every locale" (no point enumerating
+ *     8 identical entries; the detail is server English, promotable to real per-locale codes later).
  *
  * LOCALES (render.ts): en, ru, ky (Kyrgyz), kk (Kazakh), uz (Uzbek-Latin), es (Spanish), ja (Japanese),
- * ko (Korean). Every entry MUST carry all of them (the `satisfies Record<Locale, string>` enforces it); a
- * missing locale would only fall back to `en` at runtime, but the type makes the gap a COMPILE error.
+ * ko (Korean). `messages` is EITHER a bare string (same in all locales) OR a full `Record<Locale, string>`
+ * map — the `satisfies` accepts both. A per-locale map MUST carry every locale (a missing one is a COMPILE
+ * error, not a silent runtime `en` fallback). Use the map only when translations actually differ.
  * Placeholders ({value}, {reason}, …) and technical literals (`--allow-destructive`, the relation-kind
  * union) are kept verbatim across every locale. Non-English translations are best-effort — the Central-Asian
  * ones (ky/kk/uz) especially warrant a native review.
@@ -153,23 +155,23 @@ export const CATALOG = {
   },
   'db.ddl.default_type': {
     status: 500,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'db.ddl.type_change_forbidden': {
     status: 500,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'db.ddl.type_change_failed': {
     status: 500,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'db.ddl.dependent_types': {
     status: 500,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'db.ddl.duplicate_data': {
     status: 500,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'db.ddl.unknown_relation_kind': {
     status: 500,
@@ -229,11 +231,11 @@ export const CATALOG = {
   },
   'db.schema.codegen': {
     status: 500,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'db.schema.diff': {
     status: 422,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'db.schema.file': {
     status: 500,
@@ -251,12 +253,12 @@ export const CATALOG = {
   // SchemaChangeConflictError: the transient schema-lock 409 (Retry-After at the boundary).
   'db.schema.conflict': {
     status: 409,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   // SchemaReconcileHaltError: boot-time reconcile halt (internal -> 500).
   'db.schema.reconcile_halt': {
     status: 500,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'db.migration.blocked': {
     status: 409,
@@ -273,7 +275,7 @@ export const CATALOG = {
   },
   'db.migration.unsupported': {
     status: 422,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'db.migration.data_loss': {
     status: 422,
@@ -292,15 +294,15 @@ export const CATALOG = {
   // --- request-facing 4xx (the wire-shaped errors) --------------------------------------------------
   'body.invalid': {
     status: 400,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'entry.write': {
     status: 400,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'query.invalid': {
     status: 400,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'cursor.invalid': {
     status: 400,
@@ -317,25 +319,25 @@ export const CATALOG = {
   },
   'hook.failed': {
     status: 400,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'store.keyset_unsupported': {
     status: 500,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
 
   // --- compose/builder.ts (the admin Builder routes) -----------------------------------------------
   'builder.validation': {
     status: 422,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'builder.not_found': {
     status: 404,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
   'builder.busy': {
     status: 500,
-    messages: { en: '{detail}', ru: '{detail}', ky: '{detail}', kk: '{detail}', uz: '{detail}', es: '{detail}', ja: '{detail}', ko: '{detail}' },
+    messages: '{detail}',
   },
 
   // --- storage/provider.ts --------------------------------------------------------------------------
@@ -352,7 +354,7 @@ export const CATALOG = {
       ko: '객체를 찾을 수 없습니다',
     },
   },
-} as const satisfies Record<string, { status: number; messages: Record<Locale, string> }>;
+} as const satisfies Record<string, { status: number; messages: string | Record<Locale, string> }>;
 
 /** The exact union of every defined error code (drives compile-time exhaustiveness at the call sites). */
 export type ErrorCode = keyof typeof CATALOG;
