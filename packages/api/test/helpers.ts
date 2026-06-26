@@ -1,7 +1,10 @@
 import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { mkdtemp } from 'node:fs/promises';
 import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres.store.ts';
-import { createServer } from '../src/http/server.ts';
+import { createServer, type ServerDeps } from '../src/http/server.ts';
 import { loadTypes } from '../src/db/schema/load.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
 import { HookRegistry } from '../src/db/schema/hooks.ts';
@@ -9,9 +12,10 @@ import { mintId, type Schema, type ComponentSchema, type FieldType } from '../sr
 import type { FieldOptions } from '../src/db/type.catalog.ts';
 import type { RelationKind } from '../src/db/ddl.ts';
 import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
-import { buildAuth } from '../src/auth/auth.ts';
+import { buildAuth, type Auth } from '../src/auth/auth.ts';
 import { SessionCache } from '../src/auth/session.cache.ts';
 import { RbacRegistry } from '../src/auth/rbac.registry.ts';
+import { TeamView } from '../src/auth/team.view.ts';
 import type { Engine } from '../src/store/engine.ts';
 import type { Registry } from '../src/db/registry.ts';
 
@@ -95,26 +99,31 @@ export function rawField(buf: Buffer | string, field: string): string {
 }
 
 /**
- * FILES-FIRST test server (S4): build engine+registry from `modulesDir`'s files and wire the Builder so
- * `applyEdit` makes a schema change LIVE in-process. Asserting via HTTP GET against `base` is the contract —
- * never re-`loadTypes` the edited file (ESM-cached) nor read the returned engine ref after a swap.
+ * Assemble the FULL real auth stack EXACTLY as `conti.ts` does, in the cycle-breaking order: `setAuthSql`
+ * first; `teamView` BEFORE `auth` (auth's user hooks call `teamView.rebuild`) and BEFORE the session cache
+ * (caps a team member's cached TTL); the `() => auth` thunk lets the cache exist before the `auth` instance
+ * whose delete-hook evicts it; `rbacInvalidate`/`teamViewReload` thunks fire the first-admin bootstrap. Shared
+ * by {@link startTestServer} and {@link startTestServerFromFilesWithAuth} so the wiring never drifts.
  */
-export async function startTestServerFromFiles(
+export async function assembleAuth(
   sql: Sql,
-  modulesDir: string,
-): Promise<{
-  base: string;
-  close: (token: unknown) => void;
-  token: unknown;
-  applyEdit: NonNullable<ReturnType<typeof createServer>['applyEdit']>;
-}> {
-  const store = new PostgresStore(sql);
-  const { schemas, hooks } = await loadTypes(modulesDir);
-  const { engine, registry } = await store.loadFromSchemas(schemas);
-  const server = createServer(engine, store, registry, undefined, undefined, undefined, undefined, undefined, new HookRegistry(hooks), modulesDir);
-  const port = await freePort();
-  const token = await server.listen(port);
-  return { base: `http://127.0.0.1:${port}`, close: server.close, token, applyEdit: server.applyEdit! };
+  base: string,
+): Promise<{ auth: Auth; sessionCache: SessionCache; rbac: RbacRegistry; teamView: TeamView }> {
+  setAuthSql(sql); // FIRST: the auth dialect runs over the shared per-file handle
+  let auth: Auth;
+  const teamView = new TeamView(sql);
+  const sessionCache = new SessionCache(() => auth, undefined, undefined, teamView); // lazy ()=>auth breaks the cycle
+  const rbac = new RbacRegistry(sql);
+  auth = buildAuth({
+    baseURL: base,
+    sessionEvictor: sessionCache,
+    sql,
+    rbacInvalidate: () => rbac.rebuild(),
+    teamViewReload: () => teamView.rebuild(),
+  });
+  await rbac.rebuild();
+  await teamView.rebuild();
+  return { auth, sessionCache, rbac, teamView };
 }
 
 /**
@@ -137,19 +146,14 @@ export async function startTestServerFromFilesWithAuth(
   userIdOf: (email: string) => Promise<string>;
   grantRole: (userId: string, roleName: string) => Promise<void>;
 }> {
-  setAuthSql(sql);
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   const store = new PostgresStore(sql);
-  let auth: ReturnType<typeof buildAuth>;
-  const sessionCache = new SessionCache(() => auth); // lazy ()=>auth breaks the construction cycle
-  const rbac = new RbacRegistry(sql);
-  auth = buildAuth({ baseURL: base, sessionEvictor: sessionCache, sql, rbacInvalidate: () => rbac.rebuild() });
-  await rbac.rebuild();
+  const { auth, sessionCache, rbac, teamView } = await assembleAuth(sql, base);
   const { schemas, hooks } = await loadTypes(modulesDir);
   const { engine, registry } = await store.loadFromSchemas(schemas);
-  // positions: auth=5, sessionCache=6, rbac=7 ⇒ authEnabled; HookRegistry=9, modulesDir=10 ⇒ builderActive.
-  const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, undefined, new HookRegistry(hooks), modulesDir);
+  const deps: ServerDeps = { engine, store, registry, auth, sessionCache, rbac, teamView, hooks: new HookRegistry(hooks), modulesDir };
+  const server = createServer(deps);
   const token = await server.listen(port);
 
   const signUp = async (email: string): Promise<string> => {
@@ -172,26 +176,6 @@ export async function startTestServerFromFilesWithAuth(
   };
 
   return { base, close: server.close, token, applyEdit: server.applyEdit!, sessionCache, rbac, signUp, userIdOf, grantRole };
-}
-
-/**
- * The files-first replacement for the meta-path `createContentType(...) + startTestServer(...)` setup:
- * `migrate()` materializes the `ct_*` tables (+ writes `_schema_applied`) with ZERO meta, then the engine is
- * built via `loadFromSchemas`. Tests pass their module IR (and optional in-memory components) directly.
- */
-export async function startTestServerFromSchemas(
-  sql: Sql,
-  schemas: Schema[],
-  opts: { components?: ComponentSchema[]; seed?: () => Promise<void> } = {},
-): Promise<{ base: string; close: (token: unknown) => void; token: unknown; engine: Engine; registry: Registry }> {
-  await migrate(sql, schemas, { allowDestructive: true }); // CREATE TABLE ct_* + reconcile the snapshot
-  if (opts.seed) await opts.seed(); // insert fixture rows AFTER the tables exist, BEFORE the engine streams them
-  const store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadFromSchemas(schemas, opts.components ?? []);
-  const server = createServer(engine, store, registry);
-  const port = await freePort();
-  const token = await server.listen(port);
-  return { base: `http://127.0.0.1:${port}`, close: server.close, token, engine, registry };
 }
 
 /**
@@ -241,3 +225,141 @@ export const ARTICLE_SCHEMA: Schema = {
 
 /** Re-export so a test's teardown can close the shared auth instance. */
 export { closeAuth };
+
+/** Per-call knobs for {@link startTestServer}; every one is optional so the bare `(sql, schemas)` form works. */
+export interface StartTestServerOpts {
+  /** In-memory component schemas threaded into `loadFromSchemas` (component-write / relation-in-component). */
+  components?: ComponentSchema[];
+  /** Insert fixture rows AFTER `migrate` creates the tables, BEFORE the engine streams them. */
+  seed?: () => Promise<void>;
+  /** Pin the publish clock for byte-deterministic `published_at` (draft-publish / i18n). */
+  publishClock?: () => Date;
+  /** Content lifecycle hooks (hooks.e2e). Defaults to an empty registry. */
+  hooks?: HookRegistry;
+}
+
+/** The handle {@link startTestServer} returns: the FULL gated server + an authed + an anon fetch + auth helpers. */
+export interface TestServer {
+  base: string;
+  close: (token: unknown) => void;
+  token: unknown;
+  sql: Sql;
+  engine: Engine;
+  registry: Registry;
+  /** AUTHENTICATED fetch — carries the bootstrapped super-admin cookie, so gated writes/builder/media pass. */
+  fetch: (pathOrUrl: string, init?: RequestInit) => Promise<Response>;
+  /** ANONYMOUS fetch — no cookie; for asserting public reads + the 401 unauthenticated-write path. */
+  anonFetch: (pathOrUrl: string, init?: RequestInit) => Promise<Response>;
+  signUp: (email: string) => Promise<string>;
+  userIdOf: (email: string) => Promise<string>;
+  grantRole: (userId: string, roleName: string) => Promise<void>;
+  sessionCache: SessionCache;
+  rbac: RbacRegistry;
+  applyEdit: NonNullable<ReturnType<typeof createServer>['applyEdit']>;
+}
+
+/**
+ * THE UNIFIED HARNESS. Assembles the FULL real server EXACTLY as `conti.ts` does (every dep wired, nothing
+ * gated-off), bootstraps a super-admin, and returns an AUTHENTICATED `fetch` so write tests "just work":
+ * reads stay public (use `anonFetch`), writes carry the admin cookie (use `fetch`).
+ *
+ * Mirrors the prod assembly order (load-bearing — it breaks the construction cycle): teamView BEFORE auth +
+ * sessionCache; the `() => auth` thunk lets the cache exist before the auth instance whose delete-hook evicts
+ * it; `setAuthSql` first; `rbacInvalidate`/`teamViewReload` thunks fire the first-admin bootstrap. Unlike
+ * conti it takes the IR `schemas` DIRECTLY (migrate + loadFromSchemas) instead of `loadTypes`-ing a real
+ * `modules/` dir, and creates an EMPTY temp `modulesDir` solely so the Builder routes register (the tightened
+ * signature requires it); builder-route/engine-swap tests that need real on-disk modules keep using
+ * {@link startTestServerFromFilesWithAuth}.
+ *
+ * BOOTSTRAP: per-file DBs (clone of golden) share the auth tables across a file's tests, so "first sign-up →
+ * super-admin" can't be relied on for a second server. So we sign up a UNIQUE email then EXPLICITLY
+ * `grantRole(..., 'super-admin')` (idempotent with the advisory-lock bootstrap) — the returned `fetch` is
+ * authed as super-admin regardless of bootstrap timing.
+ *
+ * Built ADDITIVELY: it calls `createServer` with ALL deps, valid under BOTH the current optional signature
+ * and the future required {@link ServerDeps} signature. TEARDOWN (caller): `close(token)` + `sessionCache.stop()`
+ * + `closeAuth()` + `sql.end()`.
+ */
+export async function startTestServer(sql: Sql, schemas: Schema[], opts: StartTestServerOpts = {}): Promise<TestServer> {
+  await migrate(sql, schemas, { allowDestructive: true }); // CREATE TABLE ct_* + reconcile the snapshot
+  if (opts.seed) await opts.seed(); // fixture rows AFTER the tables exist, BEFORE the engine streams them
+
+  const modulesDir = await mkdtemp(path.join(os.tmpdir(), 'conti-harness-')); // empty dir ⇒ Builder routes register
+  const port = await freePort();
+  const base = `http://127.0.0.1:${port}`;
+  const store = new PostgresStore(sql);
+
+  // AUTH cycle (mirror conti.ts EXACTLY via assembleAuth): teamView BEFORE auth + the session cache; the cache
+  // references `auth` lazily; `setAuthSql` runs first inside assembleAuth (migrate/seed above use raw sql).
+  const { auth, sessionCache, rbac, teamView } = await assembleAuth(sql, base);
+
+  const { engine, registry } = await store.loadFromSchemas(schemas, opts.components ?? []);
+  // The full ServerDeps bundle — mirrors conti.ts. publishClock is omitted unless a test pins it (createServer
+  // defaults to wall-clock); exactOptionalPropertyTypes forbids assigning an explicit `undefined` to it.
+  const deps: ServerDeps = {
+    engine,
+    store,
+    registry,
+    ...(opts.publishClock !== undefined ? { publishClock: opts.publishClock } : {}),
+    auth,
+    sessionCache,
+    rbac,
+    teamView,
+    hooks: opts.hooks ?? new HookRegistry(),
+    modulesDir,
+  };
+  const server = createServer(deps);
+  const token = await server.listen(port);
+
+  // signUp / userIdOf / grantRole — reused VERBATIM from startTestServerFromFilesWithAuth.
+  const signUp = async (email: string): Promise<string> => {
+    const res = await fetch(`${base}/auth/sign-up/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: base },
+      body: JSON.stringify({ email, password: 'correct-horse-battery-staple', name: 'U' }),
+    });
+    if (res.status !== 200) throw new Error(`sign-up failed: ${res.status} ${await res.clone().text()}`);
+    return res.headers.getSetCookie().map((c) => c.split(';')[0]).filter((c): c is string => c !== undefined && c.includes('=')).join('; ');
+  };
+  const userIdOf = async (email: string): Promise<string> => {
+    const [row] = await sql<{ id: string }[]>`SELECT id FROM "user" WHERE email = ${email}`;
+    if (!row) throw new Error(`no user row for ${email}`);
+    return row.id;
+  };
+  const grantRole = async (userId: string, roleName: string): Promise<void> => {
+    await sql`INSERT INTO user_roles (user_id, role_id) SELECT ${userId}, id FROM roles WHERE name = ${roleName} ON CONFLICT DO NOTHING`;
+    await rbac.rebuild();
+  };
+
+  // Bootstrap the super-admin: unique email so a SECOND server in the same file never collides, then sign up
+  // (the first-admin advisory-lock bootstrap fires for the very first user) AND explicitly grant super-admin
+  // (idempotent ON CONFLICT) so the captured cookie is authed as super-admin regardless of bootstrap timing.
+  const adminEmail = `harness-admin-${Date.now()}-${Math.random().toString(36).slice(2)}@test.local`;
+  const cookie = await signUp(adminEmail);
+  await grantRole(await userIdOf(adminEmail), 'super-admin');
+
+  const url = (p: string): string => (p.startsWith('http') ? p : `${base}${p}`);
+  const authedFetch = (p: string, init: RequestInit = {}): Promise<Response> => {
+    const headers = new Headers(init.headers); // tolerate Headers | record | array forms
+    headers.set('cookie', cookie); // the captured super-admin session cookie ⇒ SessionCache.validate resolves it
+    return fetch(url(p), { ...init, headers });
+  };
+  const anonFetch = (p: string, init: RequestInit = {}): Promise<Response> => fetch(url(p), init);
+
+  return {
+    base,
+    close: server.close,
+    token,
+    sql,
+    engine,
+    registry,
+    fetch: authedFetch,
+    anonFetch,
+    signUp,
+    userIdOf,
+    grantRole,
+    sessionCache,
+    rbac,
+    applyEdit: server.applyEdit!,
+  };
+}

@@ -74,7 +74,7 @@ export interface Server {
   close(token: ListenToken): void;
   /**
    * S4: apply a files-first schema edit and make it LIVE in-process (write file + migrate + atomic engine
-   * swap), WITHOUT a restart. Present only when the Builder is wired (store + registry + `modulesDir`).
+   * swap), WITHOUT a restart. ALWAYS provided (every dep, incl. `modulesDir`, is now required).
    * Throws on a migrate failure (last-good keeps serving); a blocked/no-op edit returns without swapping.
    */
   applyEdit?(draft: ModuleDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult>;
@@ -348,27 +348,37 @@ function handleFilesRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, method: '
 }
 
 /**
- * Build a uWS server over `engine`. Construction is SEPARATE from listening so tests build the
- * server once and bind it to a free port chosen by the harness.
- *
- * Pass a {@link PostgresStore} AND a {@link Registry} to ENABLE WRITES: POST/PUT/DELETE commit to
- * Postgres and then rebuild ONLY the written type's RAM storage in place ({@link Engine.replaceType}),
- * invalidating ONLY that type's response cache (sibling types stay hot). The engine object itself is
- * NEVER reassigned on a write — only its per-type storage is swapped — so the read handlers' reference
- * stays valid. Without a store the server is read-only and a write falls to the core's 405.
+ * The full dependency bundle for {@link createServer}. EVERY field is REQUIRED except `publishClock`
+ * (which keeps a real wall-clock default inside createServer; D&P / i18n tests pin a fixed Date). The
+ * single production caller ({@link createConti}) and the test harness (`startTestServer`) both construct
+ * the complete bundle, so every capability is ALWAYS wired — the server is never built partial.
  */
-export function createServer(
-  engine: Engine,
-  store?: PostgresStore,
-  registry?: Registry,
-  publishClock: () => Date = () => new Date(),
-  auth?: Auth,
-  sessionCache?: SessionCache,
-  rbac?: RbacRegistry,
-  teamView?: TeamView,
-  hooks?: HookRegistry,
-  modulesDir?: string,
-): Server {
+export interface ServerDeps {
+  engine: Engine;
+  store: PostgresStore;
+  registry: Registry;
+  /** Optional: defaults to `() => new Date()` inside createServer. Pinned by D&P / i18n tests. */
+  publishClock?: () => Date;
+  auth: Auth;
+  sessionCache: SessionCache;
+  rbac: RbacRegistry;
+  teamView: TeamView;
+  hooks: HookRegistry;
+  modulesDir: string;
+}
+
+/**
+ * Build a uWS server over the supplied {@link ServerDeps}. Construction is SEPARATE from listening so
+ * tests build the server once and bind it to a free port chosen by the harness.
+ *
+ * Every dep is REQUIRED, so WRITES (POST/PUT/DELETE) always commit to Postgres and then rebuild ONLY the
+ * written type's RAM storage in place ({@link Engine.replaceType}), invalidating ONLY that type's response
+ * cache (sibling types stay hot). The engine object itself is NEVER reassigned on a write — only its
+ * per-type storage is swapped — so the read handlers' reference stays valid. READS are PUBLIC; only the
+ * WRITE / builder / media routes are gated by the wired RBAC.
+ */
+export function createServer(deps: ServerDeps): Server {
+  const { engine, store, registry, publishClock = () => new Date(), auth, sessionCache, rbac, teamView, hooks, modulesDir } = deps;
   const app = uWS.App();
   // S1 (Builder live-reload): the SINGLE mutable cell every schema-reading route closure reads through.
   // A schema edit (Builder route, S4) rebuilds a fresh Engine/Registry off-side and swaps these three
@@ -376,7 +386,7 @@ export function createServer(
   // half-swap. At construction it holds exactly the passed engine/registry/hooks ⇒ ZERO behavior change;
   // it exists so the swap has a place to land. The `live` OBJECT (not the values) is what later scopes
   // capture, so a reassignment of `live.engine` is seen everywhere.
-  const live: { engine: Engine; registry: Registry | undefined; hooks: HookRegistry | undefined } = { engine, registry, hooks };
+  const live: { engine: Engine; registry: Registry; hooks: HookRegistry } = { engine, registry, hooks };
 
   /**
    * be-09b/be-09c — the per-request AUTH context. `principal` comes ONLY from {@link SessionCache.validate}
@@ -396,14 +406,6 @@ export function createServer(
   }
 
   /**
-   * be-09b — gating is ACTIVE only when the security primitives are wired (production: server.ts passes both
-   * sessionCache + rbac). A server built WITHOUT them (read-only servers AND the test/bench write servers
-   * that predate auth) leaves the write/builder/media routes OPEN — exactly as before this slice — so no
-   * existing behavior regresses. Production ALWAYS wires both, so production is ALWAYS gated.
-   */
-  const authEnabled = sessionCache !== undefined && rbac !== undefined;
-
-  /**
    * be-09c — assemble an {@link AuthContext}. `can()` is where EFFECTIVE perms = owner RBAC ∩ token scope is
    * enforced: the owner MUST hold the perm (pure-RAM checkPermission) AND, on the key path, the scope must
    * include it (`scope === null` ⇒ a SESSION ⇒ no narrowing). better-auth's own `verifyApiKey` only checks
@@ -414,7 +416,6 @@ export function createServer(
       principal,
       can: (perm) =>
         principal !== null &&
-        rbac !== undefined &&
         rbac.checkPermission(principal, perm) && // owner MUST hold it (RAM, zero-PG)
         (scope === null || scope.has(perm)), // a token can only NARROW; null scope = session (no narrowing)
       via,
@@ -430,13 +431,13 @@ export function createServer(
    */
   async function resolveAuth(headers: Headers): Promise<AuthContext> {
     // SESSION PATH (cookie only).
-    if (readSessionToken(headers) !== null && sessionCache !== undefined) {
+    if (readSessionToken(headers) !== null) {
       const principal = await sessionCache.validate(headers);
       return makeCtx(principal, null, principal !== null ? 'session' : 'none');
     }
     // KEY PATH (x-api-key header only).
     const rawKey = headers.get('x-api-key');
-    if (rawKey !== null && rawKey.length > 0 && auth !== undefined) {
+    if (rawKey !== null && rawKey.length > 0) {
       const resolved = await resolveKey(auth, rawKey, teamView);
       if (resolved !== null) return makeCtx(resolved.principal, resolved.scope, 'key');
       return makeCtx(null, null, 'none');
@@ -471,9 +472,6 @@ export function createServer(
     req.forEach((k, v) => headers.set(k, v));
 
     const run = (body: Buffer | null, aborted: () => boolean): void => {
-      // Auth not wired (read-only / legacy write server) → the route is OPEN (no regression). Dispatch
-      // synchronously without ever touching resolveAuth.
-      if (!authEnabled) return proceed(body, aborted);
       void (async () => {
         let ctx: AuthContext;
         try {
@@ -502,8 +500,8 @@ export function createServer(
    * be-09f — GATE a `/_team` route and HAND THE RESOLVED PRINCIPAL to `proceed`. Identical 401/403 split as
    * {@link gate}, but the team handlers need the ACTOR's userId (resolved ONLY from the session — never the
    * body) to apply the privilege cap + self-guard. The principal passed here is the sole authz subject; the
-   * route/body `:userId` only ever designates the TARGET. Auth is ALWAYS enabled for these routes (they are
-   * mounted only when teamView + sessionCache + rbac are wired), so there is no open-route branch.
+   * route/body `:userId` only ever designates the TARGET. Auth is ALWAYS enabled (sessionCache + rbac +
+   * teamView are required deps), so there is no open-route branch.
    */
   function gateTeam(
     res: uWS.HttpResponse,
@@ -618,12 +616,9 @@ export function createServer(
     const tryFinish = (): void => {
       if (!bodyDone || !authDone) return;
       if (authFailed) return corkSend(res, () => aborted, errorResponse(500, 'internal error'));
-      // Auth not wired → open (no regression): skip the authz split entirely.
-      if (authEnabled) {
-        // Authz split FIRST — never even look at the (possibly oversized) body for an unauthorized caller.
-        if (ctx!.principal === null) return corkSend(res, () => aborted, errorResponse(401, 'unauthenticated'));
-        if (!ctx!.can('media.upload')) return corkSend(res, () => aborted, errorResponse(403, 'forbidden'));
-      }
+      // Authz split FIRST — never even look at the (possibly oversized) body for an unauthorized caller.
+      if (ctx!.principal === null) return corkSend(res, () => aborted, errorResponse(401, 'unauthenticated'));
+      if (!ctx!.can('media.upload')) return corkSend(res, () => aborted, errorResponse(403, 'forbidden'));
       if (body === null) return corkSend(res, () => aborted, errorResponse(413, 'upload too large'));
       proceed(body, () => aborted);
     };
@@ -642,20 +637,15 @@ export function createServer(
       }
     });
 
-    if (!authEnabled) {
+    void (async () => {
+      try {
+        ctx = await resolveAuth(headers);
+      } catch {
+        authFailed = true;
+      }
       authDone = true;
       tryFinish();
-    } else {
-      void (async () => {
-        try {
-          ctx = await resolveAuth(headers);
-        } catch {
-          authFailed = true;
-        }
-        authDone = true;
-        tryFinish();
-      })();
-    }
+    })();
   }
 
   /** be-09b — parse a pre-buffered JSON body (null => 413, empty => undefined, bad => 400-as-error). */
@@ -684,7 +674,6 @@ export function createServer(
    */
   function mediaRead(res: uWS.HttpResponse, method: string, path: string, type: string, query: string, locale: Locale): boolean {
     const reg = live.registry; // read the LIVE registry per-call so a post-swap type/field is seen
-    if (reg === undefined || store === undefined) return false;
     if (method.toUpperCase() !== 'GET') return false;
     const def = reg.get(type);
     if (def === undefined || (def.mediaFields.size === 0 && def.componentFields.size === 0)) return false;
@@ -754,16 +743,14 @@ export function createServer(
   // POST /sign-out, ...) PLUS an `any('/auth/*')` for the deeper paths (/sign-in/email, /sign-up/email,
   // /api-key/*), all funnelling through the one Fetch bridge. The leading literal `auth` also means a
   // module can never be named `auth` and shadow these in reverse; reads of OTHER types are
-  // byte-untouched. Mounted only when an auth instance is supplied (a read-only/test-only server omits it
-  // → /auth falls to the core's 404). This slice gates NOTHING — it only proxies the provider.
-  if (auth !== undefined) {
-    const onAuth = (res: uWS.HttpResponse, req: uWS.HttpRequest): void => handleAuthRoute(res, req, auth);
-    app.get('/auth/:p', onAuth);
-    app.post('/auth/:p', onAuth);
-    app.put('/auth/:p', onAuth);
-    app.del('/auth/:p', onAuth);
-    app.any('/auth/*', onAuth);
-  }
+  // byte-untouched. ALWAYS mounted (auth is a required dep). This slice gates NOTHING — it only proxies
+  // the provider.
+  const onAuth = (res: uWS.HttpResponse, req: uWS.HttpRequest): void => handleAuthRoute(res, req, auth);
+  app.get('/auth/:p', onAuth);
+  app.post('/auth/:p', onAuth);
+  app.put('/auth/:p', onAuth);
+  app.del('/auth/:p', onAuth);
+  app.any('/auth/*', onAuth);
 
   // LIST: /:type  — read everything off `req` synchronously, then delegate to the core.
   app.get('/:type', (res, req) => {
@@ -789,770 +776,762 @@ export function createServer(
     writeResponse(res, handleRequest(live.engine, { method, path: `/${type}/${id}`, query, locale }));
   });
 
-  // S4: the files-first Builder apply+swap, exposed on the returned server. Wired only when `modulesDir`
-  // is present (a read-only server leaves it undefined → no Builder routes register).
-  let applyEditFn: Server['applyEdit'];
+  // S4: the files-first Builder apply+swap, exposed on the returned server. `modulesDir` is required, so
+  // the Builder is ALWAYS wired and this is assigned unconditionally below, before the server handle returns.
+  let applyEditFn: NonNullable<Server['applyEdit']>;
 
-  // WRITES (only when a store + registry are supplied): commit to Postgres, then rebuild ONLY the
-  // written type's RAM storage in place (per-type rebuild + per-type cache invalidation).
-  if (store && registry) {
-    const ctx: WriteContext = {
-      engine: () => live.engine,
-      registry: () => live.registry!,
-      sql: store.sql,
-      rebuild: async (type: string) => {
-        // A DATA write never changes the schema, so re-stream the ALREADY-RESOLVED registry def — no
-        // meta re-query on the hot path (CL20). Only an actual schema mutation (addField/dropField/
-        // changeFieldType) must call registry.rebuildType to re-read content_types/content_type_fields;
-        // that is the future DDL hook, NOT this per-entry-write path. The def is guaranteed present: the
-        // write core resolved it via registry.get(type) before any SQL ran.
-        const def = live.registry!.get(type)!;
-        await rebuildType(store.sql, live.engine, def, live.registry!);
-      },
-      // Publish clock: real wall-clock by default; tests inject a fixed Date for deterministic fixtures.
-      publishClock,
-      // S4: read hooks through the LIVE cell (a getter, not a by-value capture) so a schema-edit swap that
-      // installs a new type's hooks.ts is seen by the write path immediately. Always present, possibly undefined.
-      get hooks() {
-        return live.hooks;
-      },
-    };
-    // S4 FILES-FIRST BUILDER — apply a whole-type edit + make it LIVE in-process (no restart). Wired only
-    // when `modulesDir` is present. applySchemaEdit writes the file + migrates atomically; on success the
-    // engine is rebuilt incrementally from the returned `next` IR and the live cell is swapped. A blocked /
-    // no-op edit does NOT swap; a migrate failure THROWS (last-good keeps serving).
-    if (modulesDir !== undefined) {
-      const dir = modulesDir;
-      const sql = store.sql;
-      // S6 per-server state: the on-disk catalog version (sha256) + the single-writer mutex flag. NEVER
-      // module-scope (two test servers must not share). Warm both best-effort at construction (createServer
-      // is sync, so cannot await); a defensive lazy recompute covers a request that races the warm.
-      let currentVersion = '';
-      let writerBusy = false;
-      // Ensure the on-demand bookkeeping tables EXACTLY ONCE per server (memoized) — never a fire-and-forget
-      // warm: a `CREATE TABLE IF NOT EXISTS` racing a concurrent one trips pg_type's unique index. Memoizing
-      // collapses concurrent first-callers onto one promise; the ensure helpers also swallow the race defensively.
-      let tablesReady: Promise<void> | undefined;
-      const ensureTables = (): Promise<void> =>
-        (tablesReady ??= (async () => { await ensureAppliedTable(sql); await ensureIdempotencyTable(sql); })());
-      const ensureVersion = async (): Promise<string> => {
-        if (currentVersion === '') currentVersion = await computeCatalogVersion(dir);
-        return currentVersion;
-      };
-      // Read the applied catalog, tolerating a not-yet-created _schema_applied (a GET before any apply).
-      const readApplied = async (): Promise<Awaited<ReturnType<typeof readAppliedSchemas>>> => {
+  // WRITES (store + registry are required deps): commit to Postgres, then rebuild ONLY the written
+  // type's RAM storage in place (per-type rebuild + per-type cache invalidation).
+  const ctx: WriteContext = {
+    engine: () => live.engine,
+    registry: () => live.registry,
+    sql: store.sql,
+    rebuild: async (type: string) => {
+      // A DATA write never changes the schema, so re-stream the ALREADY-RESOLVED registry def — no
+      // meta re-query on the hot path (CL20). Only an actual schema mutation (addField/dropField/
+      // changeFieldType) must call registry.rebuildType to re-read content_types/content_type_fields;
+      // that is the future DDL hook, NOT this per-entry-write path. The def is guaranteed present: the
+      // write core resolved it via registry.get(type) before any SQL ran.
+      const def = live.registry.get(type)!;
+      await rebuildType(store.sql, live.engine, def, live.registry);
+    },
+    // Publish clock: real wall-clock by default; tests inject a fixed Date for deterministic fixtures.
+    publishClock,
+    // S4: read hooks through the LIVE cell (a getter, not a by-value capture) so a schema-edit swap that
+    // installs a new type's hooks.ts is seen by the write path immediately. Always present (required dep).
+    get hooks() {
+      return live.hooks;
+    },
+  };
+  // S4 FILES-FIRST BUILDER — apply a whole-type edit + make it LIVE in-process (no restart). `modulesDir`
+  // is a required dep, so the Builder always wires. applySchemaEdit writes the file + migrates atomically; on success the
+  // engine is rebuilt incrementally from the returned `next` IR and the live cell is swapped. A blocked /
+  // no-op edit does NOT swap; a migrate failure THROWS (last-good keeps serving).
+  const dir = modulesDir;
+  const sql = store.sql;
+  // S6 per-server state: the on-disk catalog version (sha256) + the single-writer mutex flag. NEVER
+  // module-scope (two test servers must not share). Warm both best-effort at construction (createServer
+  // is sync, so cannot await); a defensive lazy recompute covers a request that races the warm.
+  let currentVersion = '';
+  let writerBusy = false;
+  // Ensure the on-demand bookkeeping tables EXACTLY ONCE per server (memoized) — never a fire-and-forget
+  // warm: a `CREATE TABLE IF NOT EXISTS` racing a concurrent one trips pg_type's unique index. Memoizing
+  // collapses concurrent first-callers onto one promise; the ensure helpers also swallow the race defensively.
+  let tablesReady: Promise<void> | undefined;
+  const ensureTables = (): Promise<void> =>
+    (tablesReady ??= (async () => { await ensureAppliedTable(sql); await ensureIdempotencyTable(sql); })());
+  const ensureVersion = async (): Promise<string> => {
+    if (currentVersion === '') currentVersion = await computeCatalogVersion(dir);
+    return currentVersion;
+  };
+  // Read the applied catalog, tolerating a not-yet-created _schema_applied (a GET before any apply).
+  const readApplied = async (): Promise<Awaited<ReturnType<typeof readAppliedSchemas>>> => {
+    await ensureTables();
+    return readAppliedSchemas(sql);
+  };
+
+  // The apply core (no mutex — the caller holds it). Re-loads hooks (a NEW type's hooks.ts is merged;
+  // ESM-cache invariant: an existing type's cached hooks.ts is correct; an out-of-band hooks.ts edit needs
+  // a restart), then swaps. A blocked / no-op result returns without swapping.
+  const swapAfter = async (result: SchemaEditResult): Promise<SchemaEditResult> => {
+    if (!result.ok || result.next === undefined || (result.applied?.length ?? 0) === 0) return result;
+    const { hooks: nextHooks } = await loadTypes(dir);
+    await swapFromIR(sql, live, result.next, result.applied!, new HookRegistry(nextHooks));
+    return result;
+  };
+  const runEdit = async (draft: ModuleDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult> =>
+    swapAfter(await applySchemaEdit(sql, dir, draft, opts ?? {}));
+  const runDelete = async (apiId: string): Promise<SchemaEditResult> => swapAfter(await applySchemaDelete(sql, dir, apiId));
+
+  // Programmatic entry (srv.applyEdit): serialize via the SAME mutex; a contended call THROWS (it cannot
+  // return a CoreResponse). The HTTP path calls runEdit DIRECTLY from inside its own held mutex (no double-acquire).
+  applyEditFn = async (draft, opts) => {
+    if (writerBusy) throw new BuilderBusyError('builder busy');
+    writerBusy = true;
+    try { return await runEdit(draft, opts); } finally { writerBusy = false; }
+  };
+
+  // The success envelope FIELDS (also the stored idempotency body). `applied`/`blocked` always present.
+  const successFields = (r: SchemaEditResult): Record<string, unknown> =>
+    ({ ok: true, version: currentVersion, applied: r.applied ?? [], blocked: [], live: true, ...(r.schema !== undefined ? { schema: r.schema } : {}) });
+
+  // The shared mutating flow (PUT/DELETE): acquire-FIRST (zero awaits before set) → version precheck →
+  // idempotency lookup/replay → exec → recompute version → record idempotency → envelope. Release in finally.
+  const runMutation = (
+    res: uWS.HttpResponse, aborted: () => boolean,
+    pre: { ifMatch: string; bodyVersion: string | undefined; idemKey: string; requestHash: string },
+    exec: () => Promise<SchemaEditResult>,
+    locale: Locale,
+  ): void => {
+    void (async () => {
+      if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
+      writerBusy = true;
+      try {
         await ensureTables();
-        return readAppliedSchemas(sql);
-      };
+        // Idempotency replay FIRST (before the version precheck): a lost-response retry resends the
+        // ORIGINAL If-Match, so checking the version first would 412 a request whose result we already have.
+        // A keyed replay is unconditional — it returns the stored outcome regardless of the current version.
+        if (pre.idemKey !== '') {
+          await pruneIdempotency(sql).catch(() => {});
+          const hit = await idempotencyLookup(sql, pre.idemKey);
+          if (hit !== undefined) {
+            if (hit.requestHash !== pre.requestHash) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'idempotency key reused for a different request' }));
+            const etag = hit.status === 200 ? { ETag: String((hit.response as { version?: string }).version ?? '') } : undefined;
+            return corkSend(res, aborted, builderJson(hit.status, hit.response, etag));
+          }
+        }
+        await ensureVersion();
+        const expected = pre.ifMatch !== '' ? pre.ifMatch : pre.bodyVersion;
+        if (expected !== currentVersion) return corkSend(res, aborted, builderJson(412, { ok: false, error: 'stale version', currentVersion }, { ETag: currentVersion }));
+        let r: SchemaEditResult;
+        try {
+          r = await exec();
+        } catch (e) {
+          if (pre.idemKey !== '') {
+            const { status, fields } = builderErrorFields(e, locale);
+            if (status >= 400 && status < 500 && !(e instanceof SchemaChangeConflictError)) await recordIdempotency(sql, pre.idemKey, pre.requestHash, status, fields).catch(() => {});
+          }
+          throw e;
+        }
+        if (!r.ok) { // blocked: requires allowDestructive (deterministic terminal → 409, idempotent)
+          const fields = { ok: false, applied: [], blocked: r.blocked ?? [], error: 'requires allowDestructive' };
+          if (pre.idemKey !== '') await recordIdempotency(sql, pre.idemKey, pre.requestHash, 409, fields).catch(() => {});
+          return corkSend(res, aborted, builderJson(409, fields));
+        }
+        if ((r.applied?.length ?? 0) > 0) currentVersion = await computeCatalogVersion(dir); // skip on no-op
+        const fields = successFields(r);
+        if (pre.idemKey !== '') await recordIdempotency(sql, pre.idemKey, pre.requestHash, 200, fields).catch(() => {});
+        corkSend(res, aborted, builderJson(200, fields, { ETag: currentVersion }));
+      } catch (e) {
+        corkSend(res, aborted, builderError(e, locale)); // SchemaChangeConflictError → 409+Retry-After
+      } finally {
+        writerBusy = false; // runs on EVERY path incl client abort; the 409-busy loser never entered this try
+      }
+    })();
+  };
 
-      // The apply core (no mutex — the caller holds it). Re-loads hooks (a NEW type's hooks.ts is merged;
-      // ESM-cache invariant: an existing type's cached hooks.ts is correct; an out-of-band hooks.ts edit needs
-      // a restart), then swaps. A blocked / no-op result returns without swapping.
-      const swapAfter = async (result: SchemaEditResult): Promise<SchemaEditResult> => {
-        if (!result.ok || result.next === undefined || (result.applied?.length ?? 0) === 0) return result;
-        const { hooks: nextHooks } = await loadTypes(dir);
-        await swapFromIR(sql, live, result.next, result.applied!, new HookRegistry(nextHooks));
-        return result;
-      };
-      const runEdit = async (draft: ModuleDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult> =>
-        swapAfter(await applySchemaEdit(sql, dir, draft, opts ?? {}));
-      const runDelete = async (apiId: string): Promise<SchemaEditResult> => swapAfter(await applySchemaDelete(sql, dir, apiId));
+  // ---- BUILDER ROUTE SURFACE (design §1). GET reads are PUBLIC; mutations gated on builder.manage. ----
 
-      // Programmatic entry (srv.applyEdit): serialize via the SAME mutex; a contended call THROWS (it cannot
-      // return a CoreResponse). The HTTP path calls runEdit DIRECTLY from inside its own held mutex (no double-acquire).
-      applyEditFn = async (draft, opts) => {
-        if (writerBusy) throw new BuilderBusyError('builder busy');
+  // GET list — applied catalog (with ids) + ETag/304.
+  app.get('/builder/modules', (res, req) => {
+    const inm = req.getHeader('if-none-match');
+    let aborted = false;
+    res.onAborted(() => { aborted = true; });
+    void (async () => {
+      try {
+        await ensureVersion();
+        if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
+        const schemas = await readApplied();
+        corkSend(res, () => aborted, builderJson(200, { ok: true, schemas, version: currentVersion }, { ETag: currentVersion }));
+      } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
+    })();
+  });
+
+  // GET one — 404 when absent; else the single schema WITH ids + ETag/304.
+  app.get('/builder/modules/:apiId', (res, req) => {
+    const apiId = req.getParameter(0) ?? '';
+    const inm = req.getHeader('if-none-match');
+    let aborted = false;
+    res.onAborted(() => { aborted = true; });
+    void (async () => {
+      try {
+        await ensureVersion();
+        const schema = (await readApplied()).find((s) => s.apiId === apiId);
+        if (schema === undefined) return corkSend(res, () => aborted, builderJson(404, { ok: false, error: `module "${apiId}" does not exist` }));
+        if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
+        corkSend(res, () => aborted, builderJson(200, { ok: true, schema, version: currentVersion }, { ETag: currentVersion }));
+      } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
+    })();
+  });
+
+  // POST preview — dry-run (no write/migrate/swap), no mutex/version. GATED.
+  app.post('/builder/modules/:apiId/preview', (res, req) => {
+    const apiId = req.getParameter(0) ?? '';
+    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
+    gate(res, req, 'builder.manage', true, (raw, aborted) => {
+      const parsed = parseBody(raw);
+      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+      const body = parsed.body as { allowDestructive?: boolean } & ModuleDraft;
+      if (body.apiId !== apiId) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.apiId must equal the path apiId' }));
+      void (async () => {
+        let result: CoreResponse;
+        try {
+          const p = await previewSchemaEdit(sql, body, { allowDestructive: body.allowDestructive === true });
+          result = builderJson(200, { ok: p.ok, applied: p.changes, blocked: p.blocked, schema: p.schema, generatedSource: p.generatedSource });
+        } catch (e) { result = builderError(e, locale); }
+        corkSend(res, aborted, result);
+      })();
+    });
+  });
+
+  // PUT upsert — create / update / apiId-rename. GATED + mutex + If-Match/version + idempotency.
+  app.put('/builder/modules/:apiId', (res, req) => {
+    const apiId = req.getParameter(0) ?? '';
+    const ifMatch = req.getHeader('if-match'); // '' when absent (uWS; lowercase key)
+    const idemKey = req.getHeader('idempotency-key');
+    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
+    gate(res, req, 'builder.manage', true, (raw, aborted) => {
+      const parsed = parseBody(raw);
+      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+      const body = parsed.body as { allowDestructive?: boolean; version?: string } & ModuleDraft;
+      if (body.apiId !== apiId) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.apiId must equal the path apiId' }));
+      if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
+      const { allowDestructive, version: _v, ...meaningful } = body;
+      const requestHash = hashRequest({ m: 'PUT', apiId, body: meaningful });
+      runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash },
+        () => runEdit(body, { allowDestructive: allowDestructive === true }), locale);
+    });
+  });
+
+  // DELETE — drop a whole type (always destructive → require allowDestructive). GATED + same wrap.
+  app.del('/builder/modules/:apiId', (res, req) => {
+    const apiId = req.getParameter(0) ?? '';
+    const ifMatch = req.getHeader('if-match');
+    const idemKey = req.getHeader('idempotency-key');
+    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
+    gate(res, req, 'builder.manage', true, (raw, aborted) => {
+      const parsed = parseBody(raw);
+      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+      const body = parsed.body as { allowDestructive?: boolean; version?: string };
+      if (body.allowDestructive !== true) return corkSend(res, aborted, builderJson(409, { ok: false, applied: [], blocked: [], error: 'requires allowDestructive' }));
+      if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
+      const requestHash = hashRequest({ m: 'DELETE', apiId });
+      runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash }, () => runDelete(apiId), locale);
+    });
+  });
+
+  // POST reload — operator escape hatch: cache-busted re-import + swap (registry/hooks/relations), NO
+  // migrate; advances the version so a pre-reload PUT carrying the old version fails 412. GATED + mutex.
+  app.post('/builder/reload', (res, req) => {
+    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
+    gate(res, req, 'builder.manage', false, (_raw, aborted) => {
+      void (async () => {
+        if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
         writerBusy = true;
-        try { return await runEdit(draft, opts); } finally { writerBusy = false; }
-      };
-
-      // The success envelope FIELDS (also the stored idempotency body). `applied`/`blocked` always present.
-      const successFields = (r: SchemaEditResult): Record<string, unknown> =>
-        ({ ok: true, version: currentVersion, applied: r.applied ?? [], blocked: [], live: true, ...(r.schema !== undefined ? { schema: r.schema } : {}) });
-
-      // The shared mutating flow (PUT/DELETE): acquire-FIRST (zero awaits before set) → version precheck →
-      // idempotency lookup/replay → exec → recompute version → record idempotency → envelope. Release in finally.
-      const runMutation = (
-        res: uWS.HttpResponse, aborted: () => boolean,
-        pre: { ifMatch: string; bodyVersion: string | undefined; idemKey: string; requestHash: string },
-        exec: () => Promise<SchemaEditResult>,
-        locale: Locale,
-      ): void => {
-        void (async () => {
-          if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
-          writerBusy = true;
-          try {
-            await ensureTables();
-            // Idempotency replay FIRST (before the version precheck): a lost-response retry resends the
-            // ORIGINAL If-Match, so checking the version first would 412 a request whose result we already have.
-            // A keyed replay is unconditional — it returns the stored outcome regardless of the current version.
-            if (pre.idemKey !== '') {
-              await pruneIdempotency(sql).catch(() => {});
-              const hit = await idempotencyLookup(sql, pre.idemKey);
-              if (hit !== undefined) {
-                if (hit.requestHash !== pre.requestHash) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'idempotency key reused for a different request' }));
-                const etag = hit.status === 200 ? { ETag: String((hit.response as { version?: string }).version ?? '') } : undefined;
-                return corkSend(res, aborted, builderJson(hit.status, hit.response, etag));
-              }
-            }
-            await ensureVersion();
-            const expected = pre.ifMatch !== '' ? pre.ifMatch : pre.bodyVersion;
-            if (expected !== currentVersion) return corkSend(res, aborted, builderJson(412, { ok: false, error: 'stale version', currentVersion }, { ETag: currentVersion }));
-            let r: SchemaEditResult;
-            try {
-              r = await exec();
-            } catch (e) {
-              if (pre.idemKey !== '') {
-                const { status, fields } = builderErrorFields(e, locale);
-                if (status >= 400 && status < 500 && !(e instanceof SchemaChangeConflictError)) await recordIdempotency(sql, pre.idemKey, pre.requestHash, status, fields).catch(() => {});
-              }
-              throw e;
-            }
-            if (!r.ok) { // blocked: requires allowDestructive (deterministic terminal → 409, idempotent)
-              const fields = { ok: false, applied: [], blocked: r.blocked ?? [], error: 'requires allowDestructive' };
-              if (pre.idemKey !== '') await recordIdempotency(sql, pre.idemKey, pre.requestHash, 409, fields).catch(() => {});
-              return corkSend(res, aborted, builderJson(409, fields));
-            }
-            if ((r.applied?.length ?? 0) > 0) currentVersion = await computeCatalogVersion(dir); // skip on no-op
-            const fields = successFields(r);
-            if (pre.idemKey !== '') await recordIdempotency(sql, pre.idemKey, pre.requestHash, 200, fields).catch(() => {});
-            corkSend(res, aborted, builderJson(200, fields, { ETag: currentVersion }));
-          } catch (e) {
-            corkSend(res, aborted, builderError(e, locale)); // SchemaChangeConflictError → 409+Retry-After
-          } finally {
-            writerBusy = false; // runs on EVERY path incl client abort; the 409-busy loser never entered this try
-          }
-        })();
-      };
-
-      // ---- BUILDER ROUTE SURFACE (design §1). GET reads are PUBLIC; mutations gated on builder.manage. ----
-
-      // GET list — applied catalog (with ids) + ETag/304.
-      app.get('/builder/modules', (res, req) => {
-        const inm = req.getHeader('if-none-match');
-        let aborted = false;
-        res.onAborted(() => { aborted = true; });
-        void (async () => {
-          try {
-            await ensureVersion();
-            if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
-            const schemas = await readApplied();
-            corkSend(res, () => aborted, builderJson(200, { ok: true, schemas, version: currentVersion }, { ETag: currentVersion }));
-          } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
-        })();
-      });
-
-      // GET one — 404 when absent; else the single schema WITH ids + ETag/304.
-      app.get('/builder/modules/:apiId', (res, req) => {
-        const apiId = req.getParameter(0) ?? '';
-        const inm = req.getHeader('if-none-match');
-        let aborted = false;
-        res.onAborted(() => { aborted = true; });
-        void (async () => {
-          try {
-            await ensureVersion();
-            const schema = (await readApplied()).find((s) => s.apiId === apiId);
-            if (schema === undefined) return corkSend(res, () => aborted, builderJson(404, { ok: false, error: `module "${apiId}" does not exist` }));
-            if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
-            corkSend(res, () => aborted, builderJson(200, { ok: true, schema, version: currentVersion }, { ETag: currentVersion }));
-          } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
-        })();
-      });
-
-      // POST preview — dry-run (no write/migrate/swap), no mutex/version. GATED.
-      app.post('/builder/modules/:apiId/preview', (res, req) => {
-        const apiId = req.getParameter(0) ?? '';
-        const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-        gate(res, req, 'builder.manage', true, (raw, aborted) => {
-          const parsed = parseBody(raw);
-          if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-          const body = parsed.body as { allowDestructive?: boolean } & ModuleDraft;
-          if (body.apiId !== apiId) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.apiId must equal the path apiId' }));
-          void (async () => {
-            let result: CoreResponse;
-            try {
-              const p = await previewSchemaEdit(sql, body, { allowDestructive: body.allowDestructive === true });
-              result = builderJson(200, { ok: p.ok, applied: p.changes, blocked: p.blocked, schema: p.schema, generatedSource: p.generatedSource });
-            } catch (e) { result = builderError(e, locale); }
-            corkSend(res, aborted, result);
-          })();
-        });
-      });
-
-      // PUT upsert — create / update / apiId-rename. GATED + mutex + If-Match/version + idempotency.
-      app.put('/builder/modules/:apiId', (res, req) => {
-        const apiId = req.getParameter(0) ?? '';
-        const ifMatch = req.getHeader('if-match'); // '' when absent (uWS; lowercase key)
-        const idemKey = req.getHeader('idempotency-key');
-        const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-        gate(res, req, 'builder.manage', true, (raw, aborted) => {
-          const parsed = parseBody(raw);
-          if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-          const body = parsed.body as { allowDestructive?: boolean; version?: string } & ModuleDraft;
-          if (body.apiId !== apiId) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.apiId must equal the path apiId' }));
-          if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
-          const { allowDestructive, version: _v, ...meaningful } = body;
-          const requestHash = hashRequest({ m: 'PUT', apiId, body: meaningful });
-          runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash },
-            () => runEdit(body, { allowDestructive: allowDestructive === true }), locale);
-        });
-      });
-
-      // DELETE — drop a whole type (always destructive → require allowDestructive). GATED + same wrap.
-      app.del('/builder/modules/:apiId', (res, req) => {
-        const apiId = req.getParameter(0) ?? '';
-        const ifMatch = req.getHeader('if-match');
-        const idemKey = req.getHeader('idempotency-key');
-        const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-        gate(res, req, 'builder.manage', true, (raw, aborted) => {
-          const parsed = parseBody(raw);
-          if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-          const body = parsed.body as { allowDestructive?: boolean; version?: string };
-          if (body.allowDestructive !== true) return corkSend(res, aborted, builderJson(409, { ok: false, applied: [], blocked: [], error: 'requires allowDestructive' }));
-          if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
-          const requestHash = hashRequest({ m: 'DELETE', apiId });
-          runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash }, () => runDelete(apiId), locale);
-        });
-      });
-
-      // POST reload — operator escape hatch: cache-busted re-import + swap (registry/hooks/relations), NO
-      // migrate; advances the version so a pre-reload PUT carrying the old version fails 412. GATED + mutex.
-      app.post('/builder/reload', (res, req) => {
-        const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-        gate(res, req, 'builder.manage', false, (_raw, aborted) => {
-          void (async () => {
-            if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
-            writerBusy = true;
-            try {
-              const { schemas, hooks } = await loadTypesCacheBusted(dir, `reload:${process.pid}:${Date.now()}`);
-              await swapFromIR(sql, live, schemas, [], new HookRegistry(hooks)); // applied=[] → swaps registry/hooks/relations, no per-type rebuild
-              currentVersion = await computeCatalogVersion(dir);
-              corkSend(res, aborted, builderJson(200, { ok: true, version: currentVersion }, { ETag: currentVersion }));
-            } catch (e) { corkSend(res, aborted, builderError(e, locale)); }
-            finally { writerBusy = false; }
-          })();
-        });
-      });
-    }
-
-    // be-09b — GATED data writes. The verb→perm map is fixed at the registration site (POST=create,
-    // PUT=update, DELETE=delete); the same can(perm) fronts every verb so no method gets a weaker check.
-    // Params captured sync BEFORE gate; body buffered by gate; parse + core dispatch on success.
-
-    // Draft & Publish action sub-route (`content.publish`). 3 segments — structurally distinct from the
-    // 2-segment data routes (ordering irrelevant: uWS matches by segment count + literals).
-    app.post('/:type/:id/actions/:action', (res, req) => {
-      const type = req.getParameter(0) ?? '';
-      const idRaw = req.getParameter(1) ?? '';
-      const actionRaw = req.getParameter(2) ?? '';
-      const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-      gate(res, req, 'content.publish', true, (_raw, aborted) => {
-        void (async () => {
-          if (actionRaw !== 'publish' && actionRaw !== 'unpublish') {
-            return corkSend(res, aborted, errorResponse(404, 'not found'));
-          }
-          let result: CoreResponse;
-          try {
-            result = await handleWrite(ctx, { method: 'POST', type, idRaw, body: undefined, action: actionRaw, locale });
-          } catch {
-            result = errorResponse(500, 'internal error');
-          }
-          corkSend(res, aborted, result);
-        })();
-      });
-    });
-    // i18n variant create: POST /:type/:id/locales/:locale (`content.create`). 4 segments; literal
-    // `locales` distinguishes it from `/actions/:action`.
-    app.post('/:type/:id/locales/:locale', (res, req) => {
-      const type = req.getParameter(0) ?? '';
-      const idRaw = req.getParameter(1) ?? '';
-      const variantLocale = req.getParameter(2) ?? '';
-      const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // UI error locale (header), distinct from the variantLocale data slug
-      gate(res, req, 'content.create', true, (raw, aborted) => {
-        const parsed = parseBody(raw);
-        if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-        void (async () => {
-          let result: CoreResponse;
-          try {
-            result = await handleWrite(ctx, { method: 'POST', type, idRaw, body: parsed.body, variantLocale, locale });
-          } catch {
-            result = errorResponse(500, 'internal error');
-          }
-          corkSend(res, aborted, result);
-        })();
-      });
-    });
-    const dataWrite = (method: string, perm: string, hasId: boolean) => (res: uWS.HttpResponse, req: uWS.HttpRequest): void => {
-      const type = req.getParameter(0) ?? '';
-      const idRaw = hasId ? (req.getParameter(1) ?? '') : '';
-      const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-      gate(res, req, perm, true, (raw, aborted) => {
-        const parsed = parseBody(raw);
-        if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-        void (async () => {
-          let result: CoreResponse;
-          try {
-            result = await handleWrite(ctx, { method, type, idRaw, body: parsed.body, locale });
-          } catch {
-            result = errorResponse(500, 'internal error');
-          }
-          corkSend(res, aborted, result);
-        })();
-      });
-    };
-    app.post('/:type', dataWrite('POST', 'content.create', false));
-    app.put('/:type/:id', dataWrite('PUT', 'content.update', true));
-    app.del('/:type/:id', dataWrite('DELETE', 'content.delete', true));
-
-    // be-04 MEDIA — asset endpoints under the `/_files` literal prefix. A leading underscore is illegal
-    // in an api_id (validateFieldName / deriveTableName), so `_files` can NEVER collide with a real
-    // `/:type`; uWS also matches a static segment over a `:param`. The UPLOAD (POST) + DELETE are GATED on
-    // `media.upload`; the GET reads stay PUBLIC.
-    const fileCtx: FileContext = { sql: store.sql, provider: getStorageProvider() };
-    // GATED upload (`media.upload`): read the content-type header SYNC (multipart boundary), buffer the
-    // body (up to uploadMaxBytes) while resolving auth in parallel via gateUpload, then on allow parse the
-    // buffered multipart through busboy and dispatch the core.
-    app.post('/_files/upload', (res, req) => {
-      const contentType = req.getHeader('content-type') ?? '';
-      gateUpload(res, req, contentType, (raw, aborted) => {
-        parseMultipartBuffer(contentType, raw, (parsed) => {
-          void (async () => {
-            if (!parsed.ok) return corkSend(res, aborted, errorResponse(parsed.status, parsed.message));
-            let result: CoreResponse;
-            try {
-              result = await handleUpload(fileCtx, parsed.upload);
-            } catch {
-              result = errorResponse(500, 'internal error');
-            }
-            corkSend(res, aborted, result);
-          })();
-        });
-      });
-    });
-    app.get('/_files', (res, req) => handleFilesRoute(res, req, 'GET', false, fileCtx));
-    app.get('/_files/:id', (res, req) => handleFilesRoute(res, req, 'GET', true, fileCtx));
-    // GATED delete (`media.upload`): a delete is a mutation. Capture the id sync, gate (bodyless), dispatch.
-    app.del('/_files/:id', (res, req) => {
-      const idRaw = req.getParameter(0) ?? '';
-      gate(res, req, 'media.upload', false, (_raw, aborted) => {
-        void (async () => {
-          let result: CoreResponse;
-          try {
-            if (!/^(0|[1-9]\d*)$/.test(idRaw)) result = errorResponse(404, 'not found');
-            else result = await handleDeleteFile(fileCtx, Number(idRaw));
-          } catch {
-            result = errorResponse(500, 'internal error');
-          }
-          corkSend(res, aborted, result);
-        })();
-      });
-    });
-
-    // be-09c — API-TOKEN management routes under the `/_keys` literal prefix (a leading `_` is illegal in an
-    // api_id → it can NEVER shadow `/:type`; same precedent as `_files`/`_team`). Mounted only when auth +
-    // rbac are wired. ALL self routes (create/list/revoke-own) are SESSION-ONLY (gateKeys rejects ctx.via ===
-    // 'key' so a key can never mint/revoke keys → no self-escalation). Owner is ALWAYS principal.userId — a
-    // body `userId` is NEVER trusted (and is schema-server-only upstream → CVE-2025-61928 neutralized). The
-    // raw secret is returned EXACTLY ONCE at create (corkSendNoStore, no-store, never logged); list/revoke
-    // never echo it. Cross-user create/revoke require `token.manage`.
-    if (auth !== undefined && rbac !== undefined) {
-      const keysAuth = auth;
-      const keysRbac = rbac;
-      const keysSql = store.sql;
-
-      const readJsonBodyKeys = (raw: Buffer | null): { ok: true; body: Record<string, unknown> } | { ok: false; error: CoreResponse } => {
-        if (raw === null) return { ok: false, error: errorResponse(413, 'request body too large') };
-        if (raw.length === 0) return { ok: true, body: {} };
         try {
-          const parsed: unknown = JSON.parse(raw.toString('utf8'));
-          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-            return { ok: false, error: errorResponse(400, 'invalid JSON body') };
-          }
-          return { ok: true, body: parsed as Record<string, unknown> };
-        } catch {
-          return { ok: false, error: errorResponse(400, 'invalid JSON body') };
+          const { schemas, hooks } = await loadTypesCacheBusted(dir, `reload:${process.pid}:${Date.now()}`);
+          await swapFromIR(sql, live, schemas, [], new HookRegistry(hooks)); // applied=[] → swaps registry/hooks/relations, no per-type rebuild
+          currentVersion = await computeCatalogVersion(dir);
+          corkSend(res, aborted, builderJson(200, { ok: true, version: currentVersion }, { ETag: currentVersion }));
+        } catch (e) { corkSend(res, aborted, builderError(e, locale)); }
+        finally { writerBusy = false; }
+      })();
+    });
+  });
+
+  // be-09b — GATED data writes. The verb→perm map is fixed at the registration site (POST=create,
+  // PUT=update, DELETE=delete); the same can(perm) fronts every verb so no method gets a weaker check.
+  // Params captured sync BEFORE gate; body buffered by gate; parse + core dispatch on success.
+
+  // Draft & Publish action sub-route (`content.publish`). 3 segments — structurally distinct from the
+  // 2-segment data routes (ordering irrelevant: uWS matches by segment count + literals).
+  app.post('/:type/:id/actions/:action', (res, req) => {
+    const type = req.getParameter(0) ?? '';
+    const idRaw = req.getParameter(1) ?? '';
+    const actionRaw = req.getParameter(2) ?? '';
+    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
+    gate(res, req, 'content.publish', true, (_raw, aborted) => {
+      void (async () => {
+        if (actionRaw !== 'publish' && actionRaw !== 'unpublish') {
+          return corkSend(res, aborted, errorResponse(404, 'not found'));
         }
-      };
-
-      // Project a created/listed key row to the SAFE shape — NEVER the secret (`key`). The plugin already
-      // strips `key` from list/verify; this projection is the SECOND wall. The raw secret (`createResult.key`)
-      // is included ONLY by the create route, exactly once.
-      const projectKey = (k: Record<string, unknown>): Record<string, unknown> => ({
-        id: k.id,
-        name: k.name ?? null,
-        prefix: k.prefix ?? null,
-        start: k.start ?? null,
-        expiresAt: k.expiresAt ?? null,
-        lastRequest: k.lastRequest ?? null,
-        enabled: k.enabled ?? null,
-        permissions: k.permissions ?? null,
-        metadata: k.metadata ?? null,
-        createdAt: k.createdAt ?? null,
-      });
-
-      // Validate the optional create inputs off a parsed body. `permissions` is the REQUESTED scope (a flat
-      // array of CMS perm actions); every requested action MUST be in the OWNER's resolved RBAC set (a key
-      // may not be MINTED with a scope its owner lacks — the runtime ∩ denies anyway, but failing at create
-      // is honest and avoids a misleading "valid" key). Absent permissions ⇒ a no-scope key (grants nothing).
-      type CreateInput =
-        | { ok: true; name: string | undefined; prefix: string | undefined; expiresIn: number | undefined; scope: string[]; metadata: Record<string, unknown> | undefined }
-        | { ok: false; error: CoreResponse };
-      const parseCreateInput = (body: Record<string, unknown>, ownerId: string): CreateInput => {
-        const name = typeof body.name === 'string' ? body.name : undefined;
-        const prefix = typeof body.prefix === 'string' ? body.prefix : undefined;
-        let expiresIn: number | undefined;
-        if (body.expiresIn !== undefined) {
-          if (typeof body.expiresIn !== 'number' || !Number.isFinite(body.expiresIn) || body.expiresIn < 1) {
-            return { ok: false, error: errorResponse(400, 'expiresIn must be a positive number of seconds') };
-          }
-          expiresIn = body.expiresIn;
-        }
-        let scope: string[] = [];
-        if (body.permissions !== undefined) {
-          if (!Array.isArray(body.permissions) || body.permissions.some((a) => typeof a !== 'string')) {
-            return { ok: false, error: errorResponse(400, 'permissions must be an array of action strings') };
-          }
-          scope = body.permissions as string[];
-        }
-        const owned = keysRbac.permissionsOf(ownerId);
-        const exceeds = scope.filter((a) => !owned.has(a));
-        if (exceeds.length > 0) {
-          return { ok: false, error: errorResponse(400, `scope exceeds owner permissions: ${exceeds.join(', ')}`) };
-        }
-        let metadata: Record<string, unknown> | undefined;
-        if (body.metadata !== undefined) {
-          if (typeof body.metadata !== 'object' || body.metadata === null || Array.isArray(body.metadata)) {
-            return { ok: false, error: errorResponse(400, 'metadata must be an object') };
-          }
-          metadata = body.metadata as Record<string, unknown>;
-        }
-        return { ok: true, name, prefix, expiresIn, scope, metadata };
-      };
-
-      // Map a thrown error to a CoreResponse: a better-auth plugin validation error (an APIError with a 4xx
-      // `statusCode`, e.g. EXPIRES_IN_IS_TOO_SMALL / INVALID prefix) surfaces as an HONEST 400 with the
-      // plugin's message; anything else is an opaque 500. The raw secret is NEVER in an error path.
-      const keyError = (err: unknown): CoreResponse => {
-        const status = (err as { statusCode?: unknown })?.statusCode;
-        const body = (err as { body?: { message?: unknown } })?.body;
-        if (typeof status === 'number' && status >= 400 && status < 500) {
-          const msg = typeof body?.message === 'string' ? body.message : 'invalid request';
-          return errorResponse(400, msg);
-        }
-        return errorResponse(500, 'internal error');
-      };
-
-      // Mint a key for `ownerId`. SERVER call (NO headers) so `permissions` + `userId` are accepted (they are
-      // server-only on a client request) — the owner is derived by US, never proxied from a client body. The
-      // raw secret is returned ONCE; only non-secret fields are logged (none logged here — no log on this path).
-      const mintKey = async (ownerId: string, input: Extract<CreateInput, { ok: true }>): Promise<Record<string, unknown>> => {
-        const created = await keysAuth.api.createApiKey({
-          body: {
-            userId: ownerId,
-            name: input.name,
-            prefix: input.prefix,
-            expiresIn: input.expiresIn,
-            permissions: buildScopePermissions(input.scope),
-            ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-          },
-        });
-        return created as unknown as Record<string, unknown>;
-      };
-
-      // POST /_keys — create a key for SELF (session-only). owner = principal.userId. Returns the raw secret
-      // EXACTLY ONCE (the `key` field of the create result), projected alongside the safe metadata.
-      app.post('/_keys', (res, req) => {
-        gateKeys(res, req, true, (authCtx, _headers, raw, aborted) => {
-          if (authCtx.via !== 'session') return corkSendNoStore(res, aborted, 403, { error: 'key management requires a session' });
-          const parsed = readJsonBodyKeys(raw);
-          if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-          const ownerId = authCtx.principal!.userId;
-          const input = parseCreateInput(parsed.body, ownerId);
-          if (!input.ok) return corkSend(res, aborted, input.error);
-          void (async () => {
-            try {
-              const created = await mintKey(ownerId, input);
-              // The raw secret (`created.key`) is surfaced ONCE here; everything else is the safe projection.
-              corkSendNoStore(res, aborted, 200, { data: { ...projectKey(created), key: created.key } });
-            } catch (err) {
-              corkSend(res, aborted, keyError(err));
-            }
-          })();
-        });
-      });
-
-      // POST /_keys/for/:userId — create a key for ANOTHER user (gated `token.manage`). owner = the route
-      // `:userId`; the scope-vs-owner check uses the TARGET's resolved RBAC set. Session-only (no key may
-      // drive a cross-user mint).
-      app.post('/_keys/for/:userId', (res, req) => {
-        const targetId = req.getParameter(0) ?? '';
-        gateKeys(res, req, true, (authCtx, _headers, raw, aborted) => {
-          if (authCtx.via !== 'session') return corkSendNoStore(res, aborted, 403, { error: 'key management requires a session' });
-          if (!authCtx.can('token.manage')) return corkSend(res, aborted, errorResponse(403, 'forbidden'));
-          const parsed = readJsonBodyKeys(raw);
-          if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-          if (targetId.length === 0) return corkSend(res, aborted, errorResponse(400, 'userId is required'));
-          const input = parseCreateInput(parsed.body, targetId);
-          if (!input.ok) return corkSend(res, aborted, input.error);
-          void (async () => {
-            try {
-              const exists = await keysSql`SELECT 1 FROM "user" WHERE id = ${targetId}`;
-              if (exists.length === 0) return corkSendNoStore(res, aborted, 404, { error: 'user not found' });
-              const created = await mintKey(targetId, input);
-              corkSendNoStore(res, aborted, 200, { data: { ...projectKey(created), key: created.key } });
-            } catch (err) {
-              corkSend(res, aborted, keyError(err));
-            }
-          })();
-        });
-      });
-
-      // GET /_keys — list MY keys (session-only, own-only). `listApiKeys` returns the owner's keys with the
-      // secret structurally absent; we project to the safe shape (NEVER `key`) as the second wall.
-      app.get('/_keys', (res, req) => {
-        gateKeys(res, req, false, (authCtx, headers, _body, aborted) => {
-          if (authCtx.via !== 'session') return corkSendNoStore(res, aborted, 403, { error: 'key management requires a session' });
-          void (async () => {
-            try {
-              // listApiKeys returns `{ apiKeys, total, limit, offset }` — the secret is already stripped.
-              const result = (await keysAuth.api.listApiKeys({ headers })) as unknown as { apiKeys: Record<string, unknown>[] };
-              const data = result.apiKeys.map(projectKey);
-              corkSendNoStore(res, aborted, 200, { data });
-            } catch {
-              corkSend(res, aborted, errorResponse(500, 'internal error'));
-            }
-          })();
-        });
-      });
-
-      // DELETE /_keys/:id — REVOKE a key. own-only unless `token.manage`. We resolve the key's owner from PG
-      // (apikey.referenceId) FIRST, then: an own key → delete via the better-auth API (the plugin enforces
-      // referenceId === session.user.id); a NON-own key → require `token.manage`, then SQL-delete the row
-      // (the plugin's deleteApiKey is hard own-only, and the apikey row in PG is the DURABLE truth verifyApiKey
-      // reads, so a SQL delete is instantly effective). A key id the caller neither owns nor may manage → 403,
-      // NEVER a blind delete-by-id (no IDOR). A missing id → 404. Revocation is INSTANT: no key cache, the
-      // next verifyApiKey misses → 401.
-      app.del('/_keys/:id', (res, req) => {
-        const keyId = req.getParameter(0) ?? '';
-        gateKeys(res, req, false, (authCtx, headers, _body, aborted) => {
-          if (authCtx.via !== 'session') return corkSendNoStore(res, aborted, 403, { error: 'key management requires a session' });
-          void (async () => {
-            try {
-              if (keyId.length === 0) return corkSendNoStore(res, aborted, 404, { error: 'not found' });
-              const rows = await keysSql<{ referenceId: string }[]>`SELECT "referenceId" FROM apikey WHERE id = ${keyId}`;
-              if (rows.length === 0) return corkSendNoStore(res, aborted, 404, { error: 'not found' });
-              const ownerId = rows[0]!.referenceId;
-              const isOwn = ownerId === authCtx.principal!.userId;
-              if (!isOwn && !authCtx.can('token.manage')) {
-                return corkSend(res, aborted, errorResponse(403, 'forbidden'));
-              }
-              if (isOwn) {
-                await keysAuth.api.deleteApiKey({ body: { keyId }, headers });
-              } else {
-                // Cross-user revoke (token.manage): the plugin API is hard own-only, so delete the durable PG
-                // row directly. PG is the truth verifyApiKey consults → the next request with the key is 401.
-                await keysSql`DELETE FROM apikey WHERE id = ${keyId}`;
-              }
-              corkSendNoStore(res, aborted, 200, { data: { id: keyId, revoked: true } });
-            } catch {
-              corkSend(res, aborted, errorResponse(500, 'internal error'));
-            }
-          })();
-        });
-      });
-    }
-
-    // be-09f — TEAM-MANAGEMENT routes under the `/_team` literal prefix (a leading `_` is illegal in an
-    // api_id, so it can NEVER shadow `/:type`; same precedent as `_files`). Mounted ONLY when teamView is
-    // wired (production always wires it). EVERY route is gated on `team.manage` (super-admin only this
-    // slice). The actor/principal comes ONLY from the session (gateTeam); the route/body `:userId` only
-    // designates the TARGET (no mass-assignment). Lifecycle (suspend/remove/revoke) goes through the
-    // better-auth API so the adapter fires per-session `session.delete.after` → our evict (PUSH revocation);
-    // raw SQL on user/session is forbidden by policy. team_view + RBAC are reloaded DIRECTLY (no event bus).
-    if (teamView !== undefined) {
-      const tv = teamView;
-      const teamSql = store.sql;
-
-      // Privilege ranking for the actor-role cap + last-admin guard. A higher number = more privilege. An
-      // unknown/unranked role is 0 (the floor) so it can assign nothing. super-admin is the ceiling.
-      const ROLE_RANK: Record<string, number> = { 'super-admin': 4, editor: 3, author: 2, viewer: 1 };
-      const rankOf = (role: string | null): number => (role !== null ? (ROLE_RANK[role] ?? 0) : 0);
-
-      const readJsonBody = (raw: Buffer | null): { ok: true; body: unknown } | { ok: false; error: CoreResponse } => {
-        if (raw === null) return { ok: false, error: errorResponse(413, 'request body too large') };
-        if (raw.length === 0) return { ok: true, body: {} };
+        let result: CoreResponse;
         try {
-          return { ok: true, body: JSON.parse(raw.toString('utf8')) as unknown };
+          result = await handleWrite(ctx, { method: 'POST', type, idRaw, body: undefined, action: actionRaw, locale });
         } catch {
-          return { ok: false, error: errorResponse(400, 'invalid JSON body') };
+          result = errorResponse(500, 'internal error');
         }
-      };
+        corkSend(res, aborted, result);
+      })();
+    });
+  });
+  // i18n variant create: POST /:type/:id/locales/:locale (`content.create`). 4 segments; literal
+  // `locales` distinguishes it from `/actions/:action`.
+  app.post('/:type/:id/locales/:locale', (res, req) => {
+    const type = req.getParameter(0) ?? '';
+    const idRaw = req.getParameter(1) ?? '';
+    const variantLocale = req.getParameter(2) ?? '';
+    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // UI error locale (header), distinct from the variantLocale data slug
+    gate(res, req, 'content.create', true, (raw, aborted) => {
+      const parsed = parseBody(raw);
+      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+      void (async () => {
+        let result: CoreResponse;
+        try {
+          result = await handleWrite(ctx, { method: 'POST', type, idRaw, body: parsed.body, variantLocale, locale });
+        } catch {
+          result = errorResponse(500, 'internal error');
+        }
+        corkSend(res, aborted, result);
+      })();
+    });
+  });
+  const dataWrite = (method: string, perm: string, hasId: boolean) => (res: uWS.HttpResponse, req: uWS.HttpRequest): void => {
+    const type = req.getParameter(0) ?? '';
+    const idRaw = hasId ? (req.getParameter(1) ?? '') : '';
+    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
+    gate(res, req, perm, true, (raw, aborted) => {
+      const parsed = parseBody(raw);
+      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+      void (async () => {
+        let result: CoreResponse;
+        try {
+          result = await handleWrite(ctx, { method, type, idRaw, body: parsed.body, locale });
+        } catch {
+          result = errorResponse(500, 'internal error');
+        }
+        corkSend(res, aborted, result);
+      })();
+    });
+  };
+  app.post('/:type', dataWrite('POST', 'content.create', false));
+  app.put('/:type/:id', dataWrite('PUT', 'content.update', true));
+  app.del('/:type/:id', dataWrite('DELETE', 'content.delete', true));
 
-      // GET /_team — the member directory straight from RAM (ZERO-PG). `no-store` so a stale directory can
-      // never be replayed from an HTTP cache after a logout/role change.
-      app.get('/_team', (res, req) => {
-        gateTeam(res, req, false, (_principal, _headers, _body, aborted) => {
-          const members: TeamRow[] = tv.list();
-          corkSendNoStore(res, aborted, 200, { data: members });
-        });
-      });
-
-      // POST /_team — add a member (idempotent). The `userId` is the TARGET; it must be an existing identity.
-      // NO role is assigned here (an added identity has no team role until POST /_team/:userId/role).
-      app.post('/_team', (res, req) => {
-        gateTeam(res, req, true, (_principal, _headers, raw, aborted) => {
-          const parsed = readJsonBody(raw);
-          if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-          const userId = (parsed.body as { userId?: unknown }).userId;
-          if (typeof userId !== 'string' || userId.length === 0) {
-            return corkSend(res, aborted, errorResponse(400, 'userId is required'));
+  // be-04 MEDIA — asset endpoints under the `/_files` literal prefix. A leading underscore is illegal
+  // in an api_id (validateFieldName / deriveTableName), so `_files` can NEVER collide with a real
+  // `/:type`; uWS also matches a static segment over a `:param`. The UPLOAD (POST) + DELETE are GATED on
+  // `media.upload`; the GET reads stay PUBLIC.
+  const fileCtx: FileContext = { sql: store.sql, provider: getStorageProvider() };
+  // GATED upload (`media.upload`): read the content-type header SYNC (multipart boundary), buffer the
+  // body (up to uploadMaxBytes) while resolving auth in parallel via gateUpload, then on allow parse the
+  // buffered multipart through busboy and dispatch the core.
+  app.post('/_files/upload', (res, req) => {
+    const contentType = req.getHeader('content-type') ?? '';
+    gateUpload(res, req, contentType, (raw, aborted) => {
+      parseMultipartBuffer(contentType, raw, (parsed) => {
+        void (async () => {
+          if (!parsed.ok) return corkSend(res, aborted, errorResponse(parsed.status, parsed.message));
+          let result: CoreResponse;
+          try {
+            result = await handleUpload(fileCtx, parsed.upload);
+          } catch {
+            result = errorResponse(500, 'internal error');
           }
-          void (async () => {
-            try {
-              const inserted = await teamSql<{ user_id: string }[]>`
-                INSERT INTO team (user_id, status)
-                  SELECT ${userId}, 'active' WHERE EXISTS (SELECT 1 FROM "user" WHERE id = ${userId})
-                ON CONFLICT (user_id) DO NOTHING
-                RETURNING user_id
-              `;
-              // No row inserted AND not already present AND the user does not exist → 404. (An idempotent
-              // re-add of an existing member returns 200.)
-              if (inserted.length === 0 && tv.get(userId) === null) {
-                const exists = await teamSql`SELECT 1 FROM "user" WHERE id = ${userId}`;
-                if (exists.length === 0) return corkSendNoStore(res, aborted, 404, { error: 'user not found' });
-              }
-              await tv.rebuild();
-              const row = tv.get(userId);
-              corkSendNoStore(res, aborted, 200, { data: row });
-            } catch {
-              corkSend(res, aborted, errorResponse(500, 'internal error'));
-            }
-          })();
-        });
+          corkSend(res, aborted, result);
+        })();
       });
+    });
+  });
+  app.get('/_files', (res, req) => handleFilesRoute(res, req, 'GET', false, fileCtx));
+  app.get('/_files/:id', (res, req) => handleFilesRoute(res, req, 'GET', true, fileCtx));
+  // GATED delete (`media.upload`): a delete is a mutation. Capture the id sync, gate (bodyless), dispatch.
+  app.del('/_files/:id', (res, req) => {
+    const idRaw = req.getParameter(0) ?? '';
+    gate(res, req, 'media.upload', false, (_raw, aborted) => {
+      void (async () => {
+        let result: CoreResponse;
+        try {
+          if (!/^(0|[1-9]\d*)$/.test(idRaw)) result = errorResponse(404, 'not found');
+          else result = await handleDeleteFile(fileCtx, Number(idRaw));
+        } catch {
+          result = errorResponse(500, 'internal error');
+        }
+        corkSend(res, aborted, result);
+      })();
+    });
+  });
 
-      // POST /_team/:userId/role — set the target's RBAC role in OUR user_roles. Guards (in order):
-      //   (1) target must be in team_view (404 on miss);
-      //   (2) PRIVILEGE CAP — the requested role's rank must be STRICTLY below the actor's own resolved role
-      //       (no actor can assign a role >= their own; a non-super-admin can never assign super-admin);
-      //   (3) LAST-ADMIN GUARD — a demotion that would drop active super-admins to zero is rejected.
-      // On success: DELETE+INSERT the user_roles row in one tx, then rbac.rebuild() AND teamView.rebuild().
-      app.post('/_team/:userId/role', (res, req) => {
-        const targetId = req.getParameter(0) ?? '';
-        gateTeam(res, req, true, (principal, _headers, raw, aborted) => {
-          const parsed = readJsonBody(raw);
-          if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-          const role = (parsed.body as { role?: unknown }).role;
-          if (typeof role !== 'string' || role.length === 0) {
-            return corkSend(res, aborted, errorResponse(400, 'role is required'));
-          }
-          void (async () => {
-            try {
-              const target = tv.get(targetId);
-              if (target === null) return corkSendNoStore(res, aborted, 404, { error: 'not a team member' });
-              // The actor's authority is resolved from team_view (session-derived), never the body.
-              const actorRank = rankOf(tv.get(principal.userId)?.role ?? null);
-              const requestedRank = rankOf(role);
-              if (requestedRank === 0) return corkSendNoStore(res, aborted, 400, { error: 'unknown role' });
-              if (requestedRank >= actorRank) {
-                return corkSendNoStore(res, aborted, 403, { error: 'cannot assign a role at or above your own' });
-              }
-              // Last-admin guard: demoting the target away from super-admin must not zero the active admins.
-              if (target.role === 'super-admin' && role !== 'super-admin' && target.status === 'active'
-                && tv.activeSuperAdminCount() <= 1) {
-                return corkSendNoStore(res, aborted, 403, { error: 'cannot demote the last super-admin' });
-              }
-              const roleRow = await teamSql<{ id: number }[]>`SELECT id FROM roles WHERE name = ${role}`;
-              if (roleRow.length === 0) return corkSendNoStore(res, aborted, 400, { error: 'unknown role' });
-              await teamSql.begin(async (txn) => {
-                await txn`DELETE FROM user_roles WHERE user_id = ${targetId}`;
-                await txn`INSERT INTO user_roles (user_id, role_id) VALUES (${targetId}, ${roleRow[0]!.id})`;
-                // be-09f — keep the better-auth `user.role` column in lock-step with the resolved CMS role so
-                // better-auth's OWN admin-endpoint authz (adminRoles:['super-admin']) recognizes a super-admin
-                // as able to drive lifecycle. This column is NOT a CMS authz source (RbacRegistry never reads
-                // it); it is a non-session field, so this write does not bypass session coherence.
-                await txn`UPDATE "user" SET "role" = ${role}, "updatedAt" = now() WHERE id = ${targetId}`;
-              });
-              await rbac!.rebuild();
-              await tv.rebuild();
-              corkSendNoStore(res, aborted, 200, { data: tv.get(targetId) });
-            } catch {
-              corkSend(res, aborted, errorResponse(500, 'internal error'));
-            }
-          })();
-        });
-      });
+  // be-09c — API-TOKEN management routes under the `/_keys` literal prefix (a leading `_` is illegal in an
+  // api_id → it can NEVER shadow `/:type`; same precedent as `_files`/`_team`). auth + rbac are required
+  // deps, so these always mount. ALL self routes (create/list/revoke-own) are SESSION-ONLY (gateKeys rejects ctx.via ===
+  // 'key' so a key can never mint/revoke keys → no self-escalation). Owner is ALWAYS principal.userId — a
+  // body `userId` is NEVER trusted (and is schema-server-only upstream → CVE-2025-61928 neutralized). The
+  // raw secret is returned EXACTLY ONCE at create (corkSendNoStore, no-store, never logged); list/revoke
+  // never echo it. Cross-user create/revoke require `token.manage`.
+  const keysAuth = auth;
+  const keysRbac = rbac;
+  const keysSql = store.sql;
 
-      // POST /_team/:userId/suspend — PUSH revocation. (1) resolve target (404 on miss); (2) last-admin guard;
-      // (3) flip team.status='suspended'; (4) ban + revoke ALL sessions via the better-auth API (deletes the
-      // PG session rows and fires session.delete.after → SessionCache.evict per session); (5) rbac.rebuild()
-      // (a suspended member keeps no effective authority via team_view's status) + teamView.rebuild().
-      app.post('/_team/:userId/suspend', (res, req) => {
-        const targetId = req.getParameter(0) ?? '';
-        gateTeam(res, req, false, (_principal, headers, _body, aborted) => {
-          void (async () => {
-            try {
-              const target = tv.get(targetId);
-              if (target === null) return corkSendNoStore(res, aborted, 404, { error: 'not a team member' });
-              if (target.role === 'super-admin' && target.status === 'active' && tv.activeSuperAdminCount() <= 1) {
-                return corkSendNoStore(res, aborted, 403, { error: 'cannot suspend the last super-admin' });
-              }
-              await teamSql`UPDATE team SET status = 'suspended', updated_at = now() WHERE user_id = ${targetId}`;
-              // Lifecycle THROUGH the API (the acting admin's headers carry the session) — the adapter deletes
-              // the PG session rows and fires the per-session evict. We assert post-conditions (status flipped
-              // + sessions gone), not the API's 2xx.
-              await auth!.api.banUser({ body: { userId: targetId }, headers });
-              await auth!.api.revokeUserSessions({ body: { userId: targetId }, headers });
-              // be-09c — DURABLE owner-key revoke. The apikey row in PG is the truth verifyApiKey reads, so a
-              // SQL delete of every key the suspended owner holds makes them ALL fail the very next request
-              // (the token analog of revokeUserSessions). Belt-and-suspenders alongside the resolution-time
-              // suspended-owner deny + the empty-RBAC intersection (rbac.rebuild below).
-              await teamSql`DELETE FROM apikey WHERE "referenceId" = ${targetId}`;
-              await rbac!.rebuild();
-              await tv.rebuild();
-              corkSendNoStore(res, aborted, 200, { data: tv.get(targetId) });
-            } catch {
-              corkSend(res, aborted, errorResponse(500, 'internal error'));
-            }
-          })();
-        });
-      });
-
-      // DELETE /_team/:userId — hard-remove a member. (1) resolve target (404); (2) self-guard + last-admin
-      // guard; (3) removeUser via the API (cascades session deletes → evict; ON DELETE CASCADE tidies
-      // team/user_roles); (4) teamView.rebuild() + rbac.rebuild(). content.createdBy is a SOFT ref (no FK) so
-      // removal never hits an FK violation — a removed author simply misses team_view ("former member").
-      app.del('/_team/:userId', (res, req) => {
-        const targetId = req.getParameter(0) ?? '';
-        gateTeam(res, req, false, (principal, headers, _body, aborted) => {
-          void (async () => {
-            try {
-              const target = tv.get(targetId);
-              if (target === null) return corkSendNoStore(res, aborted, 404, { error: 'not a team member' });
-              if (targetId === principal.userId) {
-                return corkSendNoStore(res, aborted, 403, { error: 'cannot remove yourself' });
-              }
-              if (target.role === 'super-admin' && target.status === 'active' && tv.activeSuperAdminCount() <= 1) {
-                return corkSendNoStore(res, aborted, 403, { error: 'cannot remove the last super-admin' });
-              }
-              // be-09c — revoke the target's API keys BEFORE removeUser. ON DELETE CASCADE on `user` would
-              // drop the apikey rows in PG anyway, but — like sessions — a DB cascade does NOT fire any
-              // better-auth hook, so we revoke explicitly + durably (the apikey row is verifyApiKey's truth →
-              // the next request with any of the removed user's keys is 401). Three walls: this revoke, the
-              // verifyApiKey INVALID_REFERENCE_ID (no user row), and the empty-RBAC intersection.
-              await teamSql`DELETE FROM apikey WHERE "referenceId" = ${targetId}`;
-              await auth!.api.removeUser({ body: { userId: targetId }, headers });
-              await tv.rebuild();
-              await rbac!.rebuild();
-              corkSendNoStore(res, aborted, 200, { data: { userId: targetId, removed: true } });
-            } catch {
-              corkSend(res, aborted, errorResponse(500, 'internal error'));
-            }
-          })();
-        });
-      });
+  const readJsonBodyKeys = (raw: Buffer | null): { ok: true; body: Record<string, unknown> } | { ok: false; error: CoreResponse } => {
+    if (raw === null) return { ok: false, error: errorResponse(413, 'request body too large') };
+    if (raw.length === 0) return { ok: true, body: {} };
+    try {
+      const parsed: unknown = JSON.parse(raw.toString('utf8'));
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        return { ok: false, error: errorResponse(400, 'invalid JSON body') };
+      }
+      return { ok: true, body: parsed as Record<string, unknown> };
+    } catch {
+      return { ok: false, error: errorResponse(400, 'invalid JSON body') };
     }
-  }
+  };
+
+  // Project a created/listed key row to the SAFE shape — NEVER the secret (`key`). The plugin already
+  // strips `key` from list/verify; this projection is the SECOND wall. The raw secret (`createResult.key`)
+  // is included ONLY by the create route, exactly once.
+  const projectKey = (k: Record<string, unknown>): Record<string, unknown> => ({
+    id: k.id,
+    name: k.name ?? null,
+    prefix: k.prefix ?? null,
+    start: k.start ?? null,
+    expiresAt: k.expiresAt ?? null,
+    lastRequest: k.lastRequest ?? null,
+    enabled: k.enabled ?? null,
+    permissions: k.permissions ?? null,
+    metadata: k.metadata ?? null,
+    createdAt: k.createdAt ?? null,
+  });
+
+  // Validate the optional create inputs off a parsed body. `permissions` is the REQUESTED scope (a flat
+  // array of CMS perm actions); every requested action MUST be in the OWNER's resolved RBAC set (a key
+  // may not be MINTED with a scope its owner lacks — the runtime ∩ denies anyway, but failing at create
+  // is honest and avoids a misleading "valid" key). Absent permissions ⇒ a no-scope key (grants nothing).
+  type CreateInput =
+    | { ok: true; name: string | undefined; prefix: string | undefined; expiresIn: number | undefined; scope: string[]; metadata: Record<string, unknown> | undefined }
+    | { ok: false; error: CoreResponse };
+  const parseCreateInput = (body: Record<string, unknown>, ownerId: string): CreateInput => {
+    const name = typeof body.name === 'string' ? body.name : undefined;
+    const prefix = typeof body.prefix === 'string' ? body.prefix : undefined;
+    let expiresIn: number | undefined;
+    if (body.expiresIn !== undefined) {
+      if (typeof body.expiresIn !== 'number' || !Number.isFinite(body.expiresIn) || body.expiresIn < 1) {
+        return { ok: false, error: errorResponse(400, 'expiresIn must be a positive number of seconds') };
+      }
+      expiresIn = body.expiresIn;
+    }
+    let scope: string[] = [];
+    if (body.permissions !== undefined) {
+      if (!Array.isArray(body.permissions) || body.permissions.some((a) => typeof a !== 'string')) {
+        return { ok: false, error: errorResponse(400, 'permissions must be an array of action strings') };
+      }
+      scope = body.permissions as string[];
+    }
+    const owned = keysRbac.permissionsOf(ownerId);
+    const exceeds = scope.filter((a) => !owned.has(a));
+    if (exceeds.length > 0) {
+      return { ok: false, error: errorResponse(400, `scope exceeds owner permissions: ${exceeds.join(', ')}`) };
+    }
+    let metadata: Record<string, unknown> | undefined;
+    if (body.metadata !== undefined) {
+      if (typeof body.metadata !== 'object' || body.metadata === null || Array.isArray(body.metadata)) {
+        return { ok: false, error: errorResponse(400, 'metadata must be an object') };
+      }
+      metadata = body.metadata as Record<string, unknown>;
+    }
+    return { ok: true, name, prefix, expiresIn, scope, metadata };
+  };
+
+  // Map a thrown error to a CoreResponse: a better-auth plugin validation error (an APIError with a 4xx
+  // `statusCode`, e.g. EXPIRES_IN_IS_TOO_SMALL / INVALID prefix) surfaces as an HONEST 400 with the
+  // plugin's message; anything else is an opaque 500. The raw secret is NEVER in an error path.
+  const keyError = (err: unknown): CoreResponse => {
+    const status = (err as { statusCode?: unknown })?.statusCode;
+    const body = (err as { body?: { message?: unknown } })?.body;
+    if (typeof status === 'number' && status >= 400 && status < 500) {
+      const msg = typeof body?.message === 'string' ? body.message : 'invalid request';
+      return errorResponse(400, msg);
+    }
+    return errorResponse(500, 'internal error');
+  };
+
+  // Mint a key for `ownerId`. SERVER call (NO headers) so `permissions` + `userId` are accepted (they are
+  // server-only on a client request) — the owner is derived by US, never proxied from a client body. The
+  // raw secret is returned ONCE; only non-secret fields are logged (none logged here — no log on this path).
+  const mintKey = async (ownerId: string, input: Extract<CreateInput, { ok: true }>): Promise<Record<string, unknown>> => {
+    const created = await keysAuth.api.createApiKey({
+      body: {
+        userId: ownerId,
+        name: input.name,
+        prefix: input.prefix,
+        expiresIn: input.expiresIn,
+        permissions: buildScopePermissions(input.scope),
+        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+      },
+    });
+    return created as unknown as Record<string, unknown>;
+  };
+
+  // POST /_keys — create a key for SELF (session-only). owner = principal.userId. Returns the raw secret
+  // EXACTLY ONCE (the `key` field of the create result), projected alongside the safe metadata.
+  app.post('/_keys', (res, req) => {
+    gateKeys(res, req, true, (authCtx, _headers, raw, aborted) => {
+      if (authCtx.via !== 'session') return corkSendNoStore(res, aborted, 403, { error: 'key management requires a session' });
+      const parsed = readJsonBodyKeys(raw);
+      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+      const ownerId = authCtx.principal!.userId;
+      const input = parseCreateInput(parsed.body, ownerId);
+      if (!input.ok) return corkSend(res, aborted, input.error);
+      void (async () => {
+        try {
+          const created = await mintKey(ownerId, input);
+          // The raw secret (`created.key`) is surfaced ONCE here; everything else is the safe projection.
+          corkSendNoStore(res, aborted, 200, { data: { ...projectKey(created), key: created.key } });
+        } catch (err) {
+          corkSend(res, aborted, keyError(err));
+        }
+      })();
+    });
+  });
+
+  // POST /_keys/for/:userId — create a key for ANOTHER user (gated `token.manage`). owner = the route
+  // `:userId`; the scope-vs-owner check uses the TARGET's resolved RBAC set. Session-only (no key may
+  // drive a cross-user mint).
+  app.post('/_keys/for/:userId', (res, req) => {
+    const targetId = req.getParameter(0) ?? '';
+    gateKeys(res, req, true, (authCtx, _headers, raw, aborted) => {
+      if (authCtx.via !== 'session') return corkSendNoStore(res, aborted, 403, { error: 'key management requires a session' });
+      if (!authCtx.can('token.manage')) return corkSend(res, aborted, errorResponse(403, 'forbidden'));
+      const parsed = readJsonBodyKeys(raw);
+      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+      if (targetId.length === 0) return corkSend(res, aborted, errorResponse(400, 'userId is required'));
+      const input = parseCreateInput(parsed.body, targetId);
+      if (!input.ok) return corkSend(res, aborted, input.error);
+      void (async () => {
+        try {
+          const exists = await keysSql`SELECT 1 FROM "user" WHERE id = ${targetId}`;
+          if (exists.length === 0) return corkSendNoStore(res, aborted, 404, { error: 'user not found' });
+          const created = await mintKey(targetId, input);
+          corkSendNoStore(res, aborted, 200, { data: { ...projectKey(created), key: created.key } });
+        } catch (err) {
+          corkSend(res, aborted, keyError(err));
+        }
+      })();
+    });
+  });
+
+  // GET /_keys — list MY keys (session-only, own-only). `listApiKeys` returns the owner's keys with the
+  // secret structurally absent; we project to the safe shape (NEVER `key`) as the second wall.
+  app.get('/_keys', (res, req) => {
+    gateKeys(res, req, false, (authCtx, headers, _body, aborted) => {
+      if (authCtx.via !== 'session') return corkSendNoStore(res, aborted, 403, { error: 'key management requires a session' });
+      void (async () => {
+        try {
+          // listApiKeys returns `{ apiKeys, total, limit, offset }` — the secret is already stripped.
+          const result = (await keysAuth.api.listApiKeys({ headers })) as unknown as { apiKeys: Record<string, unknown>[] };
+          const data = result.apiKeys.map(projectKey);
+          corkSendNoStore(res, aborted, 200, { data });
+        } catch {
+          corkSend(res, aborted, errorResponse(500, 'internal error'));
+        }
+      })();
+    });
+  });
+
+  // DELETE /_keys/:id — REVOKE a key. own-only unless `token.manage`. We resolve the key's owner from PG
+  // (apikey.referenceId) FIRST, then: an own key → delete via the better-auth API (the plugin enforces
+  // referenceId === session.user.id); a NON-own key → require `token.manage`, then SQL-delete the row
+  // (the plugin's deleteApiKey is hard own-only, and the apikey row in PG is the DURABLE truth verifyApiKey
+  // reads, so a SQL delete is instantly effective). A key id the caller neither owns nor may manage → 403,
+  // NEVER a blind delete-by-id (no IDOR). A missing id → 404. Revocation is INSTANT: no key cache, the
+  // next verifyApiKey misses → 401.
+  app.del('/_keys/:id', (res, req) => {
+    const keyId = req.getParameter(0) ?? '';
+    gateKeys(res, req, false, (authCtx, headers, _body, aborted) => {
+      if (authCtx.via !== 'session') return corkSendNoStore(res, aborted, 403, { error: 'key management requires a session' });
+      void (async () => {
+        try {
+          if (keyId.length === 0) return corkSendNoStore(res, aborted, 404, { error: 'not found' });
+          const rows = await keysSql<{ referenceId: string }[]>`SELECT "referenceId" FROM apikey WHERE id = ${keyId}`;
+          if (rows.length === 0) return corkSendNoStore(res, aborted, 404, { error: 'not found' });
+          const ownerId = rows[0]!.referenceId;
+          const isOwn = ownerId === authCtx.principal!.userId;
+          if (!isOwn && !authCtx.can('token.manage')) {
+            return corkSend(res, aborted, errorResponse(403, 'forbidden'));
+          }
+          if (isOwn) {
+            await keysAuth.api.deleteApiKey({ body: { keyId }, headers });
+          } else {
+            // Cross-user revoke (token.manage): the plugin API is hard own-only, so delete the durable PG
+            // row directly. PG is the truth verifyApiKey consults → the next request with the key is 401.
+            await keysSql`DELETE FROM apikey WHERE id = ${keyId}`;
+          }
+          corkSendNoStore(res, aborted, 200, { data: { id: keyId, revoked: true } });
+        } catch {
+          corkSend(res, aborted, errorResponse(500, 'internal error'));
+        }
+      })();
+    });
+  });
+
+  // be-09f — TEAM-MANAGEMENT routes under the `/_team` literal prefix (a leading `_` is illegal in an
+  // api_id, so it can NEVER shadow `/:type`; same precedent as `_files`). teamView is a required dep, so
+  // these always mount. EVERY route is gated on `team.manage` (super-admin only this
+  // slice). The actor/principal comes ONLY from the session (gateTeam); the route/body `:userId` only
+  // designates the TARGET (no mass-assignment). Lifecycle (suspend/remove/revoke) goes through the
+  // better-auth API so the adapter fires per-session `session.delete.after` → our evict (PUSH revocation);
+  // raw SQL on user/session is forbidden by policy. team_view + RBAC are reloaded DIRECTLY (no event bus).
+  const tv = teamView;
+  const teamSql = store.sql;
+
+  // Privilege ranking for the actor-role cap + last-admin guard. A higher number = more privilege. An
+  // unknown/unranked role is 0 (the floor) so it can assign nothing. super-admin is the ceiling.
+  const ROLE_RANK: Record<string, number> = { 'super-admin': 4, editor: 3, author: 2, viewer: 1 };
+  const rankOf = (role: string | null): number => (role !== null ? (ROLE_RANK[role] ?? 0) : 0);
+
+  const readJsonBody = (raw: Buffer | null): { ok: true; body: unknown } | { ok: false; error: CoreResponse } => {
+    if (raw === null) return { ok: false, error: errorResponse(413, 'request body too large') };
+    if (raw.length === 0) return { ok: true, body: {} };
+    try {
+      return { ok: true, body: JSON.parse(raw.toString('utf8')) as unknown };
+    } catch {
+      return { ok: false, error: errorResponse(400, 'invalid JSON body') };
+    }
+  };
+
+  // GET /_team — the member directory straight from RAM (ZERO-PG). `no-store` so a stale directory can
+  // never be replayed from an HTTP cache after a logout/role change.
+  app.get('/_team', (res, req) => {
+    gateTeam(res, req, false, (_principal, _headers, _body, aborted) => {
+      const members: TeamRow[] = tv.list();
+      corkSendNoStore(res, aborted, 200, { data: members });
+    });
+  });
+
+  // POST /_team — add a member (idempotent). The `userId` is the TARGET; it must be an existing identity.
+  // NO role is assigned here (an added identity has no team role until POST /_team/:userId/role).
+  app.post('/_team', (res, req) => {
+    gateTeam(res, req, true, (_principal, _headers, raw, aborted) => {
+      const parsed = readJsonBody(raw);
+      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+      const userId = (parsed.body as { userId?: unknown }).userId;
+      if (typeof userId !== 'string' || userId.length === 0) {
+        return corkSend(res, aborted, errorResponse(400, 'userId is required'));
+      }
+      void (async () => {
+        try {
+          const inserted = await teamSql<{ user_id: string }[]>`
+            INSERT INTO team (user_id, status)
+              SELECT ${userId}, 'active' WHERE EXISTS (SELECT 1 FROM "user" WHERE id = ${userId})
+            ON CONFLICT (user_id) DO NOTHING
+            RETURNING user_id
+          `;
+          // No row inserted AND not already present AND the user does not exist → 404. (An idempotent
+          // re-add of an existing member returns 200.)
+          if (inserted.length === 0 && tv.get(userId) === null) {
+            const exists = await teamSql`SELECT 1 FROM "user" WHERE id = ${userId}`;
+            if (exists.length === 0) return corkSendNoStore(res, aborted, 404, { error: 'user not found' });
+          }
+          await tv.rebuild();
+          const row = tv.get(userId);
+          corkSendNoStore(res, aborted, 200, { data: row });
+        } catch {
+          corkSend(res, aborted, errorResponse(500, 'internal error'));
+        }
+      })();
+    });
+  });
+
+  // POST /_team/:userId/role — set the target's RBAC role in OUR user_roles. Guards (in order):
+  //   (1) target must be in team_view (404 on miss);
+  //   (2) PRIVILEGE CAP — the requested role's rank must be STRICTLY below the actor's own resolved role
+  //       (no actor can assign a role >= their own; a non-super-admin can never assign super-admin);
+  //   (3) LAST-ADMIN GUARD — a demotion that would drop active super-admins to zero is rejected.
+  // On success: DELETE+INSERT the user_roles row in one tx, then rbac.rebuild() AND teamView.rebuild().
+  app.post('/_team/:userId/role', (res, req) => {
+    const targetId = req.getParameter(0) ?? '';
+    gateTeam(res, req, true, (principal, _headers, raw, aborted) => {
+      const parsed = readJsonBody(raw);
+      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+      const role = (parsed.body as { role?: unknown }).role;
+      if (typeof role !== 'string' || role.length === 0) {
+        return corkSend(res, aborted, errorResponse(400, 'role is required'));
+      }
+      void (async () => {
+        try {
+          const target = tv.get(targetId);
+          if (target === null) return corkSendNoStore(res, aborted, 404, { error: 'not a team member' });
+          // The actor's authority is resolved from team_view (session-derived), never the body.
+          const actorRank = rankOf(tv.get(principal.userId)?.role ?? null);
+          const requestedRank = rankOf(role);
+          if (requestedRank === 0) return corkSendNoStore(res, aborted, 400, { error: 'unknown role' });
+          if (requestedRank >= actorRank) {
+            return corkSendNoStore(res, aborted, 403, { error: 'cannot assign a role at or above your own' });
+          }
+          // Last-admin guard: demoting the target away from super-admin must not zero the active admins.
+          if (target.role === 'super-admin' && role !== 'super-admin' && target.status === 'active'
+            && tv.activeSuperAdminCount() <= 1) {
+            return corkSendNoStore(res, aborted, 403, { error: 'cannot demote the last super-admin' });
+          }
+          const roleRow = await teamSql<{ id: number }[]>`SELECT id FROM roles WHERE name = ${role}`;
+          if (roleRow.length === 0) return corkSendNoStore(res, aborted, 400, { error: 'unknown role' });
+          await teamSql.begin(async (txn) => {
+            await txn`DELETE FROM user_roles WHERE user_id = ${targetId}`;
+            await txn`INSERT INTO user_roles (user_id, role_id) VALUES (${targetId}, ${roleRow[0]!.id})`;
+            // be-09f — keep the better-auth `user.role` column in lock-step with the resolved CMS role so
+            // better-auth's OWN admin-endpoint authz (adminRoles:['super-admin']) recognizes a super-admin
+            // as able to drive lifecycle. This column is NOT a CMS authz source (RbacRegistry never reads
+            // it); it is a non-session field, so this write does not bypass session coherence.
+            await txn`UPDATE "user" SET "role" = ${role}, "updatedAt" = now() WHERE id = ${targetId}`;
+          });
+          await rbac.rebuild();
+          await tv.rebuild();
+          corkSendNoStore(res, aborted, 200, { data: tv.get(targetId) });
+        } catch {
+          corkSend(res, aborted, errorResponse(500, 'internal error'));
+        }
+      })();
+    });
+  });
+
+  // POST /_team/:userId/suspend — PUSH revocation. (1) resolve target (404 on miss); (2) last-admin guard;
+  // (3) flip team.status='suspended'; (4) ban + revoke ALL sessions via the better-auth API (deletes the
+  // PG session rows and fires session.delete.after → SessionCache.evict per session); (5) rbac.rebuild()
+  // (a suspended member keeps no effective authority via team_view's status) + teamView.rebuild().
+  app.post('/_team/:userId/suspend', (res, req) => {
+    const targetId = req.getParameter(0) ?? '';
+    gateTeam(res, req, false, (_principal, headers, _body, aborted) => {
+      void (async () => {
+        try {
+          const target = tv.get(targetId);
+          if (target === null) return corkSendNoStore(res, aborted, 404, { error: 'not a team member' });
+          if (target.role === 'super-admin' && target.status === 'active' && tv.activeSuperAdminCount() <= 1) {
+            return corkSendNoStore(res, aborted, 403, { error: 'cannot suspend the last super-admin' });
+          }
+          await teamSql`UPDATE team SET status = 'suspended', updated_at = now() WHERE user_id = ${targetId}`;
+          // Lifecycle THROUGH the API (the acting admin's headers carry the session) — the adapter deletes
+          // the PG session rows and fires the per-session evict. We assert post-conditions (status flipped
+          // + sessions gone), not the API's 2xx.
+          await auth.api.banUser({ body: { userId: targetId }, headers });
+          await auth.api.revokeUserSessions({ body: { userId: targetId }, headers });
+          // be-09c — DURABLE owner-key revoke. The apikey row in PG is the truth verifyApiKey reads, so a
+          // SQL delete of every key the suspended owner holds makes them ALL fail the very next request
+          // (the token analog of revokeUserSessions). Belt-and-suspenders alongside the resolution-time
+          // suspended-owner deny + the empty-RBAC intersection (rbac.rebuild below).
+          await teamSql`DELETE FROM apikey WHERE "referenceId" = ${targetId}`;
+          await rbac.rebuild();
+          await tv.rebuild();
+          corkSendNoStore(res, aborted, 200, { data: tv.get(targetId) });
+        } catch {
+          corkSend(res, aborted, errorResponse(500, 'internal error'));
+        }
+      })();
+    });
+  });
+
+  // DELETE /_team/:userId — hard-remove a member. (1) resolve target (404); (2) self-guard + last-admin
+  // guard; (3) removeUser via the API (cascades session deletes → evict; ON DELETE CASCADE tidies
+  // team/user_roles); (4) teamView.rebuild() + rbac.rebuild(). content.createdBy is a SOFT ref (no FK) so
+  // removal never hits an FK violation — a removed author simply misses team_view ("former member").
+  app.del('/_team/:userId', (res, req) => {
+    const targetId = req.getParameter(0) ?? '';
+    gateTeam(res, req, false, (principal, headers, _body, aborted) => {
+      void (async () => {
+        try {
+          const target = tv.get(targetId);
+          if (target === null) return corkSendNoStore(res, aborted, 404, { error: 'not a team member' });
+          if (targetId === principal.userId) {
+            return corkSendNoStore(res, aborted, 403, { error: 'cannot remove yourself' });
+          }
+          if (target.role === 'super-admin' && target.status === 'active' && tv.activeSuperAdminCount() <= 1) {
+            return corkSendNoStore(res, aborted, 403, { error: 'cannot remove the last super-admin' });
+          }
+          // be-09c — revoke the target's API keys BEFORE removeUser. ON DELETE CASCADE on `user` would
+          // drop the apikey rows in PG anyway, but — like sessions — a DB cascade does NOT fire any
+          // better-auth hook, so we revoke explicitly + durably (the apikey row is verifyApiKey's truth →
+          // the next request with any of the removed user's keys is 401). Three walls: this revoke, the
+          // verifyApiKey INVALID_REFERENCE_ID (no user row), and the empty-RBAC intersection.
+          await teamSql`DELETE FROM apikey WHERE "referenceId" = ${targetId}`;
+          await auth.api.removeUser({ body: { userId: targetId }, headers });
+          await tv.rebuild();
+          await rbac.rebuild();
+          corkSendNoStore(res, aborted, 200, { data: { userId: targetId, removed: true } });
+        } catch {
+          corkSend(res, aborted, errorResponse(500, 'internal error'));
+        }
+      })();
+    });
+  });
 
   // Everything else (root, non-GET on a known route, deeper paths): let the core decide the status
   // (404 / 405). We pass the real method + path so a non-GET on /:type still yields 405.
@@ -1575,7 +1554,7 @@ export function createServer(
     close(token: ListenToken): void {
       if (token) uWS.us_listen_socket_close(token as uWS.us_listen_socket);
     },
-    // exactOptionalPropertyTypes: only set the key when the Builder is wired (a read-only/legacy server omits it).
-    ...(applyEditFn ? { applyEdit: applyEditFn } : {}),
+    // The Builder (applyEdit) is always wired now (modulesDir is required), so always expose it.
+    applyEdit: applyEditFn,
   };
 }

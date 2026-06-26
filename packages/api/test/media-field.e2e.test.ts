@@ -12,7 +12,7 @@ delete process.env.S3_BUCKET; // select the LOCAL provider for this run.
 
 const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { startTestServerFromSchemas, schema } = await import('./helpers.ts');
+const { startTestServer, schema, closeAuth } = await import('./helpers.ts');
 const { resetStorageProvider } = await import('../src/storage/index.ts');
 const { pngBytes } = await import('./storage-fixtures.ts');
 
@@ -29,7 +29,11 @@ let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let base: string;
 let close: (token: unknown) => void;
 let token: unknown;
-let registry: Awaited<ReturnType<typeof startTestServerFromSchemas>>['registry'];
+let registry: Awaited<ReturnType<typeof startTestServer>>['registry'];
+let sessionCache: Awaited<ReturnType<typeof startTestServer>>['sessionCache'];
+// AUTHED fetch (super-admin cookie) for every gated WRITE/upload/delete; anon fetch for public reads.
+let authedFetch: Awaited<ReturnType<typeof startTestServer>>['fetch'];
+let anonFetch: Awaited<ReturnType<typeof startTestServer>>['anonFetch'];
 
 before(async () => {
   resetStorageProvider();
@@ -54,30 +58,36 @@ before(async () => {
     }),
     schema({ apiId: 'note', fields: [{ name: 'body', cmsType: 'text' }] }),
   ];
-  const srv = await startTestServerFromSchemas(sql, schemas);
+  const srv = await startTestServer(sql, schemas);
   base = srv.base;
   close = srv.close;
   token = srv.token;
   registry = srv.registry;
+  sessionCache = srv.sessionCache;
+  authedFetch = srv.fetch;
+  anonFetch = srv.anonFetch;
 });
 
 after(async () => {
   if (token) close(token);
+  sessionCache?.stop();
+  closeAuth();
   if (sql) await sql.end();
   if (db) await dropFileDatabase(db.name);
   await rm(STORAGE_DIR, { recursive: true, force: true });
 });
 
-const POST = (p: string, body: unknown) => fetch(`${base}${p}`, { method: 'POST', body: JSON.stringify(body) });
-const PUT = (p: string, body: unknown) => fetch(`${base}${p}`, { method: 'PUT', body: JSON.stringify(body) });
-const GET = (p: string) => fetch(`${base}${p}`);
+// Writes go through the AUTHED fetch (gate passes); reads stay public via anon fetch.
+const POST = (p: string, body: unknown) => authedFetch(p, { method: 'POST', body: JSON.stringify(body) });
+const PUT = (p: string, body: unknown) => authedFetch(p, { method: 'PUT', body: JSON.stringify(body) });
+const GET = (p: string) => anonFetch(p);
 
 interface Asset { id: number; mime: string; width: number | null; height: number | null; url: string | null }
 
 async function uploadAsset(w: number, h: number): Promise<Asset> {
   const fd = new FormData();
   fd.set('file', new Blob([pngBytes(w, h)], { type: 'image/png' }), `img-${w}x${h}.png`);
-  const r = await fetch(`${base}/_files/upload`, { method: 'POST', body: fd });
+  const r = await authedFetch('/_files/upload', { method: 'POST', body: fd });
   assert.ok(r.status === 201 || r.status === 200, `upload ${w}x${h} -> ${r.status}`);
   return ((await r.json()) as { data: Asset }).data;
 }
@@ -166,7 +176,7 @@ test('a deleted asset populates as null (single) — dangling ref is tolerated, 
   const asset = await uploadAsset(21, 22);
   const created = (await (await POST('/product', { title: 'willdangle', cover: asset.id })).json()) as { data: { id: number } };
   // Delete the asset out from under the reference.
-  assert.equal((await fetch(`${base}/_files/${asset.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await authedFetch(`/_files/${asset.id}`, { method: 'DELETE' })).status, 200);
   // Un-populated still emits the now-dangling raw id; populated resolves to null (skipped), never 500.
   const plain = (await (await GET(`/product/${created.data.id}`)).json()) as { data: { cover: number } };
   assert.equal(plain.data.cover, asset.id);

@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, writeFile, rm, mkdtemp } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
@@ -19,6 +20,7 @@ import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
 import { buildAuth } from '../src/auth/auth.ts';
 import { SessionCache } from '../src/auth/session.cache.ts';
 import { RbacRegistry } from '../src/auth/rbac.registry.ts';
+import { TeamView } from '../src/auth/team.view.ts';
 
 /**
  * be-09b — ROUTE-GATING + FIRST-ADMIN BOOTSTRAP, E2E over a REAL uWS server + REAL better-auth + REAL
@@ -49,6 +51,7 @@ let store: PostgresStore;
 let auth: ReturnType<typeof buildAuth>;
 let sessionCache: SessionCache;
 let rbac: RbacRegistry;
+let teamView: TeamView;
 let base: string;
 let token: unknown;
 let close: (t: unknown) => void;
@@ -117,15 +120,22 @@ before(async () => {
   base = `http://127.0.0.1:${port0}`;
 
   store = new PostgresStore(sql);
-  sessionCache = new SessionCache(() => auth);
+  // FULL real server (mirrors conti.ts): teamView BEFORE the session cache (it caps a team member's cached
+  // TTL) and BEFORE auth (auth's user hooks call teamView.rebuild). Every dep is now non-undefined — this
+  // boots the FULL gated server, not a partial one (teamView arg#8 was previously undefined).
+  teamView = new TeamView(sql);
+  sessionCache = new SessionCache(() => auth, undefined, undefined, teamView);
   rbac = new RbacRegistry(sql);
-  auth = buildAuth({ baseURL: base, sessionEvictor: sessionCache, sql, rbacInvalidate: () => rbac.rebuild() });
+  auth = buildAuth({ baseURL: base, sessionEvictor: sessionCache, sql, rbacInvalidate: () => rbac.rebuild(), teamViewReload: () => teamView.rebuild() });
   await rbac.rebuild();
+  await teamView.rebuild();
 
   const { schemas, hooks } = await loadTypes(genDir);
   const { engine, registry } = await store.loadFromSchemas(schemas);
-  // positions: auth=5, sessionCache=6, rbac=7 ⇒ authEnabled; HookRegistry=9, modulesDir=10 ⇒ builderActive.
-  const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, undefined, new HookRegistry(hooks), genDir);
+  // ALL deps wired: auth=5, sessionCache=6, rbac=7, teamView=8, HookRegistry=9, modulesDir=10. The Builder
+  // routes re-read `genDir` on every reload (loadTypesCacheBusted), so the on-disk dpgate/crudt modules are
+  // load-bearing — this engine-swap file keeps real on-disk modules rather than the harness's empty temp dir.
+  const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: new HookRegistry(hooks), modulesDir: genDir });
   token = await server.listen(port0);
   close = server.close;
 });
@@ -508,14 +518,17 @@ test('checklist#6: N concurrent first sign-ups against a FRESH db yield EXACTLY 
     try {
       const frbac = new RbacRegistry(fsql);
       let fauth: ReturnType<typeof buildAuth>;
-      const fcache = new SessionCache(() => fauth, undefined, 0);
+      const fteam = new TeamView(fsql);
+      const fcache = new SessionCache(() => fauth, undefined, 0, fteam);
       const fport = await freePort();
       const fbase = `http://127.0.0.1:${fport}`;
       setAuthSql(fsql);
-      fauth = buildAuth({ baseURL: fbase, sessionEvictor: fcache, sql: fsql, rbacInvalidate: () => frbac.rebuild() });
+      fauth = buildAuth({ baseURL: fbase, sessionEvictor: fcache, sql: fsql, rbacInvalidate: () => frbac.rebuild(), teamViewReload: () => fteam.rebuild() });
       const fstore = new PostgresStore(fsql);
+      const fmodulesDir = await mkdtemp(path.join(os.tmpdir(), 'rgrace-')); // empty dir ⇒ Builder routes register
       const { engine, registry } = await fstore.loadFromSchemas([]); // files-first empty catalog (no types)
-      const fserver = createServer(engine, fstore, registry, undefined, fauth, fcache, frbac);
+      // FULL server: teamView=8, HookRegistry=9, modulesDir=10 are now required (no longer optional-undefined).
+      const fserver = createServer({ engine, store: fstore, registry, auth: fauth, sessionCache: fcache, rbac: frbac, teamView: fteam, hooks: new HookRegistry(), modulesDir: fmodulesDir });
       const ftoken = await fserver.listen(fport);
       try {
         const N = 8;

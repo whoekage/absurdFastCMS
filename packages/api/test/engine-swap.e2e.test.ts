@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Sql } from 'postgres';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { cleanCatalog, startTestServerFromFiles } from './helpers.ts';
+import { cleanCatalog, startTestServerFromFilesWithAuth, closeAuth } from './helpers.ts';
 
 /**
  * S4 — incremental IR-driven build-then-swap, over REAL Postgres (no mocks). Drives `applyEdit` against a
@@ -22,7 +22,8 @@ const genDir = fileURLToPath(new URL(`./fixtures/.gen-${process.pid}-s4/`, impor
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
-let srv: Awaited<ReturnType<typeof startTestServerFromFiles>>;
+let srv: Awaited<ReturnType<typeof startTestServerFromFilesWithAuth>>;
+let cookie: string; // the super-admin session cookie injected into every content WRITE
 
 before(async () => {
   db = await createFileDatabase('engine-swap');
@@ -33,18 +34,30 @@ beforeEach(async () => {
   await sql`DROP TABLE IF EXISTS _schema_applied`;
   await rm(genDir, { recursive: true, force: true });
   if (srv) srv.close(srv.token);
-  srv = await startTestServerFromFiles(sql, genDir); // empty modules dir → empty engine to start
+  srv = await startTestServerFromFilesWithAuth(sql, genDir); // empty modules dir → empty engine to start
+  // Bootstrap a super-admin: unique email per boot (per-file DB persists auth tables across boots), sign up
+  // (first-admin advisory-lock bootstrap fires for the first user) + explicit grantRole (idempotent) so the
+  // captured cookie is authed regardless of bootstrap timing. The gate then authorizes content writes.
+  const email = `swap-admin-${Date.now()}-${Math.random().toString(36).slice(2)}@test.local`;
+  cookie = await srv.signUp(email);
+  await srv.grantRole(await srv.userIdOf(email), 'super-admin');
 });
 after(async () => {
-  if (srv) srv.close(srv.token);
+  if (srv) {
+    srv.close(srv.token);
+    srv.sessionCache.stop();
+    await closeAuth();
+  }
   if (sql) await sql.end();
   if (db) await dropFileDatabase(db.name);
   await rm(genDir, { recursive: true, force: true });
 });
 
+// Reads stay PUBLIC ⇒ anonymous GET. The content WRITE (POST) carries the super-admin `cookie` so the
+// write gate authorizes it. (`srv.applyEdit` is in-process and bypasses the HTTP gate entirely.)
 const get = (p: string): Promise<Response> => fetch(`${srv.base}${p}`);
 const post = (p: string, body: unknown): Promise<Response> =>
-  fetch(`${srv.base}${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  fetch(`${srv.base}${p}`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify(body) });
 const dataOf = async (p: string): Promise<{ data: Record<string, unknown>[] }> => (await get(p)).json() as Promise<{ data: Record<string, unknown>[] }>;
 
 test('1 — ADD a type goes LIVE: GET 404 → applyEdit → GET 200 + writable', async () => {
@@ -147,7 +160,9 @@ test('8 — hooks are SWAP-AWARE: a hooks.ts added then picked up on the next ed
 test('11 — the legacy /modules mutation route is GONE (404); the files-first Builder works', async () => {
   // Legacy-meta teardown: the meta controller is deleted, so POST /modules is no longer a registered
   // route — it falls through to the 404 fallback (was a 410 shim during the transition).
-  const r = await fetch(`${srv.base}/modules`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  // Sent AUTHED so it cleanly reaches the 404 fallback: the write gate only wraps REGISTERED write routes,
+  // and /modules is no longer registered, so the request falls straight through to the 404 fallback.
+  const r = await fetch(`${srv.base}/modules`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: '{}' });
   assert.equal(r.status, 404);
   const ok = await srv.applyEdit({ apiId: 'widget', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   assert.ok(ok.ok);

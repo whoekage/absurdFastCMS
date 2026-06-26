@@ -110,7 +110,7 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     await rbac.rebuild();
     await teamView.rebuild();
 
-    const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, teamView, hookRegistry, modulesDir);
+    const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: hookRegistry, modulesDir });
     close = server.close;
     listenToken = await server.listen(config.server.port);
     const rows = engine.has('article') ? engine.rowCount('article') : 0;

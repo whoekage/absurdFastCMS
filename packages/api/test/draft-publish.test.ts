@@ -1,11 +1,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { PostgresStore } from '../src/db/postgres.store.ts';
-import { createServer, type ListenToken } from '../src/http/server.ts';
-import { migrate } from '../src/db/schema/migrate.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { freePort, physicalColumns, schema, ARTICLE_SCHEMA } from './helpers.ts';
+import { physicalColumns, schema, ARTICLE_SCHEMA, startTestServer, closeAuth, type TestServer } from './helpers.ts';
 
 /**
  * MODEL A DRAFT & PUBLISH — per-type opt-in, end-to-end over a REAL uWS server + REAL Postgres
@@ -15,16 +12,16 @@ import { freePort, physicalColumns, schema, ARTICLE_SCHEMA } from './helpers.ts'
  * column, no wire key).
  *
  * The publish clock is pinned to a fixed Date so the published_at fixture is byte-deterministic (the
- * publish time is caller-supplied, never a SQL now()).
+ * publish time is caller-supplied, never a SQL now()). The full gated server is assembled via
+ * `startTestServer`; gated WRITES (create / publish / unpublish) go through the authed `srv.fetch`, public
+ * READS through `srv.anonFetch`.
  */
 
 const PUBLISH_AT = new Date('2026-01-01T00:00:00.000Z');
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
-let token: ListenToken;
-let base: string;
-let close: (t: ListenToken) => void;
+let srv: TestServer;
 
 before(async () => {
   db = await createFileDatabase('dp');
@@ -41,19 +38,13 @@ before(async () => {
     draftPublish: true,
   });
   const schemas = [ARTICLE_SCHEMA, post];
-  await migrate(sql, schemas, { allowDestructive: true });
-
-  const store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadFromSchemas(schemas);
-  const server = createServer(engine, store, registry, () => PUBLISH_AT);
-  const port = await freePort();
-  token = await server.listen(port);
-  close = server.close;
-  base = `http://127.0.0.1:${port}`;
+  srv = await startTestServer(sql, schemas, { publishClock: () => PUBLISH_AT });
 });
 
 after(async () => {
-  if (token) close(token);
+  if (srv) srv.close(srv.token);
+  if (srv) srv.sessionCache.stop();
+  closeAuth();
   if (sql) await sql.end();
   if (db) await dropFileDatabase(db.name);
 });
@@ -73,7 +64,7 @@ test('a NON-D&P type (article) has NO published_at column — byte-identical', a
 });
 
 test('create on a D&P type -> DRAFT: hidden from the default read, no published_at, visible at status=draft', async () => {
-  const res = await fetch(`${base}/post`, { method: 'POST', body: JSON.stringify({ title: 'Hello' }) });
+  const res = await srv.fetch('/post', { method: 'POST', body: JSON.stringify({ title: 'Hello' }) });
   assert.equal(res.status, 201);
   const created = (await res.json()).data;
   assert.equal(created.id, 1);
@@ -82,56 +73,56 @@ test('create on a D&P type -> DRAFT: hidden from the default read, no published_
   assert.equal(created.published_at, null);
 
   // DEFAULT read = published-only => the draft is HIDDEN.
-  const def = await (await fetch(`${base}/post`)).json();
+  const def = await (await srv.anonFetch('/post')).json();
   assert.equal(def.data.length, 0, 'default read must hide a draft');
 
   // status=draft => the draft is VISIBLE.
-  const drafts = await (await fetch(`${base}/post?status=draft`)).json();
+  const drafts = await (await srv.anonFetch('/post?status=draft')).json();
   assert.equal(drafts.data.length, 1);
   assert.equal(drafts.data[0].id, 1);
 
   // SINGLE: the default (published-only) 404s a draft; status=draft resolves it.
-  assert.equal((await fetch(`${base}/post/1`)).status, 404);
-  assert.equal((await fetch(`${base}/post/1?status=draft`)).status, 200);
+  assert.equal((await srv.anonFetch('/post/1')).status, 404);
+  assert.equal((await srv.anonFetch('/post/1?status=draft')).status, 200);
 });
 
 test('publish -> visible by default with the DETERMINISTIC published_at; unpublish -> hidden again', async () => {
   // Publish entry 1 (created as a draft above).
-  const pub = await fetch(`${base}/post/1/actions/publish`, { method: 'POST' });
+  const pub = await srv.fetch('/post/1/actions/publish', { method: 'POST' });
   assert.equal(pub.status, 200);
   const published = (await pub.json()).data;
   assert.equal(published.published_at, PUBLISH_AT.toISOString(), 'published_at uses the deterministic clock');
 
   // Now visible on the DEFAULT (published-only) read + single.
-  const def = await (await fetch(`${base}/post`)).json();
+  const def = await (await srv.anonFetch('/post')).json();
   assert.equal(def.data.length, 1);
   assert.equal(def.data[0].id, 1);
   assert.equal(def.data[0].published_at, PUBLISH_AT.toISOString());
-  assert.equal((await fetch(`${base}/post/1`)).status, 200);
+  assert.equal((await srv.anonFetch('/post/1')).status, 200);
 
   // And HIDDEN from status=draft.
-  const drafts = await (await fetch(`${base}/post?status=draft`)).json();
+  const drafts = await (await srv.anonFetch('/post?status=draft')).json();
   assert.equal(drafts.data.length, 0);
 
   // Unpublish -> back to draft.
-  const unpub = await fetch(`${base}/post/1/actions/unpublish`, { method: 'POST' });
+  const unpub = await srv.fetch('/post/1/actions/unpublish', { method: 'POST' });
   assert.equal(unpub.status, 200);
   assert.equal((await unpub.json()).data.published_at, null);
 
-  const def2 = await (await fetch(`${base}/post`)).json();
+  const def2 = await (await srv.anonFetch('/post')).json();
   assert.equal(def2.data.length, 0, 'unpublish must hide it from the default read again');
-  const drafts2 = await (await fetch(`${base}/post?status=draft`)).json();
+  const drafts2 = await (await srv.anonFetch('/post?status=draft')).json();
   assert.equal(drafts2.data.length, 1);
 });
 
 test('published_at is rejected in a public write body (unspoofable)', async () => {
-  const res = await fetch(`${base}/post`, {
+  const res = await srv.fetch('/post', {
     method: 'POST',
     body: JSON.stringify({ title: 'Spoof', published_at: '2020-01-01T00:00:00.000Z' }),
   });
   assert.equal(res.status, 400);
   // The user field publishedAt (camelCase) IS still writable — proving no collision.
-  const ok = await fetch(`${base}/post`, {
+  const ok = await srv.fetch('/post', {
     method: 'POST',
     body: JSON.stringify({ title: 'WithUserField', publishedAt: '2020-01-01T00:00:00.000Z' }),
   });
@@ -143,21 +134,21 @@ test('published_at is rejected in a public write body (unspoofable)', async () =
 
 test('publish/unpublish on a NON-D&P type -> 400; status param is a no-op there', async () => {
   // The article seed is non-D&P: the action route 400s.
-  const res = await fetch(`${base}/article/1/actions/publish`, { method: 'POST' });
+  const res = await srv.fetch('/article/1/actions/publish', { method: 'POST' });
   assert.equal(res.status, 400);
 
   // status=draft on a non-D&P type parses (valid token) but is a no-op — every row stays visible.
-  await fetch(`${base}/article`, {
+  await srv.fetch('/article', {
     method: 'POST',
     body: JSON.stringify({ title: 'A', body: 'b', status: 'draft', active: true, publishedAt: '2021-01-01T00:00:00.000Z' }),
   });
-  const list = await (await fetch(`${base}/article?status=draft&pagination[pageSize]=100`)).json();
+  const list = await (await srv.anonFetch('/article?status=draft&pagination[pageSize]=100')).json();
   assert.ok(list.data.length >= 1, 'status is a no-op on a non-D&P type (all rows visible)');
 });
 
 test('an invalid status token -> 400 on any type', async () => {
-  assert.equal((await fetch(`${base}/post?status=bogus`)).status, 400);
-  assert.equal((await fetch(`${base}/article?status=bogus`)).status, 400);
+  assert.equal((await srv.anonFetch('/post?status=bogus')).status, 400);
+  assert.equal((await srv.anonFetch('/article?status=bogus')).status, 400);
 });
 
 test('the published filter is bitset-served (no published_at index built)', async () => {
@@ -166,6 +157,6 @@ test('the published filter is bitset-served (no published_at index built)', asyn
   // large list with status filters still returns correctly, which the prior tests already proved; here
   // we assert the schema did not silently add an index by confirming the read works without one.
   // (The absence-of-index decision is structural; the functional proof is the publish/unpublish test.)
-  const published = await (await fetch(`${base}/post?status=published`)).json();
+  const published = await (await srv.anonFetch('/post?status=published')).json();
   assert.ok(Array.isArray(published.data));
 });

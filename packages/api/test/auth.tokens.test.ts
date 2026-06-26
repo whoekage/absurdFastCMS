@@ -1,6 +1,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+import { mkdtemp } from 'node:fs/promises';
 import postgres from 'postgres';
 import type { Sql } from 'postgres';
 
@@ -9,6 +12,7 @@ import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer } from '../src/http/server.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
+import { HookRegistry } from '../src/db/schema/hooks.ts';
 import { freePort, schema } from './helpers.ts';
 import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
 import { buildAuth } from '../src/auth/auth.ts';
@@ -171,7 +175,11 @@ before(async () => {
 
   await migrate(sql, [NOTE_SCHEMA], { allowDestructive: true }); // CREATE ct_note + write _schema_applied (zero meta)
   const { engine, registry } = await store.loadFromSchemas([NOTE_SCHEMA]);
-  const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, teamView);
+  // FULL real server (mirrors conti.ts): every dep wired, incl. hooks + an EMPTY temp modulesDir so the
+  // Builder routes register — the tightened ServerDeps signature requires them. The file mints its OWN scoped
+  // keys/cookies for the x-api-key / cookie header-path assertions, so it keeps its explicit per-request headers.
+  const modulesDir = await mkdtemp(path.join(os.tmpdir(), 'conti-tokens-'));
+  const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: new HookRegistry(), modulesDir });
   token = await server.listen(port0);
   close = server.close;
 
@@ -446,8 +454,8 @@ test('checklist#5: revoke makes the very NEXT request 401 (no TTL window)', asyn
     body: JSON.stringify({ title: 'post-revoke' }),
   });
   assert.equal(after.status, 401, 'a revoked key must fail the very next request');
-  const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM apikey WHERE id = ${data.id}`;
-  assert.equal(n, 0, 'the revoked key row is gone from PG');
+  const [gone] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM apikey WHERE id = ${data.id}`;
+  assert.equal(gone!.n, 0, 'the revoked key row is gone from PG');
 });
 
 // ---------------------------------------------------------------------------------------------------
@@ -530,8 +538,8 @@ test('checklist#7a: suspending the owner makes their key fail the next request',
     body: JSON.stringify({ title: 'post-suspend' }),
   });
   assert.equal(after.status, 401, 'a suspended owner key must fail the next request (revoked + denied)');
-  const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM apikey WHERE "referenceId" = ${ownerId}`;
-  assert.equal(n, 0, 'the suspended owner keys are durably revoked in PG');
+  const [revoked] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM apikey WHERE "referenceId" = ${ownerId}`;
+  assert.equal(revoked!.n, 0, 'the suspended owner keys are durably revoked in PG');
 });
 
 test('checklist#7b: a suspended-owner key whose row SURVIVES is still denied at resolution', async () => {
@@ -624,8 +632,8 @@ test('checklist#8: a user lists ONLY their own keys; cannot revoke another user 
   const adminCookie = await signIn('admin@example.com');
   const adminRevoke = await fetch(`${base}/_keys/${bKeyId.id}`, { method: 'DELETE', headers: { cookie: adminCookie } });
   assert.equal(adminRevoke.status, 200, `token.manage holder must revoke any key, got ${adminRevoke.status}`);
-  const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM apikey WHERE id = ${bKeyId.id}`;
-  assert.equal(n, 0, "B's key is gone after the admin revoke");
+  const [adminGone] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM apikey WHERE id = ${bKeyId.id}`;
+  assert.equal(adminGone!.n, 0, "B's key is gone after the admin revoke");
 
   // (d) Revoking a key id the caller does not own (and a non-existent id) → 404/403, never a blind delete.
   const unknown = await fetch(`${base}/_keys/does-not-exist`, { method: 'DELETE', headers: { cookie: aCookie } });

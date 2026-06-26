@@ -6,7 +6,8 @@ import { migrate } from '../src/db/schema/migrate.ts';
 import type { Schema } from '../src/db/schema/model.ts';
 import type { ListenToken } from '../src/http/server.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { tableExists, startTestServerFromSchemas, schema } from './helpers.ts';
+import { tableExists, startTestServer, schema, closeAuth } from './helpers.ts';
+import type { TestServer } from './helpers.ts';
 
 /**
  * WRITE-SECURITY SLICE — injection via field name, mass-assignment, jsonb byte-exact through load+
@@ -21,6 +22,8 @@ let token: ListenToken;
 let base: string;
 let close: (t: ListenToken) => void;
 let schemas: Schema[];
+let server: TestServer;
+let authedFetch: TestServer['fetch'];
 
 before(async () => {
   db = await createFileDatabase('sec');
@@ -40,16 +43,19 @@ before(async () => {
     }),
     schema({ apiId: 'doc', fields: [{ name: 'blob', cmsType: 'json', options: { nullable: false } }] }),
   ];
-  const server = await startTestServerFromSchemas(sql, schemas, {
+  server = await startTestServer(sql, schemas, {
     seed: async () => { await sql`INSERT INTO ct_article (title, body, status, views, rating, active, "publishedAt") VALUES ('Seed', 'b1', 'published', 1, 1.0, true, '2021-01-01T00:00:00.000Z')`; },
   });
   close = server.close;
-  token = server.token;
+  token = server.token as ListenToken;
   base = server.base;
+  authedFetch = server.fetch;
 });
 
 after(async () => {
   if (token) close(token);
+  if (server) server.sessionCache.stop();
+  closeAuth();
   // Guard so a failing before() (db/sql undefined) surfaces the real error, not a deref of undefined.
   if (sql) await sql.end();
   if (db) await dropFileDatabase(db.name);
@@ -63,7 +69,7 @@ test('injection via field name -> 400 unknown field, before any SQL; ct_article 
     active: true,
     publishedAt: '2022-01-01T00:00:00.000Z',
   };
-  const res = await fetch(`${base}/article`, { method: 'POST', body: JSON.stringify(body) });
+  const res = await authedFetch(`/article`, { method: 'POST', body: JSON.stringify(body) });
   assert.equal(res.status, 400);
   assert.match((await res.json()).error, /unknown field/);
   assert.equal(await tableExists(sql, 'ct_article'), true);
@@ -73,7 +79,7 @@ test('mass-assignment: id / document_id / created_at / updated_at are rejected (
   const ok = { body: 'x', status: 'draft', active: true, publishedAt: '2022-01-01T00:00:00.000Z' };
   for (const key of ['id', 'document_id', 'created_at', 'updated_at']) {
     const numeric = key === 'id' || key === 'document_id';
-    const res = await fetch(`${base}/article`, { method: 'POST', body: JSON.stringify({ ...ok, [key]: numeric ? 99 : '2000-01-01T00:00:00.000Z' }) });
+    const res = await authedFetch(`/article`, { method: 'POST', body: JSON.stringify({ ...ok, [key]: numeric ? 99 : '2000-01-01T00:00:00.000Z' }) });
     assert.equal(res.status, 400, key);
   }
 });
@@ -93,6 +99,6 @@ test('jsonb nested big int + key order survive load+respond byte-exact (the ::te
 });
 
 test('write to unknown type -> 404 (no 500 / table-name leak)', async () => {
-  const res = await fetch(`${base}/nope`, { method: 'POST', body: JSON.stringify({ x: 1 }) });
+  const res = await authedFetch(`/nope`, { method: 'POST', body: JSON.stringify({ x: 1 }) });
   assert.equal(res.status, 404);
 });

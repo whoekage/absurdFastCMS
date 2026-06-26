@@ -1,12 +1,9 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import { PostgresStore } from '../src/db/postgres.store.ts';
-import { createServer, type ListenToken } from '../src/http/server.ts';
-import { migrate } from '../src/db/schema/migrate.ts';
 import type { Schema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { freePort, physicalColumns, schema, ARTICLE_SCHEMA } from './helpers.ts';
+import { physicalColumns, schema, ARTICLE_SCHEMA, startTestServer, closeAuth, type TestServer } from './helpers.ts';
 
 /**
  * be-06 i18n — READ-SIDE + SCHEMA, end-to-end over a REAL uWS server + REAL Postgres (.env.test), no
@@ -22,11 +19,9 @@ import { freePort, physicalColumns, schema, ARTICLE_SCHEMA } from './helpers.ts'
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
-let token: ListenToken;
-let base: string;
-let close: (t: ListenToken) => void;
+let ts: TestServer; // the running harness handle (reassigned on the mid-test reboot below)
 let baseSchemas: Schema[]; // the catalog seeded in before() — the mid-test type adds to this
-let baseRegistry: Awaited<ReturnType<PostgresStore['loadFromSchemas']>>['registry'];
+let baseRegistry: TestServer['registry'];
 
 // DEFAULT_LOCALE is read from .env.test; the read router resolves a locale-less read of an i18n type to it.
 // We do NOT assume a specific value — we assert relative to whichever variant we tag as the default below.
@@ -42,31 +37,31 @@ before(async () => {
     i18n: true,
   });
   baseSchemas = [ARTICLE_SCHEMA, page];
-  await migrate(sql, baseSchemas, { allowDestructive: true });
 
-  // Seed locale variants DIRECTLY (write verb is the next slice). Two documents, each with 2 locales:
+  // Boot the FULL gated server via the unified harness; seed the locale variants in the `seed` hook (runs
+  // AFTER migrate creates ct_page, BEFORE the engine streams the rows). Two documents, each with 2 locales:
   //   document_id=100: { DEFAULT_LOCALE: "Home", "fr": "Accueil" }
   //   document_id=200: { DEFAULT_LOCALE: "About" }   (only the default-locale variant exists)
-  await sql.unsafe(
-    `INSERT INTO ct_page (document_id, locale, title) VALUES
-       (100, $1, 'Home'),
-       (100, 'fr', 'Accueil'),
-       (200, $1, 'About')`,
-    [DEFAULT_LOCALE],
-  );
-
-  const store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadFromSchemas(baseSchemas);
-  baseRegistry = registry;
-  const server = createServer(engine, store, registry);
-  const port = await freePort();
-  token = await server.listen(port);
-  close = server.close;
-  base = `http://127.0.0.1:${port}`;
+  ts = await startTestServer(sql, baseSchemas, {
+    seed: async () => {
+      await sql.unsafe(
+        `INSERT INTO ct_page (document_id, locale, title) VALUES
+           (100, $1, 'Home'),
+           (100, 'fr', 'Accueil'),
+           (200, $1, 'About')`,
+        [DEFAULT_LOCALE],
+      );
+    },
+  });
+  baseRegistry = ts.registry;
 });
 
 after(async () => {
-  if (token) close(token);
+  if (ts) {
+    ts.close(ts.token);
+    ts.sessionCache.stop();
+  }
+  closeAuth();
   if (sql) await sql.end();
   if (db) await dropFileDatabase(db.name);
 });
@@ -104,7 +99,7 @@ test('a NON-i18n type (article) has NO locale column — byte-identical', async 
 
 test('document_id is loaded + emitted as a JSON NUMBER for an i18n type', async () => {
   // GET a single variant: document_id + locale appear on the wire; document_id is a plain number.
-  const res = await fetch(`${base}/page?locale=${encodeURIComponent(DEFAULT_LOCALE)}&filters[document_id][$eq]=100`);
+  const res = await ts.anonFetch(`/page?locale=${encodeURIComponent(DEFAULT_LOCALE)}&filters[document_id][$eq]=100`);
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.data.length, 1, 'document_id must be queryable (index-backed eq filter)');
@@ -116,7 +111,7 @@ test('document_id is loaded + emitted as a JSON NUMBER for an i18n type', async 
 });
 
 test('document_id is NOT emitted for a NON-i18n type (the be-02b loader-skip stays in force)', async () => {
-  const res = await fetch(`${base}/article`);
+  const res = await ts.anonFetch(`/article`);
   assert.equal(res.status, 200);
   const body = await res.json();
   // The seed article may have 0 rows; just assert the key is absent if any row exists, and that a
@@ -125,12 +120,12 @@ test('document_id is NOT emitted for a NON-i18n type (the be-02b loader-skip sta
     assert.equal('document_id' in row, false, 'document_id must NOT be emitted on a non-i18n type');
     assert.equal('locale' in row, false, 'locale must NOT be emitted on a non-i18n type');
   }
-  const bad = await fetch(`${base}/article?filters[document_id][$eq]=1`);
+  const bad = await ts.anonFetch(`/article?filters[document_id][$eq]=1`);
   assert.equal(bad.status, 400, 'document_id is not a queryable field on a non-i18n type');
 });
 
 test('default locale: a locale-less read returns only the DEFAULT_LOCALE variants', async () => {
-  const res = await fetch(`${base}/page`);
+  const res = await ts.anonFetch(`/page`);
   assert.equal(res.status, 200);
   const body = await res.json();
   // document 100 (default) + document 200 (default) — the fr variant of 100 is excluded.
@@ -141,34 +136,34 @@ test('default locale: a locale-less read returns only the DEFAULT_LOCALE variant
 });
 
 test('locale=<code> selects exactly that locale; no fallback for a missing variant', async () => {
-  const fr = await (await fetch(`${base}/page?locale=fr`)).json();
+  const fr = await (await ts.anonFetch(`/page?locale=fr`)).json();
   assert.equal(fr.data.length, 1, 'only document 100 has an fr variant; document 200 does NOT fall back');
   assert.equal(fr.data[0].locale, 'fr');
   assert.equal(fr.data[0].title, 'Accueil');
   assert.equal(fr.data[0].document_id, 100);
 
   // A locale with NO variants at all -> empty (no fallback to default).
-  const de = await (await fetch(`${base}/page?locale=de`)).json();
+  const de = await (await ts.anonFetch(`/page?locale=de`)).json();
   assert.equal(de.data.length, 0, 'a locale with no variants returns nothing (NO fallback)');
 });
 
 test('locale=* returns ALL variants (no predicate)', async () => {
-  const res = await fetch(`${base}/page?locale=*`);
+  const res = await ts.anonFetch(`/page?locale=*`);
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.data.length, 3, 'all variants: 100/default, 100/fr, 200/default');
 });
 
 test('an invalid locale slug is a 400 on any type (validated at parse time)', async () => {
-  assert.equal((await fetch(`${base}/page?locale=en%20US`)).status, 400, 'space is illegal in a slug');
-  assert.equal((await fetch(`${base}/page?locale=`)).status, 400, 'empty locale is rejected');
+  assert.equal((await ts.anonFetch(`/page?locale=en%20US`)).status, 400, 'space is illegal in a slug');
+  assert.equal((await ts.anonFetch(`/page?locale=`)).status, 400, 'empty locale is rejected');
   // Validated even on a NON-i18n type (the effect is a no-op there, but the token must still parse).
-  assert.equal((await fetch(`${base}/article?locale=en%20US`)).status, 400);
+  assert.equal((await ts.anonFetch(`/article?locale=en%20US`)).status, 400);
 });
 
 test('locale is a no-op on a NON-i18n type (byte-identical to no locale param)', async () => {
-  const withLocale = await fetch(`${base}/article?locale=fr`);
-  const without = await fetch(`${base}/article`);
+  const withLocale = await ts.anonFetch(`/article?locale=fr`);
+  const without = await ts.anonFetch(`/article`);
   assert.equal(withLocale.status, 200);
   assert.equal(without.status, 200);
   assert.deepEqual(await withLocale.json(), await without.json(), 'locale must not change a non-i18n read');
@@ -181,8 +176,9 @@ test('locale is a no-op on a NON-i18n type (byte-identical to no locale param)',
  * plus draft_publish, exercised entirely over the HTTP write verbs (no direct SQL). `post`/`put`/`get`
  * are tiny fetch helpers.
  */
+// WRITES go through the harness AUTHED fetch (the super-admin cookie clears the RBAC gate).
 async function post(path: string, body?: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${base}${path}`, {
+  const res = await ts.fetch(path, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -190,11 +186,12 @@ async function post(path: string, body?: unknown): Promise<{ status: number; jso
   return { status: res.status, json: res.status === 204 ? null : await res.json() };
 }
 async function put(path: string, body: unknown): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${base}${path}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const res = await ts.fetch(path, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   return { status: res.status, json: await res.json() };
 }
+// READS stay public — use the anonymous fetch.
 async function getJson(path: string): Promise<any> {
-  return (await fetch(`${base}${path}`)).json();
+  return (await ts.anonFetch(path)).json();
 }
 
 test('write-side: plain create -> variant create (same document_id, distinct id+locale) -> locale reads', async () => {
@@ -209,16 +206,12 @@ test('write-side: plain create -> variant create (same document_id, distinct id+
     draftPublish: true,
   });
   const schemas = [...baseSchemas, doc]; // the FULL desired catalog (migrate diffs against the applied snapshot)
-  await migrate(sql, schemas, { allowDestructive: true });
-  // Reload the running server's engine+registry so the new type is live on THIS server instance.
-  const store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadFromSchemas(schemas);
-  if (token) close(token);
-  const server = createServer(engine, store, registry, () => new Date('2026-01-01T00:00:00.000Z'));
-  const port = await freePort();
-  token = await server.listen(port);
-  close = server.close;
-  base = `http://127.0.0.1:${port}`;
+  // Reboot the FULL harness with the new type live + a pinned publish clock (byte-deterministic published_at).
+  // startTestServer re-migrates (additive: adds ct_doc, leaves the seeded ct_page rows) and re-bootstraps a
+  // fresh super-admin in the same per-file DB. Stop the old server's session cache before swapping.
+  ts.close(ts.token);
+  ts.sessionCache.stop();
+  ts = await startTestServer(sql, schemas, { publishClock: () => new Date('2026-01-01T00:00:00.000Z') });
 
   // 1) Plain create -> default-locale variant, fresh document_id, server-set locale.
   const created = await post('/doc', { title: 'Hello', summary: 'A doc' });

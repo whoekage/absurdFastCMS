@@ -4,20 +4,22 @@ import { rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { Sql } from 'postgres';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { cleanCatalog, tableExists, startTestServerFromFiles } from './helpers.ts';
+import { cleanCatalog, tableExists, startTestServerFromFilesWithAuth, closeAuth } from './helpers.ts';
 
 /**
  * S5 — the Builder HTTP route surface (GET list/one, preview, PUT, DELETE), over REAL Postgres (no mocks),
- * asserted via HTTP. The test server wires NO auth, so the `builder.manage` gate is OPEN (the no-auth
- * pass-through) — this exercises the route logic + uniform envelope + error→status mapping. The 401/403
- * gating path (auth wired) is covered separately with the auth harness (S6 concurrency suite).
+ * asserted via HTTP. The server wires the FULL real auth stack, so the `builder.manage` gate is ENFORCED:
+ * every builder WRITE (PUT/DELETE/preview) carries the bootstrapped super-admin cookie. Reads (GET list/one,
+ * the live type, the catalog-version ETag) stay PUBLIC and go out anonymous. This exercises the route logic
+ * + uniform envelope + error→status mapping; the 401/403 gating path is covered separately (S6 concurrency).
  */
 
 const genDir = fileURLToPath(new URL(`./fixtures/.gen-${process.pid}-s5route/`, import.meta.url));
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
-let srv: Awaited<ReturnType<typeof startTestServerFromFiles>>;
+let srv: Awaited<ReturnType<typeof startTestServerFromFilesWithAuth>>;
+let cookie: string; // the super-admin session cookie injected into every builder WRITE
 
 before(async () => {
   db = await createFileDatabase('builder-route');
@@ -28,10 +30,20 @@ beforeEach(async () => {
   await sql`DROP TABLE IF EXISTS _schema_applied`;
   await rm(genDir, { recursive: true, force: true });
   if (srv) srv.close(srv.token);
-  srv = await startTestServerFromFiles(sql, genDir);
+  srv = await startTestServerFromFilesWithAuth(sql, genDir);
+  // Bootstrap a super-admin: unique email per boot (per-file DB persists auth tables across boots), sign up
+  // (first-admin advisory-lock bootstrap fires for the first user) + explicit grantRole (idempotent) so the
+  // captured cookie is authed regardless of bootstrap timing. `builder.manage` then authorizes the writes.
+  const email = `route-admin-${Date.now()}-${Math.random().toString(36).slice(2)}@test.local`;
+  cookie = await srv.signUp(email);
+  await srv.grantRole(await srv.userIdOf(email), 'super-admin');
 });
 after(async () => {
-  if (srv) srv.close(srv.token);
+  if (srv) {
+    srv.close(srv.token);
+    srv.sessionCache.stop();
+    await closeAuth();
+  }
   if (sql) await sql.end();
   if (db) await dropFileDatabase(db.name);
   await rm(genDir, { recursive: true, force: true });
@@ -40,13 +52,15 @@ after(async () => {
 // S6 requires If-Match on PUT/DELETE. These helpers auto-attach the CURRENT on-disk version (the GET ETag)
 // unless an explicit `ifMatch` override is passed — so the functional route tests exercise the happy path
 // while the precondition is enforced. (412/428 are asserted in the concurrency suite.)
+// The catalog-version ETag is a PUBLIC read ⇒ stays anonymous. The WRITES (PUT/DELETE/preview) carry the
+// super-admin `cookie` so the `builder.manage` gate authorizes them.
 const ver = async (): Promise<string> => (await fetch(`${srv.base}/builder/modules`)).headers.get('etag') ?? '';
 const put = async (apiId: string, body: unknown, ifMatch?: string): Promise<Response> =>
-  fetch(`${srv.base}/builder/modules/${apiId}`, { method: 'PUT', headers: { 'content-type': 'application/json', 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
+  fetch(`${srv.base}/builder/modules/${apiId}`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
 const del = async (apiId: string, body: unknown, ifMatch?: string): Promise<Response> =>
-  fetch(`${srv.base}/builder/modules/${apiId}`, { method: 'DELETE', headers: { 'content-type': 'application/json', 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
+  fetch(`${srv.base}/builder/modules/${apiId}`, { method: 'DELETE', headers: { 'content-type': 'application/json', cookie, 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
 const preview = (apiId: string, body: unknown): Promise<Response> =>
-  fetch(`${srv.base}/builder/modules/${apiId}/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  fetch(`${srv.base}/builder/modules/${apiId}/preview`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify(body) });
 
 test('PUT create → 200 uniform envelope; GET list/one reflect it; the type serves live', async () => {
   const r = await put('gadget', { apiId: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });

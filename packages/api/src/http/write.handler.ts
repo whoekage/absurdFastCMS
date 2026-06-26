@@ -59,10 +59,11 @@ export interface WriteContext {
   publishClock(): Date;
   /**
    * Content lifecycle hooks. `before*` run INSIDE the write tx (transform/veto → rollback); `after*` run
-   * AFTER {@link rebuild} (post-commit side-effects). Absent on a read-only / hookless server. Read via a
-   * LIVE getter in the server (S4), so the key is always present but may be `undefined`.
+   * AFTER {@link rebuild} (post-commit side-effects). Read via a LIVE getter in the server (S4) so a
+   * schema-edit swap installing a new type's hooks.ts is seen immediately. ALWAYS present now (the server
+   * always wires a HookRegistry — possibly empty, whose runBefore/runAfter are no-ops).
    */
-  hooks?: HookRegistry | undefined;
+  hooks: HookRegistry;
 }
 
 export interface WriteRequest {

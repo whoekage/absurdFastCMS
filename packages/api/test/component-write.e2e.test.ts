@@ -12,9 +12,10 @@ const STORAGE_DIR = await mkdtemp(path.join(os.tmpdir(), 'absurd-cmp-write-'));
 process.env.LOCAL_STORAGE_PATH = STORAGE_DIR;
 delete process.env.S3_BUCKET; // select the LOCAL provider for this run.
 
+import type { TestServer } from './helpers.ts';
 const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { cleanCatalog, schema, startTestServerFromSchemas } = await import('./helpers.ts');
+const { cleanCatalog, schema, startTestServer, closeAuth } = await import('./helpers.ts');
 const { mintId } = await import('../src/db/schema/model.ts');
 const { resetStorageProvider } = await import('../src/storage/index.ts');
 const { pngBytes } = await import('./storage-fixtures.ts');
@@ -39,16 +40,21 @@ function component(apiId: string, fields: { name: string; type: FieldType; optio
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
-let base: string;
-let close: (token: unknown) => void;
-let token: unknown;
+let srv: TestServer | undefined;
 
-/** Per-test files-first server: each test owns its host modules + in-memory components. */
+/** Tear down the current per-test server + its auth stack (close listener, stop the session cache, close auth). */
+function teardownServer(): void {
+  if (srv) {
+    srv.close(srv.token);
+    srv.sessionCache.stop();
+    closeAuth();
+    srv = undefined;
+  }
+}
+
+/** Per-test FULL gated server: each test owns its host modules + in-memory components, bootstrapped super-admin. */
 async function boot(schemas: Schema[], components: ComponentSchema[] = []): Promise<void> {
-  const srv = await startTestServerFromSchemas(sql, schemas, { components });
-  base = srv.base;
-  close = srv.close;
-  token = srv.token;
+  srv = await startTestServer(sql, schemas, { components });
 }
 
 before(async () => {
@@ -59,27 +65,30 @@ before(async () => {
 });
 
 beforeEach(async () => {
-  if (token) close(token);
-  token = undefined;
+  teardownServer();
   await cleanCatalog(sql);
 });
 
 after(async () => {
-  if (token) close(token);
+  teardownServer();
   if (sql) await sql.end();
   if (db) await dropFileDatabase(db.name);
   await rm(STORAGE_DIR, { recursive: true, force: true });
 });
 
-const POST = (p: string, body: unknown) => fetch(`${base}${p}`, { method: 'POST', body: JSON.stringify(body) });
-const PUT = (p: string, body: unknown) => fetch(`${base}${p}`, { method: 'PUT', body: JSON.stringify(body) });
-const GET = (p: string) => fetch(`${base}${p}`);
+// WRITES (POST/PUT, media upload) go through the AUTHED super-admin fetch so the route gate passes; public
+// READS go through the anonymous fetch.
+const POST = (p: string, body: unknown) => srv!.fetch(p, { method: 'POST', body: JSON.stringify(body) });
+const PUT = (p: string, body: unknown) => srv!.fetch(p, { method: 'PUT', body: JSON.stringify(body) });
+const GET = (p: string) => srv!.anonFetch(p);
 
 interface Asset { id: number; mime: string; url: string | null }
 async function uploadAsset(w: number, h: number): Promise<Asset> {
   const fd = new FormData();
   fd.set('file', new Blob([pngBytes(w, h)], { type: 'image/png' }), `img-${w}x${h}.png`);
-  const r = await fetch(`${base}/_files/upload`, { method: 'POST', body: fd });
+  // WRITE: route through the authed fetch so the media-upload gate passes (keep the FormData body so fetch
+  // computes the multipart boundary itself).
+  const r = await srv!.fetch('/_files/upload', { method: 'POST', body: fd });
   assert.ok(r.status === 201 || r.status === 200, `upload -> ${r.status}`);
   return ((await r.json()) as { data: Asset }).data;
 }

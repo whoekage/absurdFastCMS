@@ -12,7 +12,7 @@ delete process.env.S3_BUCKET; // select the LOCAL provider for this run.
 
 const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { startTestServerFromSchemas, schema } = await import('./helpers.ts');
+const { startTestServer, schema, closeAuth } = await import('./helpers.ts');
 const { resetStorageProvider } = await import('../src/storage/index.ts');
 const { pngBytes } = await import('./storage-fixtures.ts');
 
@@ -29,9 +29,7 @@ const { pngBytes } = await import('./storage-fixtures.ts');
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
-let base: string;
-let close: (token: unknown) => void;
-let token: unknown;
+let srv: Awaited<ReturnType<typeof startTestServer>>;
 
 const DEFAULT_LOCALE = process.env.DEFAULT_LOCALE?.trim() || 'en';
 
@@ -40,13 +38,13 @@ interface Asset { id: number }
 async function uploadAsset(w: number, h: number): Promise<Asset> {
   const fd = new FormData();
   fd.set('file', new Blob([pngBytes(w, h)], { type: 'image/png' }), `img-${w}x${h}.png`);
-  const r = await fetch(`${base}/_files/upload`, { method: 'POST', body: fd });
+  const r = await srv.fetch(`/_files/upload`, { method: 'POST', body: fd }); // gated media write -> authed
   assert.ok(r.status === 201 || r.status === 200, `upload ${w}x${h} -> ${r.status}`);
   return ((await r.json()) as { data: Asset }).data;
 }
 
-const POST = (p: string, body: unknown) => fetch(`${base}${p}`, { method: 'POST', body: JSON.stringify(body) });
-const GET = (p: string) => fetch(`${base}${p}`);
+const POST = (p: string, body: unknown) => srv.fetch(p, { method: 'POST', body: JSON.stringify(body) }); // gated write -> authed
+const GET = (p: string) => srv.anonFetch(p); // reads stay public
 
 before(async () => {
   resetStorageProvider();
@@ -67,14 +65,15 @@ before(async () => {
       { name: 'banner', cmsType: 'media', options: { nullable: true }, localized: true },
     ],
   });
-  const srv = await startTestServerFromSchemas(sql, [pageSchema]);
-  base = srv.base;
-  close = srv.close;
-  token = srv.token;
+  srv = await startTestServer(sql, [pageSchema]);
 });
 
 after(async () => {
-  if (token) close(token);
+  if (srv) {
+    srv.close(srv.token);
+    srv.sessionCache.stop();
+  }
+  await closeAuth();
   if (sql) await sql.end();
   if (db) await dropFileDatabase(db.name);
   await rm(STORAGE_DIR, { recursive: true, force: true });
@@ -145,7 +144,7 @@ test('a variant copying a shared media field that points at a since-DELETED asse
   const fr = (await frRes.json()) as { data: { id: number } };
 
   // Now delete the asset out from under BOTH variants and confirm populate degrades gracefully, never 500.
-  assert.equal((await fetch(`${base}/_files/${a.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await srv.fetch(`/_files/${a.id}`, { method: 'DELETE' })).status, 200); // gated media delete -> authed
   const pop = await GET(`/page/${fr.data.id}?locale=fr&populate=gallery,hero`);
   assert.equal(pop.status, 200);
   const body = (await pop.json()) as { data: { gallery: { id: number }[]; hero: { id: number } | null } };

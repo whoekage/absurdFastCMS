@@ -4,8 +4,9 @@ import type { Sql } from 'postgres';
 import type { ListenToken } from '../src/http/server.ts';
 import { deriveLinkTableName } from '../src/db/ddl.ts';
 import type { Schema } from '../src/db/schema/model.ts';
+import type { SessionCache } from '../src/auth/session.cache.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { cleanCatalog, schema, startTestServerFromSchemas } from './helpers.ts';
+import { cleanCatalog, schema, startTestServer, closeAuth } from './helpers.ts';
 
 /**
  * RELATIONS SLICE 6 — WRITE-SIDE connect/disconnect/set, end-to-end over a REAL uWS server + REAL
@@ -17,8 +18,10 @@ import { cleanCatalog, schema, startTestServerFromSchemas } from './helpers.ts';
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let base: string;
-let token: ListenToken;
-let close: (t: ListenToken) => void;
+// Per-server fetch handles from the unified harness: `authed` carries the super-admin cookie (gated writes),
+// `anon` is cookie-less (public reads).
+let authed: (p: string, init?: RequestInit) => Promise<Response>;
+let anon: (p: string, init?: RequestInit) => Promise<Response>;
 
 before(async () => {
   db = await createFileDatabase('relwrite');
@@ -26,29 +29,31 @@ before(async () => {
 });
 
 after(async () => {
-  if (token) close(token);
+  for (const s of servers) { s.close(s.token); s.sessionCache.stop(); }
+  closeAuth();
   if (sql) await sql.end();
   if (db) await dropFileDatabase(db.name);
 });
 
 // --- harness ------------------------------------------------------------------------------------
 
-// The server is booted PER TEST from the test's in-code IR (migrate materializes the ct_*/link tables,
-// the seed callback inserts fixture rows BEFORE the engine loads, then the engine+registry are built).
-let servers: { close: (t: ListenToken) => void; token: ListenToken }[] = [];
+// The server is booted PER TEST from the test's in-code IR via the FULL gated harness (migrate materializes
+// the ct_*/link tables, the seed callback inserts fixture rows BEFORE the engine loads, then the full real
+// server — auth/sessionCache/rbac/teamView/hooks/modulesDir — is assembled and a super-admin bootstrapped).
+let servers: { close: (t: ListenToken) => void; token: ListenToken; sessionCache: SessionCache }[] = [];
 
 beforeEach(async () => {
-  for (const s of servers) s.close(s.token);
+  for (const s of servers) { s.close(s.token); s.sessionCache.stop(); }
   servers = [];
   await cleanCatalog(sql);
 });
 
 async function boot(schemas: Schema[], seed?: () => Promise<void>): Promise<void> {
-  const s = await startTestServerFromSchemas(sql, schemas, seed ? { seed } : {});
+  const s = await startTestServer(sql, schemas, seed ? { seed } : {});
   base = s.base;
-  token = s.token;
-  close = s.close;
-  servers.push({ close: s.close, token: s.token });
+  authed = s.fetch;
+  anon = s.anonFetch;
+  servers.push({ close: s.close, token: s.token, sessionCache: s.sessionCache });
 }
 
 async function insertRow(table: string, col: string, value: string): Promise<number> {
@@ -62,17 +67,18 @@ async function links(linkTable: string): Promise<{ owner_id: number; related_id:
   return rows.map((r) => ({ owner_id: r.owner_id, related_id: r.related_id }));
 }
 
+// WRITES go through the AUTHED fetch (super-admin cookie ⇒ the RBAC gate passes); READS stay anonymous (public).
 async function post(type: string, body: unknown): Promise<Response> {
-  return fetch(`${base}/${type}`, { method: 'POST', body: JSON.stringify(body) });
+  return authed(`${base}/${type}`, { method: 'POST', body: JSON.stringify(body) });
 }
 async function put(type: string, id: number, body: unknown): Promise<Response> {
-  return fetch(`${base}/${type}/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  return authed(`${base}/${type}/${id}`, { method: 'PUT', body: JSON.stringify(body) });
 }
 async function del(type: string, id: number): Promise<Response> {
-  return fetch(`${base}/${type}/${id}`, { method: 'DELETE' });
+  return authed(`${base}/${type}/${id}`, { method: 'DELETE' });
 }
 async function getJson(type: string, query: string): Promise<{ status: number; json: { data: Record<string, unknown>[] } }> {
-  const res = await fetch(`${base}/${type}?${query}`);
+  const res = await anon(`${base}/${type}?${query}`);
   return { status: res.status, json: (await res.json()) as { data: Record<string, unknown>[] } };
 }
 

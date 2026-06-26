@@ -13,7 +13,7 @@ delete process.env.S3_BUCKET; // ensure the LOCAL provider is selected in this r
 
 const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { startTestServerFromSchemas } = await import('./helpers.ts');
+const { startTestServer, closeAuth } = await import('./helpers.ts');
 const { getStorageProvider, resetStorageProvider } = await import('../src/storage/index.ts');
 const { pngBytes, textBytes } = await import('./storage-fixtures.ts');
 
@@ -30,21 +30,29 @@ let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let base: string;
 let close: (token: unknown) => void;
 let token: unknown;
+let srv: Awaited<ReturnType<typeof startTestServer>>;
+// AUTHED fetch (super-admin cookie) for the gated WRITE routes (upload/delete); anon for the public reads.
+let authedFetch: (path: string, init?: RequestInit) => Promise<Response>;
+let publicFetch: (path: string, init?: RequestInit) => Promise<Response>;
 
 before(async () => {
   resetStorageProvider();
   db = await createFileDatabase('mediaupload');
   sql = db.sql;
   await runMigrations(db.url);
-  const srv = await startTestServerFromSchemas(sql, []); // media routes are catalog-agnostic; empty schema
+  srv = await startTestServer(sql, []); // media routes are catalog-agnostic; empty schema
 
   base = srv.base;
   close = srv.close;
   token = srv.token;
+  authedFetch = srv.fetch;
+  publicFetch = srv.anonFetch;
 });
 
 after(async () => {
   if (token) close(token);
+  srv?.sessionCache.stop();
+  closeAuth();
   if (sql) await sql.end();
   if (db) await dropFileDatabase(db.name);
   await rm(STORAGE_DIR, { recursive: true, force: true });
@@ -59,7 +67,9 @@ interface Asset {
 async function upload(bytes: Buffer, filename: string, mime: string): Promise<Response> {
   const fd = new FormData();
   fd.set('file', new Blob([bytes], { type: mime }), filename);
-  return fetch(`${base}/_files/upload`, { method: 'POST', body: fd });
+  // WRITE: route through the authed fetch so the media-upload gate passes. Keep the FormData body — do NOT
+  // set content-type, let fetch compute the multipart boundary.
+  return authedFetch('/_files/upload', { method: 'POST', body: fd });
 }
 
 test('upload a real PNG: 201, row carries sniffed mime/size/dims/hash, bytes are retrievable', async () => {
@@ -79,10 +89,10 @@ test('upload a real PNG: 201, row carries sniffed mime/size/dims/hash, bytes are
   const got = await getStorageProvider().get(data.storageKey);
   assert.equal(Buffer.compare(got, bytes), 0);
 
-  // GET /_files/:id returns the same row; GET /_files lists it.
-  const one = (await (await fetch(`${base}/_files/${data.id}`)).json()) as { data: Asset };
+  // GET /_files/:id returns the same row; GET /_files lists it. Reads stay PUBLIC.
+  const one = (await (await publicFetch(`/_files/${data.id}`)).json()) as { data: Asset };
   assert.equal(one.data.id, data.id);
-  const listed = (await (await fetch(`${base}/_files`)).json()) as { data: Asset[]; meta: { pagination: { total: number } } };
+  const listed = (await (await publicFetch(`/_files`)).json()) as { data: Asset[]; meta: { pagination: { total: number } } };
   assert.ok(listed.data.some((a) => a.id === data.id));
   assert.ok(listed.meta.pagination.total >= 1);
 });
@@ -133,7 +143,7 @@ test('a traversal-laden filename is sanitized to a safe basename (no escape)', a
 });
 
 test('a non-multipart upload body is rejected (415)', async () => {
-  const res = await fetch(`${base}/_files/upload`, {
+  const res = await authedFetch('/_files/upload', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ not: 'multipart' }),
@@ -147,19 +157,20 @@ test('DELETE removes BOTH the record and the bytes', async () => {
   const key = created.data.storageKey;
   assert.equal(await getStorageProvider().exists(key), true);
 
-  const del = await fetch(`${base}/_files/${created.data.id}`, { method: 'DELETE' });
+  const del = await authedFetch(`/_files/${created.data.id}`, { method: 'DELETE' });
   assert.equal(del.status, 200);
 
   // Record gone (404) AND bytes gone.
-  assert.equal((await fetch(`${base}/_files/${created.data.id}`)).status, 404);
+  assert.equal((await publicFetch(`/_files/${created.data.id}`)).status, 404);
   assert.equal(await getStorageProvider().exists(key), false);
 });
 
 test('DELETE of a missing id is 404', async () => {
-  assert.equal((await fetch(`${base}/_files/99999999`, { method: 'DELETE' })).status, 404);
+  // WRITE: authed so it reaches the not-found path past the gate.
+  assert.equal((await authedFetch('/_files/99999999', { method: 'DELETE' })).status, 404);
 });
 
 test('GET /_files/:id with a non-canonical id is 404', async () => {
-  assert.equal((await fetch(`${base}/_files/01`)).status, 404);
-  assert.equal((await fetch(`${base}/_files/abc`)).status, 404);
+  assert.equal((await publicFetch('/_files/01')).status, 404);
+  assert.equal((await publicFetch('/_files/abc')).status, 404);
 });

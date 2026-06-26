@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { startTestServerFromSchemas, ARTICLE_SCHEMA } = await import('./helpers.ts');
+const { startTestServer, ARTICLE_SCHEMA, closeAuth } = await import('./helpers.ts');
+type SessionCache = Awaited<ReturnType<typeof startTestServer>>['sessionCache'];
 
 /**
  * be-i18n — ERROR-MESSAGE LOCALIZATION end-to-end over a REAL uWS server + REAL Postgres (per-file clone),
@@ -20,14 +21,17 @@ let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let base: string;
 let close: (token: unknown) => void;
 let token: unknown;
+let sessionCache: SessionCache;
 
 before(async () => {
   db = await createFileDatabase('error-i18n');
   sql = db.sql;
-  ({ base, close, token } = await startTestServerFromSchemas(sql, [ARTICLE_SCHEMA]));
+  ({ base, close, token, sessionCache } = await startTestServer(sql, [ARTICLE_SCHEMA]));
 });
 after(async () => {
   if (close) close(token);
+  if (sessionCache) sessionCache.stop();
+  closeAuth();
   if (sql) await sql.end();
   if (db) await dropFileDatabase(db.name);
 });

@@ -1,10 +1,23 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import type { Sql } from 'postgres';
 import { Engine } from '../src/store/engine.ts';
 import { createServer, type ListenToken } from '../src/http/server.ts';
 import { handleRequest } from '../src/http/read.router.ts';
 import { type FieldDef } from '../src/store/table.ts';
+import { runMigrations } from '../src/db/migration.runner.ts';
+import { createFileDatabase, dropFileDatabase, type FileDatabase } from './db-per-file.ts';
+import { PostgresStore } from '../src/db/postgres.store.ts';
+import { HookRegistry } from '../src/db/schema/hooks.ts';
+import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
+import { buildAuth, type Auth } from '../src/auth/auth.ts';
+import { SessionCache } from '../src/auth/session.cache.ts';
+import { RbacRegistry } from '../src/auth/rbac.registry.ts';
+import { TeamView } from '../src/auth/team.view.ts';
 
 /**
  * uWS-MIGRATION SLICE 1 — the uWebSockets.js adapter, end-to-end over a REAL uWS server.
@@ -113,19 +126,65 @@ function freePort(): Promise<number> {
 }
 
 const ROWS = buildRows(250, 11);
-const engine = seedEngine(ROWS);
-const server = createServer(engine);
+const engine = seedEngine(ROWS); // the HAND-SEEDED in-memory engine — reads resolve against this, not PG.
+
+let db: FileDatabase;
+let sql: Sql;
+let sessionCache: SessionCache;
+let modulesDir: string;
 let token: ListenToken;
+let close: (t: ListenToken) => void;
 let base = '';
 
+/**
+ * LEGACY-META TEARDOWN (route-gating unification): boot the FULL real gated server — real Postgres +
+ * better-auth + SessionCache + RbacRegistry + TeamView — exactly as conti.ts assembles it, but with the
+ * HAND-SEEDED in-memory `engine` (no PG table). The store/registry come from an EMPTY `loadFromSchemas([])`
+ * (the gated write/builder/media routes need them to register); reads still hit the hand-seeded engine and
+ * stay PUBLIC. Plain global `fetch` is ANONYMOUS (no cookie) — so every read test below is an anon read, and
+ * the lone write test asserts the unauthenticated-write 401 the gate returns before any registry lookup.
+ */
 before(async () => {
+  db = await createFileDatabase('server');
+  await runMigrations(db.url);
+  sql = db.sql;
+  setAuthSql(sql); // FIRST: the auth dialect runs over this handle
+
   const port = await freePort();
-  token = await server.listen(port);
   base = `http://127.0.0.1:${port}`;
+  const store = new PostgresStore(sql);
+
+  // AUTH cycle (mirror conti.ts): teamView BEFORE auth + the session cache; the cache references `auth` lazily.
+  let auth: Auth;
+  const teamView = new TeamView(sql);
+  sessionCache = new SessionCache(() => auth, undefined, undefined, teamView);
+  const rbac = new RbacRegistry(sql);
+  auth = buildAuth({
+    baseURL: base,
+    sessionEvictor: sessionCache,
+    sql,
+    rbacInvalidate: () => rbac.rebuild(),
+    teamViewReload: () => teamView.rebuild(),
+  });
+  await rbac.rebuild();
+  await teamView.rebuild();
+
+  // An EMPTY real registry — the gated write/builder/media routes register off store+registry; the
+  // hand-seeded `engine` (not this one) serves reads. modulesDir is an empty temp dir ⇒ Builder routes register.
+  const { registry } = await store.loadFromSchemas([]);
+  modulesDir = await mkdtemp(path.join(os.tmpdir(), 'conti-server-test-'));
+  const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: new HookRegistry(), modulesDir });
+  token = await server.listen(port);
+  close = server.close;
 });
 
-after(() => {
-  server.close(token);
+after(async () => {
+  if (token !== undefined) close(token);
+  sessionCache.stop();
+  await closeAuth();
+  if (sql) await sql.end();
+  if (db) await dropFileDatabase(db.name);
+  if (modulesDir) await rm(modulesDir, { recursive: true, force: true });
 });
 
 // --- 1. LIST: pagination honored, byte-identical, deep-equal to oracle ------
@@ -274,9 +333,11 @@ test('list whose filter matches NOTHING returns an empty data array', async () =
   assert.equal(body.meta.pagination.total, 0);
 });
 
-// --- 8. non-GET on a known route -> 405 -------------------------------------
+// --- 8. unauthenticated write on a known route -> 401 (the gate rejects first) -
 
-test('non-GET on a known route -> 405', async () => {
+test('unauthenticated POST on a known route -> 401 (gate rejects before any registry lookup)', async () => {
+  // The full server is gated: an anonymous write is rejected by the auth gate (401) BEFORE the route ever
+  // consults the registry — so it never reaches the old core 405. Reads stay public; only writes are gated.
   const res = await fetch(`${base}/article`, { method: 'POST' });
-  assert.equal(res.status, 405);
+  assert.equal(res.status, 401);
 });

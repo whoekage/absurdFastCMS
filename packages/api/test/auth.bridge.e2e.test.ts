@@ -2,13 +2,8 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 
-import { runMigrations } from '../src/db/migration.runner.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
-import { PostgresStore } from '../src/db/postgres.store.ts';
-import { createServer } from '../src/http/server.ts';
-import { freePort } from './helpers.ts';
-import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
-import { buildAuth } from '../src/auth/auth.ts';
+import { startTestServer, closeAuth, type TestServer } from './helpers.ts';
 
 /**
  * be-09a — the uWS ↔ Fetch BRIDGE E2E over a REAL uWS server + REAL better-auth + REAL Postgres (per-file
@@ -16,43 +11,36 @@ import { buildAuth } from '../src/auth/auth.ts';
  * cookie that is CORRECTLY SPLIT (one Set-Cookie header per cookie, never a comma-folded blob), the
  * inbound Cookie header is forwarded (an authenticated /auth/get-session round-trips the user), and a
  * non-/auth route is byte-untouched (the existing read path stays open — scope fence).
+ *
+ * Boots the FULL gated server via the unified harness (`startTestServer`); every assertion here targets
+ * `/auth/*` itself or a PUBLIC read (`/modules`), so all requests use `anonFetch` (no admin cookie needed).
  */
 
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let sql: Sql;
-let store: PostgresStore;
+let srv: TestServer;
 let base: string;
-let token: unknown;
-let close: (t: unknown) => void;
 
 before(async () => {
   db = await createFileDatabase('authbridge');
   sql = db.sql;
-  await runMigrations(db.url);
-  setAuthSql(sql);
   // baseURL == the actual serving origin so better-auth's same-origin CSRF check trusts requests whose
-  // Origin matches (a browser sends Origin; the tests below set it explicitly).
-  const port0 = await freePort();
-  base = `http://127.0.0.1:${port0}`;
-  const auth = buildAuth({ baseURL: base });
-
-  store = new PostgresStore(sql);
-  const { engine, registry } = await store.loadFromSchemas([]); // files-first empty catalog (no modules here)
-  const server = createServer(engine, store, registry, undefined, auth);
-  token = await server.listen(port0);
-  close = server.close;
+  // Origin matches (a browser sends Origin; the tests below set it explicitly). The harness assembles the
+  // FULL real server (auth + sessionCache + rbac + teamView + builder routes) against this per-file DB.
+  srv = await startTestServer(sql, []); // empty catalog (no content types here)
+  base = srv.base;
 });
 
 after(async () => {
-  if (token !== undefined) close(token);
+  if (srv?.token !== undefined) srv.close(srv.token);
+  srv?.sessionCache.stop();
   await closeAuth(); // injected handle => no-op end.
-  await store.close(); // no-op end (sql injected, store does not own it).
   await db.sql.end();
   await dropFileDatabase(db.name);
 });
 
 test('sign-up through the /auth bridge returns a correctly-split Set-Cookie session cookie', async () => {
-  const res = await fetch(`${base}/auth/sign-up/email`, {
+  const res = await srv.anonFetch(`${base}/auth/sign-up/email`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', origin: base },
     body: JSON.stringify({ email: 'bridge@example.com', password: 'correct-horse-battery-staple', name: 'Bridge' }),
@@ -72,7 +60,7 @@ test('sign-up through the /auth bridge returns a correctly-split Set-Cookie sess
 
 test('sign-in + get-session round-trips the user through the bridge (Cookie forwarded inbound)', async () => {
   // Sign in (the user exists from the previous test? per-file DB is shared across tests in THIS file).
-  const signIn = await fetch(`${base}/auth/sign-in/email`, {
+  const signIn = await srv.anonFetch(`${base}/auth/sign-in/email`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', origin: base },
     body: JSON.stringify({ email: 'bridge@example.com', password: 'correct-horse-battery-staple' }),
@@ -86,17 +74,17 @@ test('sign-in + get-session round-trips the user through the bridge (Cookie forw
   assert.ok(/session_token=/.test(cookie), 'sign-in must set a session cookie');
 
   // get-session with the Cookie forwarded inbound → the bridge passes it through to better-auth.
-  const session = await fetch(`${base}/auth/get-session`, { headers: { cookie } });
+  const session = await srv.anonFetch(`${base}/auth/get-session`, { headers: { cookie } });
   assert.equal(session.status, 200);
   const body = (await session.json()) as { user?: { email?: string } } | null;
   assert.equal(body?.user?.email, 'bridge@example.com', 'the forwarded cookie must authenticate the user');
 });
 
 test('a non-/auth route is unaffected by the auth mount (existing read path stays open)', async () => {
-  // /article is the seeded-or-empty read route; with no article type it 404s, but it must NOT be
-  // swallowed by /auth/* — the literal `auth` segment never shadows a `:type`. Either a 200 list or a
-  // 404 is acceptable; what matters is it is NOT an auth-handler response.
-  const res = await fetch(`${base}/modules`);
+  // /modules is a PUBLIC read route; it must NOT be swallowed by /auth/* — the literal `auth` segment never
+  // shadows a `:type`. Either a 200 list or a 404 is acceptable; what matters is it is NOT an auth-handler
+  // response.
+  const res = await srv.anonFetch(`${base}/modules`);
   assert.ok(res.status === 200 || res.status === 404, `unexpected status ${res.status}`);
   // An auth response would carry better-auth's JSON error shape; a builder response is the module list.
   const text = await res.text();

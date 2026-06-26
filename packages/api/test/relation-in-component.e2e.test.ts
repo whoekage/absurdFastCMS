@@ -4,9 +4,10 @@ import type { Sql } from 'postgres';
 import type { ComponentSchema, Schema, FieldSchema, FieldType } from '../src/db/schema/model.ts';
 import type { FieldOptions } from '../src/db/type.catalog.ts';
 
+import type { TestServer } from './helpers.ts';
 const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
-const { cleanCatalog, schema, startTestServerFromSchemas } = await import('./helpers.ts');
+const { cleanCatalog, schema, startTestServer, closeAuth } = await import('./helpers.ts');
 const { mintId } = await import('../src/db/schema/model.ts');
 const { migrate } = await import('../src/db/schema/migrate.ts');
 
@@ -35,21 +36,16 @@ const { migrate } = await import('../src/db/schema/migrate.ts');
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
-let base: string;
-let close: (token: unknown) => void;
-let token: unknown;
+let srv: TestServer | undefined;
 
 /** Build an in-memory ComponentSchema (mints the component + field ids). Fields use the files-first `type`. */
 function component(apiId: string, fields: { name: string; type: FieldType; options?: FieldOptions }[]): ComponentSchema {
   return { id: mintId('cmp'), apiId, fields: fields.map((f): FieldSchema => ({ id: mintId('f'), ...f })) };
 }
 
-/** Per-test files-first server: each test owns its host modules + in-memory components. */
+/** Per-test FULL real server: each test owns its in-memory components; writes go authed, reads stay public. */
 async function boot(schemas: Schema[], components: ComponentSchema[] = []): Promise<void> {
-  const srv = await startTestServerFromSchemas(sql, schemas, { components });
-  base = srv.base;
-  close = srv.close;
-  token = srv.token;
+  srv = await startTestServer(sql, schemas, { components });
 }
 
 before(async () => {
@@ -59,19 +55,27 @@ before(async () => {
 });
 
 beforeEach(async () => {
-  if (token) close(token);
-  token = undefined;
+  if (srv) {
+    srv.close(srv.token);
+    srv.sessionCache.stop();
+  }
+  srv = undefined;
   await cleanCatalog(sql);
 });
 
 after(async () => {
-  if (token) close(token);
+  if (srv) {
+    srv.close(srv.token);
+    srv.sessionCache.stop();
+  }
+  await closeAuth();
   if (sql) await sql.end();
   if (db) await dropFileDatabase(db.name);
 });
 
-const POST = (p: string, body: unknown) => fetch(`${base}${p}`, { method: 'POST', body: JSON.stringify(body) });
-const GET = (p: string) => fetch(`${base}${p}`);
+// Gated WRITE -> authed super-admin fetch; public READ -> anonymous fetch.
+const POST = (p: string, body: unknown) => srv!.fetch(p, { method: 'POST', body: JSON.stringify(body) });
+const GET = (p: string) => srv!.anonFetch(p);
 
 /** The `author` target module as a files-first IR. */
 const authorType = schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false } }] });
@@ -216,7 +220,7 @@ test('R5 a ref that becomes dangling resolves to null (single) and is dropped (m
   const created = (await (await POST('/post', { credits: { lead: a1, team: [a1, a2] } })).json()) as { data: { id: number } };
 
   // Delete a2 -> the inline id is now dangling (the stored json still holds it).
-  const del = await fetch(`${base}/author/${a2}`, { method: 'DELETE' });
+  const del = await srv!.fetch(`/author/${a2}`, { method: 'DELETE' });
   assert.equal(del.status, 200, await del.text());
 
   const pop = (await (await GET(`/post/${created.data.id}?populate=credits`)).json()) as {
@@ -226,7 +230,7 @@ test('R5 a ref that becomes dangling resolves to null (single) and is dropped (m
   assert.deepEqual(pop.data.credits.team.map((w) => w.id), [a1]); // a2 dropped from the array.
 
   // Now delete a1 too -> the single lead resolves to null.
-  await fetch(`${base}/author/${a1}`, { method: 'DELETE' });
+  await srv!.fetch(`/author/${a1}`, { method: 'DELETE' });
   const pop2 = (await (await GET(`/post/${created.data.id}?populate=credits`)).json()) as {
     data: { credits: { lead: unknown; team: unknown[] } };
   };

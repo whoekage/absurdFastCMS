@@ -1,5 +1,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
+import { mkdtemp } from 'node:fs/promises';
 import postgres from 'postgres';
 import type { Sql } from 'postgres';
 
@@ -8,6 +11,7 @@ import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { createServer } from '../src/http/server.ts';
 import { freePort } from './helpers.ts';
+import { HookRegistry } from '../src/db/schema/hooks.ts';
 import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
 import { buildAuth } from '../src/auth/auth.ts';
 import { SessionCache } from '../src/auth/session.cache.ts';
@@ -94,7 +98,10 @@ before(async () => {
   await teamView.rebuild();
 
   const { engine, registry } = await store.loadFromSchemas([]); // files-first empty catalog (team E2E creates no modules)
-  const server = createServer(engine, store, registry, undefined, auth, sessionCache, rbac, teamView);
+  // FULL real server (every dep wired, nothing gated-off): empty temp modulesDir ⇒ Builder routes register;
+  // an empty HookRegistry ⇒ no content lifecycle hooks. Mirrors conti.ts so the boot is valid under required-deps.
+  const modulesDir = await mkdtemp(path.join(os.tmpdir(), 'conti-team-'));
+  const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: new HookRegistry(), modulesDir });
   token = await server.listen(port0);
   close = server.close;
 });
@@ -331,7 +338,8 @@ test('checklist#7: the LAST active super-admin cannot be suspended, removed, or 
       });
       const fstore = new PostgresStore(fsql);
       const { engine, registry } = await fstore.loadFromSchemas([]); // files-first empty catalog
-      const fserver = createServer(engine, fstore, registry, undefined, fauth, fcache, frbac, ftv);
+      const fmodulesDir = await mkdtemp(path.join(os.tmpdir(), 'conti-team-lastadmin-'));
+      const fserver = createServer({ engine, store: fstore, registry, auth: fauth, sessionCache: fcache, rbac: frbac, teamView: ftv, hooks: new HookRegistry(), modulesDir: fmodulesDir });
       const ftoken = await fserver.listen(fport);
       try {
         // The first sign-up is the lone super-admin.
