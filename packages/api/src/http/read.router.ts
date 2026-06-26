@@ -42,6 +42,12 @@ export interface CoreRequest {
   path: string;
   /** The raw query string WITHOUT a leading '?' (a leading '?' is tolerated/stripped). */
   query: string;
+  /**
+   * The resolved UI {@link Locale} for error-message localization, derived from the request's
+   * `Accept-Language` at the transport edge (server.ts). Absent (non-HTTP callers / tests) → `'en'`, which
+   * keeps the rendered message byte-identical to the historically thrown English.
+   */
+  locale?: Locale;
 }
 
 /** The response the core produces — the server writes it onto the uWS `res`. */
@@ -159,10 +165,9 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
       // (unknown/scalar populate name -> QueryParseError -> 400) and assembles the nested response.
       return { status: 200, contentType: JSON_CT, body: engine.respond(name, parsed.options, parsed.populate, parsed.fields) };
     } catch (e) {
-      // TODO(accept-language): CoreRequest carries no headers, so the locale cannot be resolved here via
-      // localeFromAcceptLanguage — thread the request Accept-Language onto CoreRequest and pass it through.
-      // Until then the boundary renders at 'en', which is byte-identical to the message historically thrown.
-      if (e instanceof QueryParseError || e instanceof InvalidCursorError) return appErrorResponse(e, 'en');
+      // Render the error in the caller's locale (resolved from Accept-Language at the transport edge and
+      // threaded onto CoreRequest); absent → 'en', byte-identical to the historically thrown message.
+      if (e instanceof QueryParseError || e instanceof InvalidCursorError) return appErrorResponse(e, req.locale ?? 'en');
       throw e;
     }
   }
@@ -196,10 +201,8 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
       if (body === null) return errorResponse(404, `not found`);
       return { status: 200, contentType: JSON_CT, body };
     } catch (e) {
-      // TODO(accept-language): CoreRequest carries no headers, so the locale cannot be resolved here via
-      // localeFromAcceptLanguage — thread the request Accept-Language onto CoreRequest and pass it through.
-      // Until then the boundary renders at 'en', which is byte-identical to the message historically thrown.
-      if (e instanceof QueryParseError || e instanceof InvalidCursorError) return appErrorResponse(e, 'en');
+      // Locale from Accept-Language (threaded onto CoreRequest); absent → 'en' (byte-identical).
+      if (e instanceof QueryParseError || e instanceof InvalidCursorError) return appErrorResponse(e, req.locale ?? 'en');
       throw e;
     }
   }

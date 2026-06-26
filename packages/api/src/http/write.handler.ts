@@ -10,6 +10,7 @@ import { validateLocale, QueryParseError } from '../store/query.parser.ts';
 import { config } from '../config.ts';
 import { HookError, type HookRegistry } from '../db/schema/hooks.ts';
 import { CANONICAL_INT, JSON_CT, errorResponse, appErrorResponse, type CoreResponse } from './read.router.ts';
+import type { Locale } from '../errors/index.ts';
 
 /**
  * The Postgres int4 serial PK range upper bound. CANONICAL_INT accepts arbitrarily long digit runs, so
@@ -83,6 +84,11 @@ export interface WriteRequest {
    * undefined. The server passes the RAW slug; this handler validates its shape (a malformed slug -> 400).
    */
   variantLocale?: string;
+  /**
+   * The resolved UI {@link Locale} for error-message localization (from `Accept-Language` at the transport
+   * edge) — DISTINCT from {@link variantLocale} (a data-locale slug). Absent → `'en'` (byte-identical).
+   */
+  locale?: Locale;
 }
 
 /**
@@ -409,18 +415,16 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
 
     return errorResponse(405, `method ${method} not allowed`);
   } catch (e) {
-    // TODO(accept-language): WriteRequest carries no headers, so the locale cannot be resolved here via
-    // localeFromAcceptLanguage — thread the request Accept-Language onto WriteRequest and pass it through.
-    // Until then the boundary renders at 'en', which is byte-identical to the message historically thrown.
     // HookError (before-hook veto) / BodyParseError / EntryWriteError / QueryParseError (malformed variant
     // locale slug) all map to 400; their `error` string is preserved and `code` is the only added field.
+    // Rendered in the caller's UI locale (Accept-Language, threaded onto WriteRequest); absent → 'en'.
     if (
       e instanceof HookError ||
       e instanceof BodyParseError ||
       e instanceof EntryWriteError ||
       e instanceof QueryParseError
     ) {
-      return appErrorResponse(e, 'en');
+      return appErrorResponse(e, req.locale ?? 'en');
     }
     throw e; // server bug / DB error -> mapped to 500
   }

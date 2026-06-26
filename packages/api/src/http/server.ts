@@ -12,7 +12,7 @@ import { swapFromIR } from '../db/engine.swap.ts';
 import { loadTypes, loadTypesCacheBusted } from '../db/schema/load.ts';
 import { readAppliedSchemas, ensureAppliedTable, MigrationBlockedError } from '../db/schema/migrate.ts';
 import { SchemaChangeConflictError } from '../db/ddl.ts';
-import { toErrorResponse } from '../errors/index.ts';
+import { toErrorResponse, localeFromAcceptLanguage, type Locale } from '../errors/index.ts';
 import { computeCatalogVersion, hashRequest } from '../compose/catalog-version.ts';
 import { ensureIdempotencyTable, idempotencyLookup, recordIdempotency, pruneIdempotency } from '../compose/builder-idempotency.ts';
 import { handleUpload, handleListFiles, handleGetFile, handleDeleteFile, type FileContext, type ParsedUpload } from './upload.handler.ts';
@@ -178,12 +178,11 @@ function builderJson(status: number, fields: Record<string, unknown>, headers?: 
 }
 
 /** Map a Builder/migrate throw to its HTTP status + envelope fields. A blocked-by-lint case is a RETURN, not here. */
-function builderErrorFields(e: unknown): { status: number; fields: Record<string, unknown> } {
-  // TODO(i18n): builderErrorFields has no handle on the request's Accept-Language header here, so it renders
-  // at the default locale. When the header is threaded through, swap 'en' for
-  // localeFromAcceptLanguage(req Accept-Language). At locale 'en' render() === the historically thrown
-  // e.message, so the wire stays byte-identical (D1: `code` is the only additive field).
-  const { status, body } = toErrorResponse(e, 'en');
+function builderErrorFields(e: unknown, locale: Locale): { status: number; fields: Record<string, unknown> } {
+  // `locale` is resolved from the request's Accept-Language at the route's synchronous edge (uWS req is
+  // sync-only) and threaded in. At locale 'en' render() === the historically thrown e.message, so the wire
+  // stays byte-identical; another locale localizes the `error` string (the `code` is the additive key).
+  const { status, body } = toErrorResponse(e, locale);
   // Two codes whose builder wire `error` is a FIXED string that DIVERGES from render(): keep that fixed
   // string and take ONLY status (+ extras / Retry-After header, the latter applied in builderError).
   if (e instanceof MigrationBlockedError) return { status, fields: { ok: false, blocked: e.blocked, error: 'requires allowDestructive' } };
@@ -195,8 +194,8 @@ function builderErrorFields(e: unknown): { status: number; fields: Record<string
 }
 
 /** The CoreResponse form of {@link builderErrorFields} (the transient lock 409 carries Retry-After). */
-function builderError(e: unknown): CoreResponse {
-  const { status, fields } = builderErrorFields(e);
+function builderError(e: unknown, locale: Locale): CoreResponse {
+  const { status, fields } = builderErrorFields(e, locale);
   return e instanceof SchemaChangeConflictError ? builderJson(status, fields, { 'Retry-After': '1' }) : builderJson(status, fields);
 }
 
@@ -683,7 +682,7 @@ export function createServer(
    * SYNCHRONOUS byte-identical read path. With no registry / no media+component field / no such populate
    * asked, it always returns false => the existing zero-copy read path is byte-identical.
    */
-  function mediaRead(res: uWS.HttpResponse, method: string, path: string, type: string, query: string): boolean {
+  function mediaRead(res: uWS.HttpResponse, method: string, path: string, type: string, query: string, locale: Locale): boolean {
     const reg = live.registry; // read the LIVE registry per-call so a post-swap type/field is seen
     if (reg === undefined || store === undefined) return false;
     if (method.toUpperCase() !== 'GET') return false;
@@ -704,7 +703,7 @@ export function createServer(
     void (async () => {
       let result: CoreResponse;
       try {
-        const base = handleRequest(live.engine, { method, path, query: strippedQuery });
+        const base = handleRequest(live.engine, { method, path, query: strippedQuery, locale });
         // Only a successful read carries a value to resolve; a 400/404/405 passes straight through.
         if (base.status === 200) {
           let body = base.body;
@@ -771,11 +770,12 @@ export function createServer(
     const method = req.getMethod();
     const type = req.getParameter(0) ?? '';
     const query = req.getQuery() ?? '';
+    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // read sync (uWS req)
     // SYNC handler: no await past this point, so `req` is no longer touched and no onAborted needed —
     // UNLESS this is a media-populate read (registry present + a media field targeted), which needs an
     // async batched `files` lookup. mediaRead returns true iff it took the async path (else fall through).
-    if (mediaRead(res, method, `/${type}`, type, query)) return;
-    writeResponse(res, handleRequest(live.engine, { method, path: `/${type}`, query }));
+    if (mediaRead(res, method, `/${type}`, type, query, locale)) return;
+    writeResponse(res, handleRequest(live.engine, { method, path: `/${type}`, query, locale }));
   });
 
   // SINGLE: /:type/:id
@@ -784,8 +784,9 @@ export function createServer(
     const type = req.getParameter(0) ?? '';
     const id = req.getParameter(1) ?? '';
     const query = req.getQuery() ?? '';
-    if (mediaRead(res, method, `/${type}/${id}`, type, query)) return;
-    writeResponse(res, handleRequest(live.engine, { method, path: `/${type}/${id}`, query }));
+    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // read sync (uWS req)
+    if (mediaRead(res, method, `/${type}/${id}`, type, query, locale)) return;
+    writeResponse(res, handleRequest(live.engine, { method, path: `/${type}/${id}`, query, locale }));
   });
 
   // S4: the files-first Builder apply+swap, exposed on the returned server. Wired only when `modulesDir`
@@ -875,6 +876,7 @@ export function createServer(
         res: uWS.HttpResponse, aborted: () => boolean,
         pre: { ifMatch: string; bodyVersion: string | undefined; idemKey: string; requestHash: string },
         exec: () => Promise<SchemaEditResult>,
+        locale: Locale,
       ): void => {
         void (async () => {
           if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
@@ -901,7 +903,7 @@ export function createServer(
               r = await exec();
             } catch (e) {
               if (pre.idemKey !== '') {
-                const { status, fields } = builderErrorFields(e);
+                const { status, fields } = builderErrorFields(e, locale);
                 if (status >= 400 && status < 500 && !(e instanceof SchemaChangeConflictError)) await recordIdempotency(sql, pre.idemKey, pre.requestHash, status, fields).catch(() => {});
               }
               throw e;
@@ -916,7 +918,7 @@ export function createServer(
             if (pre.idemKey !== '') await recordIdempotency(sql, pre.idemKey, pre.requestHash, 200, fields).catch(() => {});
             corkSend(res, aborted, builderJson(200, fields, { ETag: currentVersion }));
           } catch (e) {
-            corkSend(res, aborted, builderError(e)); // SchemaChangeConflictError → 409+Retry-After
+            corkSend(res, aborted, builderError(e, locale)); // SchemaChangeConflictError → 409+Retry-After
           } finally {
             writerBusy = false; // runs on EVERY path incl client abort; the 409-busy loser never entered this try
           }
@@ -960,6 +962,7 @@ export function createServer(
       // POST preview — dry-run (no write/migrate/swap), no mutex/version. GATED.
       app.post('/builder/modules/:apiId/preview', (res, req) => {
         const apiId = req.getParameter(0) ?? '';
+        const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
         gate(res, req, 'builder.manage', true, (raw, aborted) => {
           const parsed = parseBody(raw);
           if (!parsed.ok) return corkSend(res, aborted, parsed.error);
@@ -970,7 +973,7 @@ export function createServer(
             try {
               const p = await previewSchemaEdit(sql, body, { allowDestructive: body.allowDestructive === true });
               result = builderJson(200, { ok: p.ok, applied: p.changes, blocked: p.blocked, schema: p.schema, generatedSource: p.generatedSource });
-            } catch (e) { result = builderError(e); }
+            } catch (e) { result = builderError(e, locale); }
             corkSend(res, aborted, result);
           })();
         });
@@ -981,6 +984,7 @@ export function createServer(
         const apiId = req.getParameter(0) ?? '';
         const ifMatch = req.getHeader('if-match'); // '' when absent (uWS; lowercase key)
         const idemKey = req.getHeader('idempotency-key');
+        const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
         gate(res, req, 'builder.manage', true, (raw, aborted) => {
           const parsed = parseBody(raw);
           if (!parsed.ok) return corkSend(res, aborted, parsed.error);
@@ -990,7 +994,7 @@ export function createServer(
           const { allowDestructive, version: _v, ...meaningful } = body;
           const requestHash = hashRequest({ m: 'PUT', apiId, body: meaningful });
           runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash },
-            () => runEdit(body, { allowDestructive: allowDestructive === true }));
+            () => runEdit(body, { allowDestructive: allowDestructive === true }), locale);
         });
       });
 
@@ -999,6 +1003,7 @@ export function createServer(
         const apiId = req.getParameter(0) ?? '';
         const ifMatch = req.getHeader('if-match');
         const idemKey = req.getHeader('idempotency-key');
+        const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
         gate(res, req, 'builder.manage', true, (raw, aborted) => {
           const parsed = parseBody(raw);
           if (!parsed.ok) return corkSend(res, aborted, parsed.error);
@@ -1006,13 +1011,14 @@ export function createServer(
           if (body.allowDestructive !== true) return corkSend(res, aborted, builderJson(409, { ok: false, applied: [], blocked: [], error: 'requires allowDestructive' }));
           if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
           const requestHash = hashRequest({ m: 'DELETE', apiId });
-          runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash }, () => runDelete(apiId));
+          runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash }, () => runDelete(apiId), locale);
         });
       });
 
       // POST reload — operator escape hatch: cache-busted re-import + swap (registry/hooks/relations), NO
       // migrate; advances the version so a pre-reload PUT carrying the old version fails 412. GATED + mutex.
       app.post('/builder/reload', (res, req) => {
+        const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
         gate(res, req, 'builder.manage', false, (_raw, aborted) => {
           void (async () => {
             if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
@@ -1022,7 +1028,7 @@ export function createServer(
               await swapFromIR(sql, live, schemas, [], new HookRegistry(hooks)); // applied=[] → swaps registry/hooks/relations, no per-type rebuild
               currentVersion = await computeCatalogVersion(dir);
               corkSend(res, aborted, builderJson(200, { ok: true, version: currentVersion }, { ETag: currentVersion }));
-            } catch (e) { corkSend(res, aborted, builderError(e)); }
+            } catch (e) { corkSend(res, aborted, builderError(e, locale)); }
             finally { writerBusy = false; }
           })();
         });
@@ -1039,6 +1045,7 @@ export function createServer(
       const type = req.getParameter(0) ?? '';
       const idRaw = req.getParameter(1) ?? '';
       const actionRaw = req.getParameter(2) ?? '';
+      const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
       gate(res, req, 'content.publish', true, (_raw, aborted) => {
         void (async () => {
           if (actionRaw !== 'publish' && actionRaw !== 'unpublish') {
@@ -1046,7 +1053,7 @@ export function createServer(
           }
           let result: CoreResponse;
           try {
-            result = await handleWrite(ctx, { method: 'POST', type, idRaw, body: undefined, action: actionRaw });
+            result = await handleWrite(ctx, { method: 'POST', type, idRaw, body: undefined, action: actionRaw, locale });
           } catch {
             result = errorResponse(500, 'internal error');
           }
@@ -1060,13 +1067,14 @@ export function createServer(
       const type = req.getParameter(0) ?? '';
       const idRaw = req.getParameter(1) ?? '';
       const variantLocale = req.getParameter(2) ?? '';
+      const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // UI error locale (header), distinct from the variantLocale data slug
       gate(res, req, 'content.create', true, (raw, aborted) => {
         const parsed = parseBody(raw);
         if (!parsed.ok) return corkSend(res, aborted, parsed.error);
         void (async () => {
           let result: CoreResponse;
           try {
-            result = await handleWrite(ctx, { method: 'POST', type, idRaw, body: parsed.body, variantLocale });
+            result = await handleWrite(ctx, { method: 'POST', type, idRaw, body: parsed.body, variantLocale, locale });
           } catch {
             result = errorResponse(500, 'internal error');
           }
@@ -1077,13 +1085,14 @@ export function createServer(
     const dataWrite = (method: string, perm: string, hasId: boolean) => (res: uWS.HttpResponse, req: uWS.HttpRequest): void => {
       const type = req.getParameter(0) ?? '';
       const idRaw = hasId ? (req.getParameter(1) ?? '') : '';
+      const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
       gate(res, req, perm, true, (raw, aborted) => {
         const parsed = parseBody(raw);
         if (!parsed.ok) return corkSend(res, aborted, parsed.error);
         void (async () => {
           let result: CoreResponse;
           try {
-            result = await handleWrite(ctx, { method, type, idRaw, body: parsed.body });
+            result = await handleWrite(ctx, { method, type, idRaw, body: parsed.body, locale });
           } catch {
             result = errorResponse(500, 'internal error');
           }
