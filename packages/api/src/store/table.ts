@@ -24,6 +24,7 @@ import {
   type ResolvedSortKey,
 } from './indexes/composite-sorted.index.ts';
 import type { CursorPayload } from './cursor.codec.ts';
+import { AppError } from '../errors/app-error.ts';
 
 export interface FieldDef {
   name: string;
@@ -109,10 +110,9 @@ export interface KeysetResult {
 }
 
 /** A typed error for a keyset request the table can't seek (no `id` field, or a json sort key). */
-export class KeysetUnsupportedError extends Error {
+export class KeysetUnsupportedError extends AppError {
   constructor(message: string) {
-    super(message);
-    this.name = 'KeysetUnsupportedError';
+    super('store.keyset_unsupported', { detail: message });
   }
 }
 

@@ -1,6 +1,7 @@
 import { coerceDate, coerceDecimal, coerceI64, type ColumnType, type ScanOp } from './column.ts';
 import type { FieldDef, FilterNode, Predicate, QueryOptions, RawKeysetOptions, SortKey } from './table.ts';
 import type { SortDir } from './indexes/sorted.index.ts';
+import { AppError } from '../errors/app-error.ts';
 
 /**
  * API-VERTICAL SLICE 2 — the Strapi v5 query parser.
@@ -22,9 +23,9 @@ import type { SortDir } from './indexes/sorted.index.ts';
  */
 
 /** A clear, typed parse failure (distinguishable from an engine bug in a catch). */
-export class QueryParseError extends Error {
+export class QueryParseError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('query.invalid', { detail: message });
     this.name = 'QueryParseError';
   }
 }

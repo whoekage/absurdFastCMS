@@ -3,6 +3,7 @@ import { RawJson } from '../store/column.ts';
 import type { ModuleDef, RegistryField } from './registry.ts';
 import { quoteIdent } from './ddl.ts';
 import { assertTableName } from './engine.loader.ts';
+import { AppError } from '../errors/app-error.ts';
 
 /**
  * The GENERIC write repository — Postgres is the SOURCE OF TRUTH, so each create/update/delete commits
@@ -23,10 +24,9 @@ import { assertTableName } from './engine.loader.ts';
  */
 
 /** A typed write error mapped from a known PG SQLSTATE — its message NEVER leaks SQL/constraint detail. */
-export class EntryWriteError extends Error {
+export class EntryWriteError extends AppError {
   constructor(message: string) {
-    super(message);
-    this.name = 'EntryWriteError';
+    super('entry.write', { detail: message });
   }
 }
 

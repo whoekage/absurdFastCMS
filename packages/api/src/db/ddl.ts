@@ -3,6 +3,7 @@ import { Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler, D
 import type { Sql } from 'postgres';
 import type { ResolvedType } from './type.catalog.ts';
 import type { RelationKind } from '../store/relation.ts';
+import { AppError } from '../errors/app-error.ts';
 
 /**
  * Identifier safety + the Kysely COMPILE-ONLY DDL builders + the one atomic transactional applier.
@@ -55,118 +56,118 @@ export const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['content_types
 
 // --- typed error classes (deterministic; never leak a raw PG error) ----------------------------
 
-export class InvalidIdentifierError extends Error {
+export class InvalidIdentifierError extends AppError {
   readonly value: unknown;
   constructor(value: unknown, reason: string) {
-    super(`invalid identifier ${JSON.stringify(value)}: ${reason}`);
+    super('db.ddl.invalid_identifier', { value: JSON.stringify(value), reason });
     this.name = 'InvalidIdentifierError';
     this.value = value;
   }
 }
-export class IdentifierTooLongError extends Error {
+export class IdentifierTooLongError extends AppError {
   readonly value: string;
   constructor(value: string, bytes: number) {
-    super(`identifier ${JSON.stringify(value)} is ${bytes} bytes; max is ${MAX_IDENTIFIER_BYTES}`);
+    super('db.ddl.identifier_too_long', { value: JSON.stringify(value), bytes, maxBytes: MAX_IDENTIFIER_BYTES });
     this.name = 'IdentifierTooLongError';
     this.value = value;
   }
 }
-export class ReservedFieldNameError extends Error {
+export class ReservedFieldNameError extends AppError {
   readonly value: string;
   constructor(value: string) {
-    super(`field name ${JSON.stringify(value)} is reserved (system column or leading underscore)`);
+    super('db.ddl.reserved_field_name', { value: JSON.stringify(value) });
     this.name = 'ReservedFieldNameError';
     this.value = value;
   }
 }
-export class ReservedTableNameError extends Error {
+export class ReservedTableNameError extends AppError {
   readonly value: string;
   constructor(value: string) {
-    super(`module api_id / table name ${JSON.stringify(value)} is reserved`);
+    super('db.ddl.reserved_table_name', { value: JSON.stringify(value) });
     this.name = 'ReservedTableNameError';
     this.value = value;
   }
 }
-export class DuplicateFieldError extends Error {
+export class DuplicateFieldError extends AppError {
   readonly value: string;
   constructor(value: string) {
-    super(`duplicate field name ${JSON.stringify(value)} (names are unique case-insensitively)`);
+    super('db.ddl.duplicate_field', { value: JSON.stringify(value) });
     this.name = 'DuplicateFieldError';
     this.value = value;
   }
 }
-export class ModuleExistsError extends Error {
+export class ModuleExistsError extends AppError {
   readonly apiId: string;
   constructor(apiId: string) {
-    super(`module ${JSON.stringify(apiId)} already exists`);
+    super('db.ddl.module_exists', { apiId: JSON.stringify(apiId) });
     this.name = 'ModuleExistsError';
     this.apiId = apiId;
   }
 }
-export class ModuleNotFoundError extends Error {
+export class ModuleNotFoundError extends AppError {
   readonly apiId: string;
   constructor(apiId: string) {
-    super(`module ${JSON.stringify(apiId)} not found`);
+    super('db.ddl.module_not_found', { apiId: JSON.stringify(apiId) });
     this.name = 'ModuleNotFoundError';
     this.apiId = apiId;
   }
 }
-export class FieldExistsError extends Error {
+export class FieldExistsError extends AppError {
   readonly value: string;
   constructor(value: string) {
-    super(`field ${JSON.stringify(value)} already exists`);
+    super('db.ddl.field_exists', { value: JSON.stringify(value) });
     this.name = 'FieldExistsError';
     this.value = value;
   }
 }
-export class FieldNotFoundError extends Error {
+export class FieldNotFoundError extends AppError {
   readonly value: string;
   constructor(value: string) {
-    super(`field ${JSON.stringify(value)} not found`);
+    super('db.ddl.field_not_found', { value: JSON.stringify(value) });
     this.name = 'FieldNotFoundError';
     this.value = value;
   }
 }
-export class DefaultTypeError extends Error {
+export class DefaultTypeError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('db.ddl.default_type', { detail: message });
     this.name = 'DefaultTypeError';
   }
 }
-export class TypeChangeForbiddenError extends Error {
+export class TypeChangeForbiddenError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('db.ddl.type_change_forbidden', { detail: message });
     this.name = 'TypeChangeForbiddenError';
   }
 }
-export class TypeChangeFailedError extends Error {
+export class TypeChangeFailedError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('db.ddl.type_change_failed', { detail: message });
     this.name = 'TypeChangeFailedError';
   }
 }
-export class SchemaChangeConflictError extends Error {
+export class SchemaChangeConflictError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('db.schema.conflict', { detail: message });
     this.name = 'SchemaChangeConflictError';
   }
 }
-export class DependentTypesError extends Error {
+export class DependentTypesError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('db.ddl.dependent_types', { detail: message });
     this.name = 'DependentTypesError';
   }
 }
-export class DuplicateDataError extends Error {
+export class DuplicateDataError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('db.ddl.duplicate_data', { detail: message });
     this.name = 'DuplicateDataError';
   }
 }
-export class UnknownRelationKindError extends Error {
+export class UnknownRelationKindError extends AppError {
   readonly value: unknown;
   constructor(value: unknown) {
-    super(`unknown relation kind ${JSON.stringify(value)} (expected oneToOne|oneToMany|manyToOne|manyToMany)`);
+    super('db.ddl.unknown_relation_kind', { value: JSON.stringify(value) });
     this.name = 'UnknownRelationKindError';
     this.value = value;
   }

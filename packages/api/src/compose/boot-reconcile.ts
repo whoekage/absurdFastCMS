@@ -6,6 +6,7 @@ import { diff, type Change } from '../db/schema/diff.ts';
 import { migrate, readAppliedSchemas, ensureAppliedTable } from '../db/schema/migrate.ts';
 import { generateSchemaSource, BuilderCodegenError } from '../db/schema/codegen.ts';
 import type { Hooks } from '../db/schema/define.ts';
+import { AppError } from '../errors/app-error.ts';
 
 /**
  * THE S3 BOOT RECONCILIATION GUARD (docs/research/builder-http-route.md §2.1/§3.4, s3-s4-impl-plan §S3).
@@ -34,9 +35,9 @@ import type { Hooks } from '../db/schema/define.ts';
  */
 
 /** Raised when the guard cannot safely reconcile (a non-round-trippable snapshot IR, or a codegen failure). */
-export class SchemaReconcileHaltError extends Error {
+export class SchemaReconcileHaltError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('db.schema.reconcile_halt', { detail: message });
     this.name = 'SchemaReconcileHaltError';
   }
 }

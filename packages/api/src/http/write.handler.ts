@@ -9,7 +9,7 @@ import { RawJson } from '../store/column.ts';
 import { validateLocale, QueryParseError } from '../store/query.parser.ts';
 import { config } from '../config.ts';
 import { HookError, type HookRegistry } from '../db/schema/hooks.ts';
-import { CANONICAL_INT, JSON_CT, errorResponse, type CoreResponse } from './read.router.ts';
+import { CANONICAL_INT, JSON_CT, errorResponse, appErrorResponse, type CoreResponse } from './read.router.ts';
 
 /**
  * The Postgres int4 serial PK range upper bound. CANONICAL_INT accepts arbitrarily long digit runs, so
@@ -39,7 +39,7 @@ function parseId(idRaw: string): number | null {
  *   DELETE /:type/:id  -> 200 { data }   (returns the deleted row; 404 if no such id)
  *
  * Errors mirror the read core: {@link BodyParseError}/{@link EntryWriteError} -> 400, unknown type /
- * unknown id -> 404, a non-validation throw propagates (the adapter maps it to 500). No SQL/constraint
+ * unknown id -> 404, a non-validation throw propagates (the server maps it to 500). No SQL/constraint
  * detail is ever echoed.
  */
 export interface WriteContext {
@@ -59,7 +59,7 @@ export interface WriteContext {
   /**
    * Content lifecycle hooks. `before*` run INSIDE the write tx (transform/veto → rollback); `after*` run
    * AFTER {@link rebuild} (post-commit side-effects). Absent on a read-only / hookless server. Read via a
-   * LIVE getter in the uWS adapter (S4), so the key is always present but may be `undefined`.
+   * LIVE getter in the server (S4), so the key is always present but may be `undefined`.
    */
   hooks?: HookRegistry | undefined;
 }
@@ -73,14 +73,14 @@ export interface WriteRequest {
   body: unknown;
   /**
    * Draft & Publish action sub-route (`POST /:type/:id/actions/:action`): `publish`/`unpublish` when on
-   * that route, otherwise undefined (a plain create/update/delete). The adapter validates the literal
+   * that route, otherwise undefined (a plain create/update/delete). The server validates the literal
    * token before setting this; an unknown token never reaches here.
    */
   action?: 'publish' | 'unpublish';
   /**
    * i18n VARIANT-CREATE sub-route (`POST /:type/:id/locales/:locale`): the target locale slug when on that
    * route (the `:id` addresses an existing sibling row whose document the new variant joins), otherwise
-   * undefined. The adapter passes the RAW slug; this handler validates its shape (a malformed slug -> 400).
+   * undefined. The server passes the RAW slug; this handler validates its shape (a malformed slug -> 400).
    */
   variantLocale?: string;
 }
@@ -409,10 +409,19 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
 
     return errorResponse(405, `method ${method} not allowed`);
   } catch (e) {
-    if (e instanceof HookError) return errorResponse(400, e.message); // a before-hook vetoed the write
-    if (e instanceof BodyParseError) return errorResponse(400, e.message);
-    if (e instanceof EntryWriteError) return errorResponse(400, e.message);
-    if (e instanceof QueryParseError) return errorResponse(400, e.message); // malformed variant locale slug.
-    throw e; // server bug / DB error -> adapter maps to 500
+    // TODO(accept-language): WriteRequest carries no headers, so the locale cannot be resolved here via
+    // localeFromAcceptLanguage — thread the request Accept-Language onto WriteRequest and pass it through.
+    // Until then the boundary renders at 'en', which is byte-identical to the message historically thrown.
+    // HookError (before-hook veto) / BodyParseError / EntryWriteError / QueryParseError (malformed variant
+    // locale slug) all map to 400; their `error` string is preserved and `code` is the only added field.
+    if (
+      e instanceof HookError ||
+      e instanceof BodyParseError ||
+      e instanceof EntryWriteError ||
+      e instanceof QueryParseError
+    ) {
+      return appErrorResponse(e, 'en');
+    }
+    throw e; // server bug / DB error -> mapped to 500
   }
 }

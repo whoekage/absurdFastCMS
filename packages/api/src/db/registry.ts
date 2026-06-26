@@ -7,6 +7,7 @@ import type { ComponentTypeRow, ComponentFieldRow } from './component.fields.ts'
 import { isComponentFieldKind, type CmsType, type ComponentFieldKind } from './type.catalog.ts';
 import { schemaToRows, relationRowsByType, componentSchemaToRows } from './schema/adapt.ts';
 import type { Schema, ComponentSchema } from './schema/model.ts';
+import { AppError } from '../errors/app-error.ts';
 
 /**
  * THE RAM SOURCE OF TRUTH at runtime. Built at boot from the files-first module schemas (via
@@ -57,11 +58,11 @@ export { SYSTEM_COLUMN_NAMES };
  * A typed, field-scoped registry error. References the api_id + offending field NAME only — never any
  * SQL / Postgres detail — so corrupt / forward-incompatible meta fails LOUD at boot without a leak.
  */
-export class RegistryError extends Error {
+export class RegistryError extends AppError {
   readonly apiId: string;
   readonly field: string;
   constructor(apiId: string, field: string, reason: string) {
-    super(`module "${apiId}" field "${field}": ${reason}`);
+    super('db.registry.invalid_field', { apiId, field, reason });
     this.name = 'RegistryError';
     this.apiId = apiId;
     this.field = field;

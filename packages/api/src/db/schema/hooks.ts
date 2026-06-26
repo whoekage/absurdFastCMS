@@ -1,4 +1,5 @@
 import type { Hooks, HookContext } from './define.ts';
+import { AppError } from '../../errors/app-error.ts';
 
 /**
  * The content-lifecycle hook DISPATCH (pivot phase 4). Hooks are dev-authored, colocated in
@@ -17,10 +18,9 @@ import type { Hooks, HookContext } from './define.ts';
  */
 
 /** Throw from a `before*` hook to veto a write with a clean 400 (a generic throw is a 500 / bug). */
-export class HookError extends Error {
+export class HookError extends AppError {
   constructor(message: string) {
-    super(message);
-    this.name = 'HookError';
+    super('hook.failed', { detail: message });
   }
 }
 

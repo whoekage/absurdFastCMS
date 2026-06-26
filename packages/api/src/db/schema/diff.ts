@@ -7,6 +7,7 @@ import {
 } from '../type.catalog.ts';
 import { deriveLinkTableName, type RelationKind } from '../ddl.ts';
 import type { Schema, FieldSchema, RelationSchema } from './model.ts';
+import { AppError } from '../../errors/app-error.ts';
 
 /**
  * THE PURE DIFF ENGINE (§S3) — `diff(prev, next)` over two sets of files-first schemas, matching
@@ -32,10 +33,9 @@ import type { Schema, FieldSchema, RelationSchema } from './model.ts';
  * adapter) — a relation-bearing schema fails LOUD via {@link SchemaDiffError}.
  */
 
-export class SchemaDiffError extends Error {
+export class SchemaDiffError extends AppError {
   constructor(message: string) {
-    super(message);
-    this.name = 'SchemaDiffError';
+    super('db.schema.diff', { detail: message });
   }
 }
 

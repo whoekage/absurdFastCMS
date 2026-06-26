@@ -15,6 +15,8 @@
  *   - `url(key)` is a PURE SYNC function (no I/O) so it can be spliced into a serialized read response.
  */
 
+import { AppError } from '../errors/app-error.ts';
+
 /**
  * Content-addressed storage key shape: two hex fan-out dirs + the full sha256 hex + an optional
  * lower-`[a-z0-9]` extension. e.g. `ab/cd/abcd…<64 hex>.png`. NOTHING outside this alphabet is allowed,
@@ -45,10 +47,10 @@ export interface StorageProvider {
 }
 
 /** Thrown by `get` when the key is absent. The endpoints map it to a 404. */
-export class ObjectNotFoundError extends Error {
+export class ObjectNotFoundError extends AppError {
   readonly key: string;
   constructor(key: string) {
-    super(`object not found`);
+    super('storage.object_not_found', { key });
     this.name = 'ObjectNotFoundError';
     this.key = key;
   }

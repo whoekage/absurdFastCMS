@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { schemaZ, type Schema } from './model.ts';
+import { AppError } from '../../errors/app-error.ts';
 
 /**
  * The FILE boundary for the files-first schema: parse + Zod-validate one `schema/<apiId>.json`, serialize
@@ -9,11 +10,10 @@ import { schemaZ, type Schema } from './model.ts';
  * and the precise Zod path — a dev hand-editing JSON gets an actionable message, never a raw stack.
  */
 
-export class SchemaFileError extends Error {
+export class SchemaFileError extends AppError {
   readonly file: string;
   constructor(file: string, reason: string) {
-    super(`schema file ${JSON.stringify(file)}: ${reason}`);
-    this.name = 'SchemaFileError';
+    super('db.schema.file', { file: JSON.stringify(file), reason });
     this.file = file;
   }
 }

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { defToSchema, type TypeDef, type Hooks } from './define.ts';
 import type { Schema } from './model.ts';
+import { AppError } from '../../errors/app-error.ts';
 
 /**
  * The EDGE loader for the code-first source. The project's entity definitions live under `modules/`, ONE
@@ -19,11 +20,10 @@ import type { Schema } from './model.ts';
  * IR directly (never re-imports).
  */
 
-export class SchemaLoadError extends Error {
+export class SchemaLoadError extends AppError {
   readonly file: string;
   constructor(file: string, reason: string) {
-    super(`schema module ${JSON.stringify(file)}: ${reason}`);
-    this.name = 'SchemaLoadError';
+    super('db.schema.load', { file: JSON.stringify(file), reason });
     this.file = file;
   }
 }

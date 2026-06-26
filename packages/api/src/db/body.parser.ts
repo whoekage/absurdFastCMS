@@ -1,4 +1,5 @@
 import { coerceI64, coerceDecimal, formatDecimal } from '../store/column.ts';
+import { AppError } from '../errors/app-error.ts';
 import type { ComponentDef, ModuleDef, Registry, RegistryField, RelationMeta } from './registry.ts';
 import { SYSTEM_COLUMN_NAMES } from './registry.ts';
 import type { ComponentFieldKind } from './type.catalog.ts';
@@ -33,9 +34,9 @@ const MAX_COMPONENT_ENTRY_BYTES = 1 << 18; // 256 KiB per component instance
  *
  * Returns a plain object keyed by ENGINE field names, values coerced to their bound-param wire form.
  */
-export class BodyParseError extends Error {
+export class BodyParseError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('body.invalid', { detail: message });
     this.name = 'BodyParseError';
   }
 }

@@ -1,10 +1,10 @@
 import type { Schema, FieldSchema, RelationSchema } from './model.ts';
+import { AppError } from '../../errors/app-error.ts';
 
 /** Raised when the codegen meets a field kind the v1 DSL can't yet express (e.g. repeatable components). */
-export class BuilderCodegenError extends Error {
+export class BuilderCodegenError extends AppError {
   constructor(message: string) {
-    super(message);
-    this.name = 'BuilderCodegenError';
+    super('db.schema.codegen', { detail: message });
   }
 }
 

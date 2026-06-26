@@ -181,12 +181,20 @@ export class ApiError extends Error {
   readonly status: number;
   /** The raw response body: parsed JSON when possible, the raw string otherwise, `undefined` if empty. */
   readonly body: unknown;
+  /**
+   * An optional STABLE, machine-readable error code lifted off the api's JSON error body (`{ code }`),
+   * when present. Branch on this instead of parsing the English {@link Error.message} (which is for
+   * humans and may change). `undefined` when the server did not supply a `code`. Additive: existing
+   * callers that constructed an {@link ApiError} without a code are unaffected.
+   */
+  readonly code?: string;
 
-  constructor(status: number, message: string, body: unknown) {
+  constructor(status: number, message: string, body: unknown, code?: string) {
     super(message);
     this.name = new.target.name;
     this.status = status;
     this.body = body;
+    if (code !== undefined) this.code = code;
   }
 }
 
@@ -220,24 +228,25 @@ export class ServerError extends ApiError {}
  * base {@link ApiError}.
  */
 export function errorFromResponse(status: number, message: string, body: unknown): ApiError {
+  const code = codeFromBody(body);
   switch (status) {
     case 400:
-      return new BadRequestError(status, message, body);
+      return new BadRequestError(status, message, body, code);
     case 401:
-      return new UnauthorizedError(status, message, body);
+      return new UnauthorizedError(status, message, body, code);
     case 403:
-      return new ForbiddenError(status, message, body);
+      return new ForbiddenError(status, message, body, code);
     case 404:
-      return new NotFoundError(status, message, body);
+      return new NotFoundError(status, message, body, code);
     case 405:
-      return new MethodNotAllowedError(status, message, body);
+      return new MethodNotAllowedError(status, message, body, code);
     case 409:
-      return new ConflictError(status, message, body);
+      return new ConflictError(status, message, body, code);
     case 413:
-      return new PayloadTooLargeError(status, message, body);
+      return new PayloadTooLargeError(status, message, body, code);
     default:
-      if (status >= 500 && status <= 599) return new ServerError(status, message, body);
-      return new ApiError(status, message, body);
+      if (status >= 500 && status <= 599) return new ServerError(status, message, body, code);
+      return new ApiError(status, message, body, code);
   }
 }
 
@@ -246,6 +255,15 @@ function messageFromBody(body: unknown): string | undefined {
   if (body && typeof body === 'object' && 'error' in body) {
     const { error } = body as { error: unknown };
     if (typeof error === 'string') return error;
+  }
+  return undefined;
+}
+
+/** Extract the STABLE machine-readable code from a parsed api error body (`{ code: string }`), if present. */
+function codeFromBody(body: unknown): string | undefined {
+  if (body && typeof body === 'object' && 'code' in body) {
+    const { code } = body as { code: unknown };
+    if (typeof code === 'string') return code;
   }
   return undefined;
 }

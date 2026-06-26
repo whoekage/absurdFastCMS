@@ -7,12 +7,12 @@ import { rebuildType } from '../db/engine.loader.ts';
 import { handleRequest, errorResponse, JSON_CT, type CoreResponse } from './read.router.ts';
 import { handleWrite, type WriteContext } from './write.handler.ts';
 import { HookRegistry } from '../db/schema/hooks.ts';
-import { applySchemaEdit, applySchemaDelete, previewSchemaEdit, BuilderValidationError, BuilderNotFoundError, BuilderBusyError, type ModuleDraft, type SchemaEditResult } from '../compose/builder.ts';
+import { applySchemaEdit, applySchemaDelete, previewSchemaEdit, BuilderBusyError, type ModuleDraft, type SchemaEditResult } from '../compose/builder.ts';
 import { swapFromIR } from '../db/engine.swap.ts';
 import { loadTypes, loadTypesCacheBusted } from '../db/schema/load.ts';
-import { readAppliedSchemas, ensureAppliedTable, MigrationBlockedError, MigrationDataLossError, MigrationUnsupportedError } from '../db/schema/migrate.ts';
-import { SchemaDiffError } from '../db/schema/diff.ts';
+import { readAppliedSchemas, ensureAppliedTable, MigrationBlockedError } from '../db/schema/migrate.ts';
 import { SchemaChangeConflictError } from '../db/ddl.ts';
+import { toErrorResponse } from '../errors/index.ts';
 import { computeCatalogVersion, hashRequest } from '../compose/catalog-version.ts';
 import { ensureIdempotencyTable, idempotencyLookup, recordIdempotency, pruneIdempotency } from '../compose/builder-idempotency.ts';
 import { handleUpload, handleListFiles, handleGetFile, handleDeleteFile, type FileContext, type ParsedUpload } from './upload.handler.ts';
@@ -179,13 +179,19 @@ function builderJson(status: number, fields: Record<string, unknown>, headers?: 
 
 /** Map a Builder/migrate throw to its HTTP status + envelope fields. A blocked-by-lint case is a RETURN, not here. */
 function builderErrorFields(e: unknown): { status: number; fields: Record<string, unknown> } {
-  if (e instanceof BuilderNotFoundError) return { status: 404, fields: { ok: false, error: e.message } };
-  if (e instanceof BuilderValidationError || e instanceof SchemaDiffError) return { status: 422, fields: { ok: false, error: e.message } };
-  if (e instanceof MigrationBlockedError) return { status: 409, fields: { ok: false, blocked: e.blocked, error: 'requires allowDestructive' } };
-  if (e instanceof MigrationDataLossError) return { status: 422, fields: { ok: false, error: e.message, table: e.table, column: e.column, affected: e.affected } };
-  if (e instanceof MigrationUnsupportedError) return { status: 422, fields: { ok: false, error: e.message } };
-  if (e instanceof SchemaChangeConflictError) return { status: 409, fields: { ok: false, error: 'schema lock timed out; retry' } };
-  return { status: 500, fields: { ok: false, error: 'internal error' } }; // never leak an arbitrary message
+  // TODO(i18n): builderErrorFields has no handle on the request's Accept-Language header here, so it renders
+  // at the default locale. When the header is threaded through, swap 'en' for
+  // localeFromAcceptLanguage(req Accept-Language). At locale 'en' render() === the historically thrown
+  // e.message, so the wire stays byte-identical (D1: `code` is the only additive field).
+  const { status, body } = toErrorResponse(e, 'en');
+  // Two codes whose builder wire `error` is a FIXED string that DIVERGES from render(): keep that fixed
+  // string and take ONLY status (+ extras / Retry-After header, the latter applied in builderError).
+  if (e instanceof MigrationBlockedError) return { status, fields: { ok: false, blocked: e.blocked, error: 'requires allowDestructive' } };
+  if (e instanceof SchemaChangeConflictError) return { status, fields: { ok: false, error: 'schema lock timed out; retry' } };
+  // Every other code uses e.message === render(code, params, 'en'), so body.error is byte-identical;
+  // `...body` carries { error, code, ...whitelisted extras } (data_loss -> table/column/affected). The
+  // non-AppError fallthrough yields the hard { error: 'internal error', code: 'internal' } at status 500.
+  return { status, fields: { ok: false, ...body } };
 }
 
 /** The CoreResponse form of {@link builderErrorFields} (the transient lock 409 carries Retry-After). */

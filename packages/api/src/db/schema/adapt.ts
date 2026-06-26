@@ -3,6 +3,7 @@ import { resolveFields } from '../module.fields.ts';
 import { resolveComponentFields, type ComponentTypeRow, type ComponentFieldRow } from '../component.fields.ts';
 import { deriveTableName, deriveLinkTableName, inverseKind } from '../ddl.ts';
 import type { Schema, ComponentSchema, FieldSchema } from './model.ts';
+import { AppError } from '../../errors/app-error.ts';
 
 /**
  * The ADAPTER from the files-first schema model to the meta ROW shapes the {@link Registry} already
@@ -21,11 +22,10 @@ import type { Schema, ComponentSchema, FieldSchema } from './model.ts';
  * S1's compat shim builds defs from meta rows directly, so it is not needed yet.
  */
 
-export class SchemaAdaptError extends Error {
+export class SchemaAdaptError extends AppError {
   readonly apiId: string;
   constructor(apiId: string, reason: string) {
-    super(`module "${apiId}": ${reason}`);
-    this.name = 'SchemaAdaptError';
+    super('db.schema.adapt', { apiId, reason });
     this.apiId = apiId;
   }
 }

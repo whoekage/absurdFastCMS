@@ -3,16 +3,16 @@ import { parseQuery, QueryParseError, ALL_LOCALES, type ParsedQuery } from '../s
 import { InvalidCursorError } from '../store/cursor.codec.ts';
 import type { FilterNode } from '../store/table.ts';
 import { config } from '../config.ts';
+import { toErrorResponse, type Locale } from '../errors/index.ts';
 
 /**
- * uWS-MIGRATION SLICE 0 — the framework-agnostic HTTP request CORE.
+ * The HTTP request CORE — pure, with zero uWS dependency.
  *
  * {@link handleRequest} is a PURE function `(engine, { method, path, query }) -> { status, contentType, body }`.
  * It carries the entire request semantics (routing, validation, status codes, the late-materialized
- * response Buffer) with ZERO dependency on any HTTP framework — the uWS adapter (`app.ts`) is a
- * thin shim that builds the request triple, calls this, and writes the result on its own response
- * object. That keeps the behavior in ONE place tested in-process with no socket and no mock, and the
- * adapter reduced to transport plumbing. uWS is the one and only HTTP server.
+ * response Buffer). The server (`server.ts`) reads the request triple off the uWS `req`, calls this, and
+ * writes the result onto the uWS `res`. Keeping the core pure is what lets uWS live in ONE file while the
+ * behavior here is tested in-process with no socket and no mock — it is NOT a seam for swapping uWS out.
  *
  * ROUTES (read-only this slice):
  *   GET /:type      — LIST. The raw query string (Strapi bracket syntax `filters[a][$op]=v`,
@@ -34,7 +34,7 @@ import { config } from '../config.ts';
  * Error bodies are tiny JSON and NOT the hot path, so `JSON.stringify` there is fine.
  */
 
-/** A transport-agnostic request: everything the core needs, read synchronously by the adapter. */
+/** The request triple the core needs — read synchronously off the uWS `req` by the server. */
 export interface CoreRequest {
   /** Upper- or lower-case HTTP method; compared case-insensitively. */
   method: string;
@@ -44,7 +44,7 @@ export interface CoreRequest {
   query: string;
 }
 
-/** A transport-agnostic response: the adapter maps this onto its own response object. */
+/** The response the core produces — the server writes it onto the uWS `res`. */
 export interface CoreResponse {
   status: number;
   contentType: string;
@@ -61,6 +61,21 @@ export const CANONICAL_INT = /^(0|[1-9]\d*)$/;
 /** Build a small JSON error response (not the hot path). */
 export function errorResponse(status: number, message: string): CoreResponse {
   return { status, contentType: JSON_CT, body: Buffer.from(JSON.stringify({ error: message }), 'utf8') };
+}
+
+/**
+ * The single typed-error boundary for the read/write cores: map an {@link AppError} (or any thrown value)
+ * onto a {@link CoreResponse} via the one {@link toErrorResponse} helper. Preserves the EXISTING wire shape
+ * (a `{ error }` JSON body at the same status) and now ALSO carries the additive `code` field (plus any
+ * whitelisted extras / `Retry-After` header the helper emits for the builder codes). At locale `en` the
+ * rendered `error` string is byte-identical to the message the class historically threw, so swapping the
+ * old `errorResponse(400, e.message)` for this is purely additive (`code` is the only new field).
+ */
+export function appErrorResponse(e: unknown, locale: Locale): CoreResponse {
+  const { status, body, headers } = toErrorResponse(e, locale);
+  const res: CoreResponse = { status, contentType: JSON_CT, body: Buffer.from(JSON.stringify(body), 'utf8') };
+  if (headers !== undefined) res.headers = headers;
+  return res;
 }
 
 /**
@@ -144,7 +159,10 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
       // (unknown/scalar populate name -> QueryParseError -> 400) and assembles the nested response.
       return { status: 200, contentType: JSON_CT, body: engine.respond(name, parsed.options, parsed.populate, parsed.fields) };
     } catch (e) {
-      if (e instanceof QueryParseError || e instanceof InvalidCursorError) return errorResponse(400, e.message);
+      // TODO(accept-language): CoreRequest carries no headers, so the locale cannot be resolved here via
+      // localeFromAcceptLanguage — thread the request Accept-Language onto CoreRequest and pass it through.
+      // Until then the boundary renders at 'en', which is byte-identical to the message historically thrown.
+      if (e instanceof QueryParseError || e instanceof InvalidCursorError) return appErrorResponse(e, 'en');
       throw e;
     }
   }
@@ -178,7 +196,10 @@ export function handleRequest(engine: Engine, req: CoreRequest): CoreResponse {
       if (body === null) return errorResponse(404, `not found`);
       return { status: 200, contentType: JSON_CT, body };
     } catch (e) {
-      if (e instanceof QueryParseError || e instanceof InvalidCursorError) return errorResponse(400, e.message);
+      // TODO(accept-language): CoreRequest carries no headers, so the locale cannot be resolved here via
+      // localeFromAcceptLanguage — thread the request Accept-Language onto CoreRequest and pass it through.
+      // Until then the boundary renders at 'en', which is byte-identical to the message historically thrown.
+      if (e instanceof QueryParseError || e instanceof InvalidCursorError) return appErrorResponse(e, 'en');
       throw e;
     }
   }

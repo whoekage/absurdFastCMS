@@ -6,6 +6,7 @@ import { generateSchemaSource } from '../db/schema/codegen.ts';
 import { validateFieldName, validateRelationKind, deriveTableName, SchemaChangeConflictError } from '../db/ddl.ts';
 import { migrate, migrateLint, readAppliedSchemas, ensureAppliedTable } from '../db/schema/migrate.ts';
 import type { Change } from '../db/schema/diff.ts';
+import { AppError } from '../errors/app-error.ts';
 
 /**
  * THE VISUAL BUILDER'S SERVER SIDE — apply a schema edit from the admin SPA to the files-first source.
@@ -46,25 +47,25 @@ export interface SchemaEditResult {
 }
 
 /** A pre-flight validation failure (bad identifier, reserved name, dangling relation target, id-ownership). → 422. */
-export class BuilderValidationError extends Error {
+export class BuilderValidationError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('builder.validation', { detail: message });
     this.name = 'BuilderValidationError';
   }
 }
 
 /** The addressed type does not exist (DELETE / id-addressed edit of an unknown type). → 404. */
-export class BuilderNotFoundError extends Error {
+export class BuilderNotFoundError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('builder.not_found', { detail: message });
     this.name = 'BuilderNotFoundError';
   }
 }
 
 /** A second mutation arrived while one was in flight (single-writer mutex contended, programmatic path). → 409. */
-export class BuilderBusyError extends Error {
+export class BuilderBusyError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('builder.busy', { detail: message });
     this.name = 'BuilderBusyError';
   }
 }

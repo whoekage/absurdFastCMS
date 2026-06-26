@@ -22,6 +22,7 @@ import type { ResolvedType } from '../type.catalog.ts';
 import { schemaZ, type Schema } from './model.ts';
 import { fieldSchemaToSpec } from './adapt.ts';
 import { diff, type Change, type ChangeSet } from './diff.ts';
+import { AppError } from '../../errors/app-error.ts';
 
 /**
  * THE MIGRATE ENGINE (§S4) — apply a files-first {@link ChangeSet} to Postgres, data-preserving, with a
@@ -52,22 +53,23 @@ import { diff, type Change, type ChangeSet } from './diff.ts';
 const MIGRATE_LOCK_KEY = 0x5c_3e_a9_01;
 
 /** Raised when the migration contains changes that need an explicit ack (or are forbidden outright). */
-export class MigrationBlockedError extends Error {
+export class MigrationBlockedError extends AppError {
   readonly blocked: readonly Change[];
   constructor(blocked: readonly Change[]) {
-    super(
-      `migration blocked: ${blocked.length} change(s) require --allow-destructive or are forbidden:\n` +
-        blocked.map((c) => `  - ${describeChange(c)} [${c.risk}]`).join('\n'),
-    );
+    super('db.migration.blocked', {
+      count: blocked.length,
+      changeList: blocked.map((c) => `  - ${describeChange(c)} [${c.risk}]`).join('\n'),
+      blocked,
+    });
     this.name = 'MigrationBlockedError';
     this.blocked = blocked;
   }
 }
 
 /** Raised for a change-set op whose apply is not yet implemented (draft&publish / i18n toggle). */
-export class MigrationUnsupportedError extends Error {
+export class MigrationUnsupportedError extends AppError {
   constructor(message: string) {
-    super(message);
+    super('db.migration.unsupported', { detail: message });
     this.name = 'MigrationUnsupportedError';
   }
 }
@@ -79,12 +81,12 @@ export class MigrationUnsupportedError extends Error {
  * migrate rolls back with this loud error (vs PG's silent `::varchar(n)` truncation / scale rounding). To
  * proceed, widen the target or clean the offending rows first. A shrink that fits ALL rows applies cleanly.
  */
-export class MigrationDataLossError extends Error {
+export class MigrationDataLossError extends AppError {
   readonly table: string;
   readonly column: string;
   readonly affected: number;
   constructor(table: string, column: string, affected: number, detail: string) {
-    super(`migration would lose data: ${affected} row(s) in ${table}.${column} ${detail} — refusing to silently truncate/round (widen the target or clean the rows first)`);
+    super('db.migration.data_loss', { table, column, affected, detail });
     this.name = 'MigrationDataLossError';
     this.table = table;
     this.column = column;

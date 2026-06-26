@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { AppError } from '../errors/app-error.ts';
 import type { ColumnType } from './column.ts';
 import { coerceDecimal, coerceI64, formatDecimal } from './column.ts';
 import type { BoundaryValue } from './indexes/composite-sorted.index.ts';
@@ -8,10 +9,9 @@ import type { BoundaryValue } from './indexes/composite-sorted.index.ts';
  * GENERIC for every reject mode (bad base64, non-JSON, HMAC mismatch, sig mismatch, bad version,
  * bad shape) so a tampered cursor leaks NOTHING about the secret, sig, or expected values.
  */
-export class InvalidCursorError extends Error {
+export class InvalidCursorError extends AppError {
   constructor() {
-    super('invalid or expired pagination cursor');
-    this.name = 'InvalidCursorError';
+    super('cursor.invalid');
   }
 }
 
