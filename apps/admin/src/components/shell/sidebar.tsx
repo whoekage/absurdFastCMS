@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { FileStack, Image, LayoutDashboard, Search, Sparkles } from 'lucide-react';
+import { Boxes, FileStack, Image, LayoutDashboard, Search, Sparkles } from 'lucide-react';
 import { api } from '@/lib/api';
 import { moduleKeys, errorMessage } from '@/lib/modules';
 import { formatCount } from '@/lib/dashboard';
@@ -122,7 +122,11 @@ export function Sidebar() {
 
       <div className={groupLabel}>System</div>
       <nav className="space-y-0.5 px-3 pb-2">
-        {/* The runtime-DDL Schema Builder UI was removed — schema is files-first (edit schema/<apiId>.json). */}
+        {/* Files-first Module Builder: create/edit/delete types → writes modules/<apiId>/schema.ts + migrates. */}
+        <Link to="/modules" className={navItem}>
+          <Boxes className="h-4 w-4 shrink-0" />
+          Modules
+        </Link>
         <Link to="/media" className={navItem} activeOptions={{ exact: true }}>
           <Image className="h-4 w-4 shrink-0" />
           Media Library
