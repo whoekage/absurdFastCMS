@@ -9,6 +9,8 @@
       "default": "./src/index.ts"
     }
   },
+  "//files": "Ships the source (no-build native TS) PLUS the prebuilt admin SPA (run `npm run build:admin`), which createConti serves at the root.",
+  "files": ["src", "admin"],
   "engines": {
     "node": ">=24"
   },

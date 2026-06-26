@@ -62,7 +62,7 @@ test('conti init + conti start: scaffolded project boots and serves over the rea
   });
   await waitForLine(child.stdout!, /ready on/, 20_000);
 
-  const res = await fetch(`http://127.0.0.1:${port}/article`);
+  const res = await fetch(`http://127.0.0.1:${port}/api/article`);
   assert.equal(res.status, 200);
   const body = (await res.json()) as { data: unknown };
   assert.ok(Array.isArray(body.data), 'GET /article returns a {data:[...]} collection');

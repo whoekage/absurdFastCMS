@@ -19,10 +19,11 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      // The conti dev API serves UNDER /api (createConti sets basePath '/api'), so forward verbatim —
+      // do NOT strip the prefix (prod is single-process: the API serves itself at /api and the admin at root).
       '/api': {
         target: 'http://localhost:3000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
       },
     },
   },

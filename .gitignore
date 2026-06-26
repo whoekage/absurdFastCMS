@@ -3,6 +3,9 @@ node_modules/
 
 # Build artifacts and logs (per-workspace dirs are also ignored by their own .gitignore).
 dist/
+
+# Prebuilt admin SPA copied into @conti/core for serving/publish (`npm run build:admin`) — not committed.
+packages/api/admin/
 *.log
 
 # Playwright E2E artifacts (apps/admin).

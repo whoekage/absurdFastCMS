@@ -13,6 +13,7 @@
   "scripts": {
     "dev": "npm run dev --workspace @conti/core",
     "dev:admin": "npm run dev --workspace @conti/admin",
+    "build:admin": "npm run build --workspace @conti/admin && node -e \"const fs=require('fs');fs.rmSync('packages/api/admin',{recursive:true,force:true});fs.cpSync('apps/admin/dist','packages/api/admin',{recursive:true})\"",
     "test": "npm test --workspace @conti/core",
     "bench": "npm run bench --workspace @conti/core",
     "db:up": "npm run db:up --workspace @conti/core",

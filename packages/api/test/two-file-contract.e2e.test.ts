@@ -34,7 +34,7 @@ test('conti.config.ts + bootstrap.ts load and drive a real boot', async () => {
   const app = createConti({ ...config, database: { url: db.url }, server: { port } }, lifecycle);
   await app.start(); // exercises the real bootstrap.ts onAfterStart (warmup fetch + ready log)
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/article`);
+    const res = await fetch(`http://127.0.0.1:${port}/api/article`);
     assert.equal(res.status, 200);
     const body = (await res.json()) as { data: unknown };
     assert.ok(Array.isArray(body.data));

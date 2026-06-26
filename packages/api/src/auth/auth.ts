@@ -66,6 +66,11 @@ export interface BuildAuthOptions {
    */
   baseURL?: string;
   /**
+   * The route prefix the auth handler is mounted under — MUST match the server's `/auth` route prefix.
+   * Default '/auth'; createConti sets '/api/auth' when the content-API runs under '/api'.
+   */
+  basePath?: string;
+  /**
    * be-09b — the Postgres handle the FIRST-ADMIN bootstrap runs on (the boot store's `sql`). When present
    * (with {@link rbacInvalidate}), the `user.create.after` hook promotes the FIRST-ever user to
    * `super-admin` under an advisory lock. Absent for the CLI `generate` / read-only servers → the hook is
@@ -136,7 +141,7 @@ export function buildAuth(opts: BuildAuthOptions = {}) {
   return betterAuth({
     secret: config.authSecret,
     baseURL: opts.baseURL ?? config.publicBaseUrl,
-    basePath: '/auth',
+    basePath: opts.basePath ?? '/auth',
     database: { dialect: authDialect(), type: 'postgres' },
     emailAndPassword: { enabled: true },
     session: { expiresIn: 604800, updateAge: 86400 }, // 7d expiry / 1d refresh; NO cookieCache (see above)

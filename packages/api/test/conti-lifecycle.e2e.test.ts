@@ -44,7 +44,7 @@ test('hooks fire in order with the right context around a real boot', async () =
   };
   const app = createConti(cfg(port), lifecycle);
   await app.start();
-  const res = await fetch(`http://127.0.0.1:${port}/article`);
+  const res = await fetch(`http://127.0.0.1:${port}/api/article`);
   assert.equal(res.status, 200);
   await app.stop();
   assert.deepEqual(events, [`before:${port}`, `after:${port}`, 'shutdown']);
@@ -64,7 +64,7 @@ test('onBeforeStart throwing aborts boot — server never listens, onAfterStart 
   });
   await assert.rejects(app.start(), /abort-boot/);
   assert.deepEqual(calls, ['before']); // onAfterStart never ran
-  await assert.rejects(fetch(`http://127.0.0.1:${port}/article`)); // nothing is listening
+  await assert.rejects(fetch(`http://127.0.0.1:${port}/api/article`)); // nothing is listening
   await app.stop(); // nothing was opened -> safe no-op
 });
 
@@ -77,7 +77,7 @@ test('onAfterStart throwing is logged but the server stays up and serves', async
   });
   await app.start(); // resolves despite the hook throwing
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/article`);
+    const res = await fetch(`http://127.0.0.1:${port}/api/article`);
     assert.equal(res.status, 200);
   } finally {
     await app.stop();
@@ -93,5 +93,5 @@ test('onShutdown throwing rejects stop() with AggregateError but still tears dow
   });
   await app.start();
   await assert.rejects(app.stop(), (e: unknown) => e instanceof AggregateError);
-  await assert.rejects(fetch(`http://127.0.0.1:${port}/article`)); // socket still closed -> torn down
+  await assert.rejects(fetch(`http://127.0.0.1:${port}/api/article`)); // socket still closed -> torn down
 });

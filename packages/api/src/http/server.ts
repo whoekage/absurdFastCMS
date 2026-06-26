@@ -1,4 +1,5 @@
 import uWS from 'uWebSockets.js';
+import { loadAdminBundle, mountAdmin } from './static.ts';
 import busboy from 'busboy';
 import type { Engine } from '../store/engine.ts';
 import type { Registry } from '../db/registry.ts';
@@ -365,6 +366,10 @@ export interface ServerDeps {
   teamView: TeamView;
   hooks: HookRegistry;
   modulesDir: string;
+  /** API route prefix, e.g. '/api'. Default '' = routes at root (the test/SDK harness). */
+  basePath?: string;
+  /** When set, serve the prebuilt admin SPA from this dir at the ROOT (every non-API path). */
+  adminDir?: string;
 }
 
 /**
@@ -378,8 +383,20 @@ export interface ServerDeps {
  * WRITE / builder / media routes are gated by the wired RBAC.
  */
 export function createServer(deps: ServerDeps): Server {
-  const { engine, store, registry, publishClock = () => new Date(), auth, sessionCache, rbac, teamView, hooks, modulesDir } = deps;
+  const { engine, store, registry, publishClock = () => new Date(), auth, sessionCache, rbac, teamView, hooks, modulesDir, basePath = '', adminDir } = deps;
   const app = uWS.App();
+  // Every API route registers under `basePath` (default '' = root). createConti sets '/api' so the admin
+  // SPA can own the root. Route handlers reconstruct the core path from getParameter(), so the prefix is
+  // transparent to the router; only the `app.any` fallback (which reads getUrl) strips it (below).
+  const P = basePath;
+  type UwsHandler = (res: uWS.HttpResponse, req: uWS.HttpRequest) => void;
+  const route = {
+    get: (p: string, h: UwsHandler) => app.get(P + p, h),
+    post: (p: string, h: UwsHandler) => app.post(P + p, h),
+    put: (p: string, h: UwsHandler) => app.put(P + p, h),
+    del: (p: string, h: UwsHandler) => app.del(P + p, h),
+    any: (p: string, h: UwsHandler) => app.any(P + p, h),
+  };
   // S1 (Builder live-reload): the SINGLE mutable cell every schema-reading route closure reads through.
   // A schema edit (Builder route, S4) rebuilds a fresh Engine/Registry off-side and swaps these three
   // references in ONE synchronous assignment — JS is single-threaded, so no in-flight request observes a
@@ -715,11 +732,11 @@ export function createServer(deps: ServerDeps): Server {
   // Synchronous like the read routes: decode straight off the live engine, emit JSON, never mutate.
   if (config.debugInspector) {
     // INDEX: every module + row count.
-    app.get('/debug-inspect', (res) => {
+    route.get('/debug-inspect', (res) => {
       writeJson(res, 200, listTypes(live.engine));
     });
     // ONE type: per-column storage/stats + relations + a decoded row window (?offset=&limit=).
-    app.get('/debug-inspect/:type', (res, req) => {
+    route.get('/debug-inspect/:type', (res, req) => {
       const type = req.getParameter(0) ?? '';
       const params = new URLSearchParams(req.getQuery() ?? '');
       const offset = toInt(params.get('offset'));
@@ -746,14 +763,14 @@ export function createServer(deps: ServerDeps): Server {
   // byte-untouched. ALWAYS mounted (auth is a required dep). This slice gates NOTHING — it only proxies
   // the provider.
   const onAuth = (res: uWS.HttpResponse, req: uWS.HttpRequest): void => handleAuthRoute(res, req, auth);
-  app.get('/auth/:p', onAuth);
-  app.post('/auth/:p', onAuth);
-  app.put('/auth/:p', onAuth);
-  app.del('/auth/:p', onAuth);
-  app.any('/auth/*', onAuth);
+  route.get('/auth/:p', onAuth);
+  route.post('/auth/:p', onAuth);
+  route.put('/auth/:p', onAuth);
+  route.del('/auth/:p', onAuth);
+  route.any('/auth/*', onAuth);
 
   // LIST: /:type  — read everything off `req` synchronously, then delegate to the core.
-  app.get('/:type', (res, req) => {
+  route.get('/:type', (res, req) => {
     const method = req.getMethod();
     const type = req.getParameter(0) ?? '';
     const query = req.getQuery() ?? '';
@@ -766,7 +783,7 @@ export function createServer(deps: ServerDeps): Server {
   });
 
   // SINGLE: /:type/:id
-  app.get('/:type/:id', (res, req) => {
+  route.get('/:type/:id', (res, req) => {
     const method = req.getMethod();
     const type = req.getParameter(0) ?? '';
     const id = req.getParameter(1) ?? '';
@@ -913,7 +930,7 @@ export function createServer(deps: ServerDeps): Server {
   // ---- BUILDER ROUTE SURFACE (design §1). GET reads are PUBLIC; mutations gated on builder.manage. ----
 
   // GET list — applied catalog (with ids) + ETag/304.
-  app.get('/builder/modules', (res, req) => {
+  route.get('/builder/modules', (res, req) => {
     const inm = req.getHeader('if-none-match');
     let aborted = false;
     res.onAborted(() => { aborted = true; });
@@ -928,7 +945,7 @@ export function createServer(deps: ServerDeps): Server {
   });
 
   // GET one — 404 when absent; else the single schema WITH ids + ETag/304.
-  app.get('/builder/modules/:apiId', (res, req) => {
+  route.get('/builder/modules/:apiId', (res, req) => {
     const apiId = req.getParameter(0) ?? '';
     const inm = req.getHeader('if-none-match');
     let aborted = false;
@@ -945,7 +962,7 @@ export function createServer(deps: ServerDeps): Server {
   });
 
   // POST preview — dry-run (no write/migrate/swap), no mutex/version. GATED.
-  app.post('/builder/modules/:apiId/preview', (res, req) => {
+  route.post('/builder/modules/:apiId/preview', (res, req) => {
     const apiId = req.getParameter(0) ?? '';
     const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
     gate(res, req, 'builder.manage', true, (raw, aborted) => {
@@ -965,7 +982,7 @@ export function createServer(deps: ServerDeps): Server {
   });
 
   // PUT upsert — create / update / apiId-rename. GATED + mutex + If-Match/version + idempotency.
-  app.put('/builder/modules/:apiId', (res, req) => {
+  route.put('/builder/modules/:apiId', (res, req) => {
     const apiId = req.getParameter(0) ?? '';
     const ifMatch = req.getHeader('if-match'); // '' when absent (uWS; lowercase key)
     const idemKey = req.getHeader('idempotency-key');
@@ -984,7 +1001,7 @@ export function createServer(deps: ServerDeps): Server {
   });
 
   // DELETE — drop a whole type (always destructive → require allowDestructive). GATED + same wrap.
-  app.del('/builder/modules/:apiId', (res, req) => {
+  route.del('/builder/modules/:apiId', (res, req) => {
     const apiId = req.getParameter(0) ?? '';
     const ifMatch = req.getHeader('if-match');
     const idemKey = req.getHeader('idempotency-key');
@@ -1002,7 +1019,7 @@ export function createServer(deps: ServerDeps): Server {
 
   // POST reload — operator escape hatch: cache-busted re-import + swap (registry/hooks/relations), NO
   // migrate; advances the version so a pre-reload PUT carrying the old version fails 412. GATED + mutex.
-  app.post('/builder/reload', (res, req) => {
+  route.post('/builder/reload', (res, req) => {
     const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
     gate(res, req, 'builder.manage', false, (_raw, aborted) => {
       void (async () => {
@@ -1025,7 +1042,7 @@ export function createServer(deps: ServerDeps): Server {
 
   // Draft & Publish action sub-route (`content.publish`). 3 segments — structurally distinct from the
   // 2-segment data routes (ordering irrelevant: uWS matches by segment count + literals).
-  app.post('/:type/:id/actions/:action', (res, req) => {
+  route.post('/:type/:id/actions/:action', (res, req) => {
     const type = req.getParameter(0) ?? '';
     const idRaw = req.getParameter(1) ?? '';
     const actionRaw = req.getParameter(2) ?? '';
@@ -1047,7 +1064,7 @@ export function createServer(deps: ServerDeps): Server {
   });
   // i18n variant create: POST /:type/:id/locales/:locale (`content.create`). 4 segments; literal
   // `locales` distinguishes it from `/actions/:action`.
-  app.post('/:type/:id/locales/:locale', (res, req) => {
+  route.post('/:type/:id/locales/:locale', (res, req) => {
     const type = req.getParameter(0) ?? '';
     const idRaw = req.getParameter(1) ?? '';
     const variantLocale = req.getParameter(2) ?? '';
@@ -1084,9 +1101,9 @@ export function createServer(deps: ServerDeps): Server {
       })();
     });
   };
-  app.post('/:type', dataWrite('POST', 'content.create', false));
-  app.put('/:type/:id', dataWrite('PUT', 'content.update', true));
-  app.del('/:type/:id', dataWrite('DELETE', 'content.delete', true));
+  route.post('/:type', dataWrite('POST', 'content.create', false));
+  route.put('/:type/:id', dataWrite('PUT', 'content.update', true));
+  route.del('/:type/:id', dataWrite('DELETE', 'content.delete', true));
 
   // be-04 MEDIA — asset endpoints under the `/_files` literal prefix. A leading underscore is illegal
   // in an api_id (validateFieldName / deriveTableName), so `_files` can NEVER collide with a real
@@ -1096,7 +1113,7 @@ export function createServer(deps: ServerDeps): Server {
   // GATED upload (`media.upload`): read the content-type header SYNC (multipart boundary), buffer the
   // body (up to uploadMaxBytes) while resolving auth in parallel via gateUpload, then on allow parse the
   // buffered multipart through busboy and dispatch the core.
-  app.post('/_files/upload', (res, req) => {
+  route.post('/_files/upload', (res, req) => {
     const contentType = req.getHeader('content-type') ?? '';
     gateUpload(res, req, contentType, (raw, aborted) => {
       parseMultipartBuffer(contentType, raw, (parsed) => {
@@ -1113,10 +1130,10 @@ export function createServer(deps: ServerDeps): Server {
       });
     });
   });
-  app.get('/_files', (res, req) => handleFilesRoute(res, req, 'GET', false, fileCtx));
-  app.get('/_files/:id', (res, req) => handleFilesRoute(res, req, 'GET', true, fileCtx));
+  route.get('/_files', (res, req) => handleFilesRoute(res, req, 'GET', false, fileCtx));
+  route.get('/_files/:id', (res, req) => handleFilesRoute(res, req, 'GET', true, fileCtx));
   // GATED delete (`media.upload`): a delete is a mutation. Capture the id sync, gate (bodyless), dispatch.
-  app.del('/_files/:id', (res, req) => {
+  route.del('/_files/:id', (res, req) => {
     const idRaw = req.getParameter(0) ?? '';
     gate(res, req, 'media.upload', false, (_raw, aborted) => {
       void (async () => {
@@ -1244,7 +1261,7 @@ export function createServer(deps: ServerDeps): Server {
 
   // POST /_keys — create a key for SELF (session-only). owner = principal.userId. Returns the raw secret
   // EXACTLY ONCE (the `key` field of the create result), projected alongside the safe metadata.
-  app.post('/_keys', (res, req) => {
+  route.post('/_keys', (res, req) => {
     gateKeys(res, req, true, (authCtx, _headers, raw, aborted) => {
       if (authCtx.via !== 'session') return corkSendNoStore(res, aborted, 403, { error: 'key management requires a session' });
       const parsed = readJsonBodyKeys(raw);
@@ -1267,7 +1284,7 @@ export function createServer(deps: ServerDeps): Server {
   // POST /_keys/for/:userId — create a key for ANOTHER user (gated `token.manage`). owner = the route
   // `:userId`; the scope-vs-owner check uses the TARGET's resolved RBAC set. Session-only (no key may
   // drive a cross-user mint).
-  app.post('/_keys/for/:userId', (res, req) => {
+  route.post('/_keys/for/:userId', (res, req) => {
     const targetId = req.getParameter(0) ?? '';
     gateKeys(res, req, true, (authCtx, _headers, raw, aborted) => {
       if (authCtx.via !== 'session') return corkSendNoStore(res, aborted, 403, { error: 'key management requires a session' });
@@ -1292,7 +1309,7 @@ export function createServer(deps: ServerDeps): Server {
 
   // GET /_keys — list MY keys (session-only, own-only). `listApiKeys` returns the owner's keys with the
   // secret structurally absent; we project to the safe shape (NEVER `key`) as the second wall.
-  app.get('/_keys', (res, req) => {
+  route.get('/_keys', (res, req) => {
     gateKeys(res, req, false, (authCtx, headers, _body, aborted) => {
       if (authCtx.via !== 'session') return corkSendNoStore(res, aborted, 403, { error: 'key management requires a session' });
       void (async () => {
@@ -1315,7 +1332,7 @@ export function createServer(deps: ServerDeps): Server {
   // reads, so a SQL delete is instantly effective). A key id the caller neither owns nor may manage → 403,
   // NEVER a blind delete-by-id (no IDOR). A missing id → 404. Revocation is INSTANT: no key cache, the
   // next verifyApiKey misses → 401.
-  app.del('/_keys/:id', (res, req) => {
+  route.del('/_keys/:id', (res, req) => {
     const keyId = req.getParameter(0) ?? '';
     gateKeys(res, req, false, (authCtx, headers, _body, aborted) => {
       if (authCtx.via !== 'session') return corkSendNoStore(res, aborted, 403, { error: 'key management requires a session' });
@@ -1371,7 +1388,7 @@ export function createServer(deps: ServerDeps): Server {
 
   // GET /_team — the member directory straight from RAM (ZERO-PG). `no-store` so a stale directory can
   // never be replayed from an HTTP cache after a logout/role change.
-  app.get('/_team', (res, req) => {
+  route.get('/_team', (res, req) => {
     gateTeam(res, req, false, (_principal, _headers, _body, aborted) => {
       const members: TeamRow[] = tv.list();
       corkSendNoStore(res, aborted, 200, { data: members });
@@ -1380,7 +1397,7 @@ export function createServer(deps: ServerDeps): Server {
 
   // POST /_team — add a member (idempotent). The `userId` is the TARGET; it must be an existing identity.
   // NO role is assigned here (an added identity has no team role until POST /_team/:userId/role).
-  app.post('/_team', (res, req) => {
+  route.post('/_team', (res, req) => {
     gateTeam(res, req, true, (_principal, _headers, raw, aborted) => {
       const parsed = readJsonBody(raw);
       if (!parsed.ok) return corkSend(res, aborted, parsed.error);
@@ -1418,7 +1435,7 @@ export function createServer(deps: ServerDeps): Server {
   //       (no actor can assign a role >= their own; a non-super-admin can never assign super-admin);
   //   (3) LAST-ADMIN GUARD — a demotion that would drop active super-admins to zero is rejected.
   // On success: DELETE+INSERT the user_roles row in one tx, then rbac.rebuild() AND teamView.rebuild().
-  app.post('/_team/:userId/role', (res, req) => {
+  route.post('/_team/:userId/role', (res, req) => {
     const targetId = req.getParameter(0) ?? '';
     gateTeam(res, req, true, (principal, _headers, raw, aborted) => {
       const parsed = readJsonBody(raw);
@@ -1468,7 +1485,7 @@ export function createServer(deps: ServerDeps): Server {
   // (3) flip team.status='suspended'; (4) ban + revoke ALL sessions via the better-auth API (deletes the
   // PG session rows and fires session.delete.after → SessionCache.evict per session); (5) rbac.rebuild()
   // (a suspended member keeps no effective authority via team_view's status) + teamView.rebuild().
-  app.post('/_team/:userId/suspend', (res, req) => {
+  route.post('/_team/:userId/suspend', (res, req) => {
     const targetId = req.getParameter(0) ?? '';
     gateTeam(res, req, false, (_principal, headers, _body, aborted) => {
       void (async () => {
@@ -1503,7 +1520,7 @@ export function createServer(deps: ServerDeps): Server {
   // guard; (3) removeUser via the API (cascades session deletes → evict; ON DELETE CASCADE tidies
   // team/user_roles); (4) teamView.rebuild() + rbac.rebuild(). content.createdBy is a SOFT ref (no FK) so
   // removal never hits an FK violation — a removed author simply misses team_view ("former member").
-  app.del('/_team/:userId', (res, req) => {
+  route.del('/_team/:userId', (res, req) => {
     const targetId = req.getParameter(0) ?? '';
     gateTeam(res, req, false, (principal, headers, _body, aborted) => {
       void (async () => {
@@ -1535,12 +1552,23 @@ export function createServer(deps: ServerDeps): Server {
 
   // Everything else (root, non-GET on a known route, deeper paths): let the core decide the status
   // (404 / 405). We pass the real method + path so a non-GET on /:type still yields 405.
-  app.any('/*', (res, req) => {
+  route.any('/*', (res, req) => {
     const method = req.getMethod();
     const url = req.getUrl();
     const query = req.getQuery() ?? '';
-    writeResponse(res, handleRequest(live.engine, { method, path: url, query }));
+    // `url` from getUrl() INCLUDES basePath (this is the only handler that reads it) — strip it so the
+    // core sees the bare path (e.g. '/api/foo' -> '/foo'); an empty basePath is a no-op.
+    const path = P !== '' && url.startsWith(P) ? url.slice(P.length) || '/' : url;
+    writeResponse(res, handleRequest(live.engine, { method, path, query }));
   });
+
+  // The admin SPA: serve its prebuilt bundle from RAM at the ROOT (every non-API path), registered LAST so
+  // the more-specific basePath routes win. Only when an adminDir is supplied (createConti) — the test/SDK
+  // harness passes none, so the root stays the content API and behavior is byte-identical.
+  if (adminDir !== undefined) {
+    const bundle = loadAdminBundle(adminDir);
+    if (bundle) mountAdmin(app, bundle);
+  }
 
   return {
     listen(port: number): Promise<ListenToken> {

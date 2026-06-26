@@ -101,16 +101,19 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     const teamView = new TeamView(store.sql);
     sessionCache = new SessionCache(() => auth, undefined, undefined, teamView);
     const rbac = new RbacRegistry(store.sql);
+    // The content-API mounts under '/api' so the admin SPA can own the root; auth aligns at '/api/auth'.
+    const API_BASE = '/api';
     auth = buildAuth({
       sessionEvictor: sessionCache,
       sql: store.sql,
+      basePath: `${API_BASE}/auth`,
       rbacInvalidate: () => rbac.rebuild(),
       teamViewReload: () => teamView.rebuild(),
     });
     await rbac.rebuild();
     await teamView.rebuild();
 
-    const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: hookRegistry, modulesDir });
+    const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: hookRegistry, modulesDir, basePath: API_BASE, adminDir: config.adminDir });
     close = server.close;
     listenToken = await server.listen(config.server.port);
     const rows = engine.has('article') ? engine.rowCount('article') : 0;

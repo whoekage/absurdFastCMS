@@ -108,6 +108,7 @@ export function rawField(buf: Buffer | string, field: string): string {
 export async function assembleAuth(
   sql: Sql,
   base: string,
+  basePath?: string,
 ): Promise<{ auth: Auth; sessionCache: SessionCache; rbac: RbacRegistry; teamView: TeamView }> {
   setAuthSql(sql); // FIRST: the auth dialect runs over the shared per-file handle
   let auth: Auth;
@@ -116,6 +117,7 @@ export async function assembleAuth(
   const rbac = new RbacRegistry(sql);
   auth = buildAuth({
     baseURL: base,
+    ...(basePath !== undefined ? { basePath: `${basePath}/auth` } : {}),
     sessionEvictor: sessionCache,
     sql,
     rbacInvalidate: () => rbac.rebuild(),
@@ -236,6 +238,10 @@ export interface StartTestServerOpts {
   publishClock?: () => Date;
   /** Content lifecycle hooks (hooks.e2e). Defaults to an empty registry. */
   hooks?: HookRegistry;
+  /** API route prefix (admin-serving test). Default '' = routes at root; auth aligns to `${basePath}/auth`. */
+  basePath?: string;
+  /** Serve a prebuilt admin SPA bundle from this dir at the root (admin-serving test). */
+  adminDir?: string;
 }
 
 /** The handle {@link startTestServer} returns: the FULL gated server + an authed + an anon fetch + auth helpers. */
@@ -291,7 +297,7 @@ export async function startTestServer(sql: Sql, schemas: Schema[], opts: StartTe
 
   // AUTH cycle (mirror conti.ts EXACTLY via assembleAuth): teamView BEFORE auth + the session cache; the cache
   // references `auth` lazily; `setAuthSql` runs first inside assembleAuth (migrate/seed above use raw sql).
-  const { auth, sessionCache, rbac, teamView } = await assembleAuth(sql, base);
+  const { auth, sessionCache, rbac, teamView } = await assembleAuth(sql, base, opts.basePath);
 
   const { engine, registry } = await store.loadFromSchemas(schemas, opts.components ?? []);
   // The full ServerDeps bundle — mirrors conti.ts. publishClock is omitted unless a test pins it (createServer
@@ -307,13 +313,17 @@ export async function startTestServer(sql: Sql, schemas: Schema[], opts: StartTe
     teamView,
     hooks: opts.hooks ?? new HookRegistry(),
     modulesDir,
+    ...(opts.basePath !== undefined ? { basePath: opts.basePath } : {}),
+    ...(opts.adminDir !== undefined ? { adminDir: opts.adminDir } : {}),
   };
   const server = createServer(deps);
   const token = await server.listen(port);
 
   // signUp / userIdOf / grantRole — reused VERBATIM from startTestServerFromFilesWithAuth.
+  // Auth lives under the server's basePath (default '' → '/auth'; '/api' → '/api/auth').
+  const authPrefix = opts.basePath ?? '';
   const signUp = async (email: string): Promise<string> => {
-    const res = await fetch(`${base}/auth/sign-up/email`, {
+    const res = await fetch(`${base}${authPrefix}/auth/sign-up/email`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: base },
       body: JSON.stringify({ email, password: 'correct-horse-battery-staple', name: 'U' }),

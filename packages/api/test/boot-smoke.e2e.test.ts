@@ -37,7 +37,7 @@ after(async () => {
 });
 
 test('createConti boots the full stack and serves a content read', async () => {
-  const res = await fetch(`http://127.0.0.1:${port}/article`);
+  const res = await fetch(`http://127.0.0.1:${port}/api/article`);
   assert.equal(res.status, 200);
   const body = (await res.json()) as { data: unknown };
   assert.ok(Array.isArray(body.data), 'GET /article returns a {data:[...]} collection');
