@@ -44,7 +44,7 @@ import { config } from '../config.ts';
  * READS are SYNCHRONOUS — read getMethod()/getParameter()/getQuery() into locals at the top, call
  * the pure core, write the result; `req` is never touched after, so no onAborted is needed.
  *
- * WRITES (POST/PUT/DELETE, only wired when a {@link PostgresStore} is supplied) are ASYNCHRONOUS — they
+ * WRITES (POST/PUT/DELETE — always wired now that every {@link ServerDeps} is required) are ASYNCHRONOUS — they
  * read the request body and hit Postgres. uWS makes that delicate, handled in {@link readBody}/{@link corkSend}:
  *  - `req` is STACK-ALLOCATED and invalid after the handler yields — so the `:type`/`:id` params are
  *    read SYNCHRONOUSLY before the first await / before onData fires.
