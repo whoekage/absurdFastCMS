@@ -42,8 +42,8 @@ Confirmed against the tree on 2026-06-24:
 - **`registry.ts` is the one real downward layering violation.** It lives in `src/store` yet has
   RUNTIME (value) imports from the db layer:
   - `../db/ddl.ts` (`deriveTableName`, `validateIdentifier`, `RELATION_KINDS`)
-  - `../db/content-type.repository.ts`
-  - `../db/component-type.repository.ts`
+  - `../db/module.fields.ts`
+  - `../db/component.fields.ts`
   - `../db/type.catalog.ts` (`isComponentFieldKind`)
   Everything else in `store/` has ZERO db/postgres deps. This is the edge that poisons
   `engine -> db` acyclicity, and `engine.ts` deliberately does NOT import `registry.ts` (it holds
@@ -79,7 +79,7 @@ Confirmed against the tree on 2026-06-24:
 | Package | Kind | Responsibility | dependsOn |
 |---|---|---|---|
 | `@conti/core` | published | The whole runnable guts as a library: columnar read engine (store/*), schema Registry + body.parser + inspect, uWS http layer, db layer (postgres.store, engine.loader, repos, ddl, type.catalog, migrations), auth/rbac, storage (local+S3). Exposes ONE runtime entry `createConti(config)` + `defineConfig` + a type-only extension surface. All engine/store/db/http/auth/storage internals are UNEXPORTED via the package.json `exports` map. | (none) |
-| `@conti/cli` | published | `bin: { conti }`. `init` (scaffold thin project), `dev`, `start` (`createConti(config).start()`), `schema pull/push`, `gen:types` (emit `content-types.d.ts` for the editor + `tsc --noEmit` — NOT a runtime build). Thin process/orchestration shell over core's library API; owns no engine logic. | `@conti/core` |
+| `@conti/cli` | published | `bin: { conti }`. `init` (scaffold thin project), `dev`, `start` (`createConti(config).start()`), `schema pull/push`, `gen:types` (emit `modules.d.ts` for the editor + `tsc --noEmit` — NOT a runtime build). Thin process/orchestration shell over core's library API; owns no engine logic. | `@conti/core` |
 | `@conti/sdk` | published | Typed HTTP client (Strapi-bracket query builder, read/write, relation/populate/media helpers). Talks to a running server over the wire. **Hand-writes its own contract types — depends on NOTHING at the package level** (constraint: a browser bundle must never pull postgres.js/uWS). | (none) |
 | `@conti/admin` | published | The Studio SPA (content manager, Builder UI, dashboard, Lua design system). Pure frontend; talks to the server through `@conti/sdk` over HTTP. Promoted from today's `apps/admin`. | `@conti/sdk` |
 
@@ -173,14 +173,14 @@ Type-only surface (`@conti/core/types`, erased by type-stripping — no enums/de
 - `ExtensionApi` — `{ hooks: ContentHooks; addRoute(...); addFieldType(...) }` (route/field-type
   are declared now, may be `phase-2` stubs).
 - `ContentHooks` — per-type `beforeCreate/Update/Delete/Publish/Unpublish` (filters) +
-  `afterCreate/...` (actions), keyed by content-type name.
+  `afterCreate/...` (actions), keyed by module name.
 - `ContentHookContext`, and wire DTOs shaped like `CoreRequest`/`CoreResponse`.
 
 ### `@conti/cli`
 
 `bin: { conti }`. Subcommands: `init`, `dev`, `start`, `schema pull`, `schema push`, `gen:types`.
 All are thin wrappers over `@conti/core`'s library API. `gen:types` is explicitly NOT a build —
-it reads the Registry/snapshot and emits `content-types.d.ts` consumed only by the editor and
+it reads the Registry/snapshot and emits `modules.d.ts` consumed only by the editor and
 `tsc --noEmit`. The runtime never imports generated types.
 
 ### `@conti/sdk`

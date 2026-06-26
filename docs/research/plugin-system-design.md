@@ -68,7 +68,7 @@ Directus name this split explicitly; Strapi/Payload fold it into `before*` (muta
   in-house hook pattern, wired through `buildAuth`. The content-hook registry should feel the same.
 - **Custom endpoints → `src/http/uws.adapter.ts createServer`** (route registration + the per-handler
   AuthContext from be-09b). Extension routes mount here, gated by the same `can(perm)`.
-- **Field types / validators / operators → `src/store/registry.ts`** (content-type/component defs +
+- **Field types / validators / operators → `src/store/registry.ts`** (module/component defs +
   validation) and the engine type catalog (`src/db/type.catalog.ts`).
 - **Reload / cold start → `src/db/postgres.store.ts loadWithRegistry`** (boot rebuild-from-PG). A restart
   re-runs this; extensions register during boot, before/around the load.
@@ -111,7 +111,7 @@ Actions (side-effect, run after commit + engine update, fire-and-forget):
 - `content.afterDelete(result, ctx)`
 - `content.afterPublish(result, ctx)` / `content.afterUnpublish(result, ctx)`
 
-Scoping: a hook registers for a **specific content-type** (`article.beforeCreate`) or **all** (`*`), with an
+Scoping: a hook registers for a **specific module** (`article.beforeCreate`) or **all** (`*`), with an
 optional **priority** (WordPress-style ordered execution). **No read/query/count hooks** (hot-path
 protection); bulk verbs reuse the single-row hooks per row in v1 (a dedicated `*Many` is a later option).
 
@@ -169,7 +169,7 @@ export interface ExtensionApi {
   `bootstrap()` (after the engine is warm). Mirrors Strapi’s `register`/`bootstrap` and our `buildAuth`
   composition-root wiring.
 - Hooks are collected into a per-type registry (a small `Map<type, {before[], after[]}>` keyed by
-  content-type name — bounded by schema size, not rows, so no Map-ceiling concern).
+  module name — bounded by schema size, not rows, so no Map-ceiling concern).
 
 ## 7. Custom endpoints & field/operator extensions (phases 2–3)
 
@@ -178,7 +178,7 @@ export interface ExtensionApi {
   (read), store (write), registry }` — read via the fast engine, write via the same validated write path
   (so content written by an extension still fires content hooks + updates the engine consistently).
 - **Field types / validators / operators:** register into the registry + type catalog. Higher risk (they
-  touch the columnar engine’s typed columns); gated behind the validated content-type build path. A custom
+  touch the columnar engine’s typed columns); gated behind the validated module build path. A custom
   *operator* must define both its filter semantics AND stay off the zero-PG read hot path’s fast lanes
   (likely a brute fallback unless it can reuse an index) — designed conservatively.
 
@@ -234,7 +234,7 @@ there is no third "magic" option in TS:
    step. The reversal vs Strapi: our schema is in PG, so codegen reads **PG/the Registry, not files** — the
    schema is the single source of truth and types are a derived PROJECTION (Strapi is the opposite:
    file-source, DB-mirror). A CLI `absurd gen:types` (NOT a build step — we are no-build) connects to PG /
-   the Registry and emits `content-types.d.ts` with a mechanical cmsType→TS mapping:
+   the Registry and emits `modules.d.ts` with a mechanical cmsType→TS mapping:
    `string|text→string`, `integer|float→number`, `biginteger|decimal→string`, `boolean→boolean`,
    `datetime|date→string`, `enumeration→a union of members`, `json→unknown`, `relation→number | RelatedType`,
    `media→MediaRef`, `component→ComponentInterface`, nullable → `| null`. The generated file is for the
@@ -281,8 +281,8 @@ is arguably cleaner than Strapi (file-source) since for us PG is the source and 
 - **Hook ordering / conflicts:** explicit numeric priority (WordPress) vs registration order. (Proposed:
   numeric priority, stable.)
 - **Bulk:** per-row hooks vs dedicated `*Many` (Strapi has both). (Proposed: per-row in v1.)
-- **Where do extension content-types live** in the single consolidated `0001_init.sql` migration policy?
-  (An extension that adds a content-type must fold into the same migration discipline — or content-types
+- **Where do extension modules live** in the single consolidated `0001_init.sql` migration policy?
+  (An extension that adds a module must fold into the same migration discipline — or modules
   stay dynamic via the existing builder path.)
 - **API-stability contract** for extension authors (semver of the hook API) before any public marketplace.
 

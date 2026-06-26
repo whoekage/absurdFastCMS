@@ -12,7 +12,7 @@
 - **schema.json shape:** `kind`, `collectionName` (the DB table name — DECOUPLED from the display name, so
   a display rename never touches the table), `info { singularName, pluralName, displayName }`, `options`
   (draft&publish, etc.), `attributes { <key>: { type, ...opts } }`. Files live in the repo + are committed.
-- **Builder is dev-only:** the Content-Type Builder requires `autoReload` and is DISABLED in `strapi start`
+- **Builder is dev-only:** the Module Builder requires `autoReload` and is DISABLED in `strapi start`
   (prod) — schema changes flow through code + redeploy. This IS the prod-lock we want.
 - **Migrations run on boot BEFORE the auto schema-sync**, with the full Knex API (incl. rename helpers).
   Ordered files. dev→prod = ship the schema files + run in prod.
@@ -21,7 +21,7 @@
 - **RENAME = data loss.** Strapi identifies a field BY ITS NAME (the attribute key). Renaming = a new key =
   "drop old column + add new column", silently losing data ([#12626], [#19141]); the only fix is a
   hand-written Knex migration. Their CTB-refactor for graceful rename is indefinitely deferred.
-- **Our fix:** every content-type and field carries a STABLE `id` separate from its `name`. The diff matches
+- **Our fix:** every module and field carries a STABLE `id` separate from its `name`. The diff matches
   by `id`, so a rename is `id` unchanged + `name` changed → emitted as `ALTER ... RENAME COLUMN` (instant,
   lossless in Postgres). No guessing, no data loss, no manual migration.
 
@@ -30,9 +30,9 @@
 ```
 project/
   schema/
-    <apiId>.json          # one file per content-type (reviewable diffs), source of truth
+    <apiId>.json          # one file per module (reviewable diffs), source of truth
   generated/
-    content-types.d.ts    # TS types codegen'd from schema/   (committed; CI checks freshness)
+    modules.d.ts    # TS types codegen'd from schema/   (committed; CI checks freshness)
     validators.ts         # Zod validators codegen'd from schema/
   migrations/
     2026..._<desc>.sql     # generated, data-preserving ALTERs (optional artifact; see §6)
@@ -128,7 +128,7 @@ prod:  deploy → conti migrate (from committed schema/) → data-preserving ALT
   but de-risked into a pure-add + a behaviour-preserving refactor.* Oracle: full suite byte-identical + new
   unit tests on the model/serialize/adapt round-trips.
 - **S2 — codegen FUNCTION (folds into S5, not a standalone command).** A pure `generate(schema) →
-  { content-types.d.ts, validators.ts (Zod) }` that the BUILDER calls whenever it rewrites a schema file —
+  { modules.d.ts, validators.ts (Zod) }` that the BUILDER calls whenever it rewrites a schema file —
   types/validators are a side-effect of the Builder edit, never a manual daily step. A THIN
   `conti gen:types --check` exists ONLY as a CI freshness gate (catches a hand-edit to schema.json that
   bypassed the Builder) + a manual regen escape valve. Test: generated output matches the schema; `--check`
@@ -158,7 +158,7 @@ prod:  deploy → conti migrate (from committed schema/) → data-preserving ALT
   the `compose/migrate.ts` wrappers (resolve config → db + schema dir, run base migrations, then the
   files-first migrate); a blocked migration prints a clean message and exits 1.
 - **S5 — codegen (DONE) + Builder rewrites schema.json + START the CONTRACT.**
-  - **codegen — SHIPPED (`db/schema/codegen.ts`).** Pure `generateTypes(schemas) → content-types.d.ts`
+  - **codegen — SHIPPED (`db/schema/codegen.ts`).** Pure `generateTypes(schemas) → modules.d.ts`
     (CmsType→TS, enum→literal union, nullable→`?: T|null`, i64/decimal→string, conditional D&P/i18n system
     fields; component/relation/json→`unknown` until their files-path support lands). The Builder will call it
     as a side-effect; `conti gen:types --check` will be the CI freshness gate.
@@ -193,7 +193,7 @@ checklist.
   - the ~30 test call sites of `Registry.build(sql)` → migrated to `Registry.fromSchemas(...)` (or a
     `loadSchemaFixtures()` test helper). **Done = `grep -rn 'Registry\.build' packages` returns ZERO.**
 - **Meta-READ repo fns** — `listContentTypes` / `getContentType` / `getFields` / `getRelations`
-  (`content-type.repository.ts`); `listComponentTypes` / `getComponentType` / `getComponentFields`
+  (`module.repository.ts`); `listComponentTypes` / `getComponentType` / `getComponentFields`
   (`component-type.repository.ts`) → removed (only the shim read them).
 - **Meta-WRITE path** — `createContentType` / `addField` / `renameField` / `dropField` / `changeFieldType` /
   … in the repos → their meta-table INSERT/UPDATE/DELETE is removed; the Builder writes FILES instead. The
@@ -259,8 +259,8 @@ typed, with colocated lifecycle hooks. The migrator/IR/engine are UNCHANGED; onl
 swaps (parse JSON → import module + introspect the DSL → the same `ContentTypeSchema` IR).
 
 ```ts
-import { defineType, c, type InferType } from '@conti/core';
-const Article = defineType({
+import { defineSchema, c, type InferType } from '@conti/core';
+const Article = defineSchema({
   id: 'ct_article',
   options: { draftAndPublish: false, i18n: false },
   fields: {                                   // Builder rewrites ONLY this literal (AST), hooks preserved
@@ -280,7 +280,7 @@ export type Article = InferType<typeof Article>;   // types for free, no codegen
   registry-driven (no redundant zod object). `c.*` can later also expose a zod validator for the SDK.
 - Visual Builder REMAINS: it AST-rewrites only the `fields` literal (dev-only, off the hot path), leaving
   `hooks` untouched. Introspection (engine/migrate/types) just executes the module — no AST.
-- Phases: (1) DSL `defineType`+`c.*`; (2) `defToSchema` (DSL→IR) + equivalence vs the JSON-IR; (3) TS loader
+- Phases: (1) DSL `defineSchema`+`c.*`; (2) `defToSchema` (DSL→IR) + equivalence vs the JSON-IR; (3) TS loader
   + `article.ts` + createConti/migrate switch; (4) hooks registry + write-path; (5 later) Builder AST-write.
 
 ## 12. Content lifecycle hooks — domain responsibility (pivot phase 4, DONE)
@@ -309,15 +309,15 @@ Footguns designed out: no side-effects in `before` · after-throw swallowed+logg
 generic throw→500. Deferred: a tx handle / auth principal in the hook ctx, a recursion guard, and a
 transactional OUTBOX for durable post-commit side-effects (email/webhooks — be-07).
 
-## 13. Project layout — `entities/<apiId>/` (one folder per content-type)
+## 13. Project layout — `modules/<apiId>/` (one folder per module)
 
 Final source layout (Strapi-style, naming chosen deliberately — `entities` over `schema`/`api`, matching how
 we already speak of "entities"):
 
 ```
-entities/
+modules/
   article/
-    schema.ts        export default defineType({ id, options, fields })   [required]
+    schema.ts        export default defineSchema({ id, options, fields })   [required]
     hooks.ts         export default defineHooks({ before*/after* })        [optional]
     services.ts      custom reusable domain fns   [reserved — not loaded yet]
     controller.ts    custom routes beyond CRUD    [reserved — not loaded yet]
@@ -326,13 +326,13 @@ entities/
 ```
 
 - **apiId = the FOLDER name** (rename the folder → rename the type; the stable `id` keeps it lossless).
-- The loader (`loadTypes`) scans `entities/*/`: an entity is a subdir containing `schema.ts`; it pairs an
-  optional `hooks.ts`. The `components/` grouping dir is skipped by the content-type loader (it has no
+- The loader (`loadTypes`) scans `modules/*/`: an entity is a subdir containing `schema.ts`; it pairs an
+  optional `hooks.ts`. The `components/` grouping dir is skipped by the module loader (it has no
   top-level `schema.ts`) and reserved for the future component loader.
-- **Why two files, not one (`defineType({ hooks })`):** the visual Builder OWNS + regenerates `schema.ts`
+- **Why two files, not one (`defineSchema({ hooks })`):** the visual Builder OWNS + regenerates `schema.ts`
   wholesale (pure codegen from the edited schema — NO AST/ts-morph surgery), and NEVER touches the dev-owned
   `hooks.ts`/`services.ts`/`controller.ts`. Clean machine/human split = no fragile in-place file rewriting.
-- Config: `ContiConfig.entities.dir` (default `<cwd>/entities`); `conti init` scaffolds `entities/article/`
+- Config: `ContiConfig.entities.dir` (default `<cwd>/entities`); `conti init` scaffolds `modules/article/`
   with all four files (services/controller commented placeholders).
 
 ## 14. Migration edge-case sweep — what we handle, what we don't (found by a workflow)

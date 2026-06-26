@@ -77,7 +77,7 @@ my-cms/
   .env / .env.test      # secrets: DATABASE_URL, AUTH_SECRET, CURSOR_SECRET, ... (commit .env.example, gitignore .env)
   extensions/           # the user's hooks, custom controllers, field types (auto-discovered or registered in bootstrap.ts)
   schema/               # COMMITTED schema snapshot (PG <-> file): the versioned source for dev->prod + review
-  generated/            # gen:types output: content-types.d.ts (committed, for the editor + tsc --noEmit)
+  generated/            # gen:types output: modules.d.ts (committed, for the editor + tsc --noEmit)
   .gitignore            # node_modules, .env, (decide: generated/)
 ```
 The "guts" — the columnar engine, uWS HTTP, postgres.js, auth — live in **`@conti/core`** (node_modules),
@@ -92,7 +92,7 @@ never in the user's repo. The user owns only the thin project above.
 ## 5. Config vs content (the separation that must NOT be conflated)
 
 - **`absurd.config.ts` = SERVER config, config-as-code, typed:** `{ db, auth, plugins: [...], server: {...},
-  storage, ... }`. This is code (git), small, dev-authored. (Payload conflates content-types INTO its config;
+  storage, ... }`. This is code (git), small, dev-authored. (Payload conflates modules INTO its config;
   WE do not — see below.)
 - **Content SCHEMA = PG truth + committed snapshot, NOT the config.** Content-types are dynamic (the Builder
   UI / the be-02 API write PG). They are versioned via `schema/` (snapshot), not by hand-editing config.
@@ -103,7 +103,7 @@ never in the user's repo. The user owns only the thin project above.
 - `absurd init [dir]` — scaffold §4 (config, bootstrap, extensions/, schema/, generated/, .env.example, scripts).
 - `absurd dev` — watch + run (the dev server); in dev, optionally `schema push` from the snapshot on boot.
 - `absurd start` — production boot (see §7).
-- `absurd schema pull` — read content-types from PG/the Registry → write `schema/` snapshot (commit it).
+- `absurd schema pull` — read modules from PG/the Registry → write `schema/` snapshot (commit it).
 - `absurd schema push` — apply the committed `schema/` snapshot to PG (dev→prod, idempotent/diff). **This is
   the production schema-promotion mechanism** (see the open risk §9).
 - `absurd gen:types` — read the snapshot (or PG) → emit `generated/content-types.d.ts` (cmsType→TS mapping;
@@ -137,7 +137,7 @@ machinery (the user writes intent, not the migrate/load/mount plumbing).
   loads the engine, listens. A deploy = a brief cold-start (engine rebuild from PG — see the engine-ops
   baseline; seconds–minutes by data size, single-instance).
 
-## 9. The critical long-term open risk — PROD content-type migration (ALTER, not drop & recreate)
+## 9. The critical long-term open risk — PROD module migration (ALTER, not drop & recreate)
 
 Our migration policy is a single hand-written `0001_init.sql` with **drop & recreate, no backfill —
 PRE-LAUNCH**. That is fine before launch. But once there is data, `schema push` (e.g. add a field to
@@ -150,7 +150,7 @@ hand-wave it.
 
 ## 10. Other open questions
 
-- **Snapshot format:** one `schema/snapshot.json` vs per-content-type files (better diffs/review). (Lean:
+- **Snapshot format:** one `schema/snapshot.json` vs per-module files (better diffs/review). (Lean:
   per-type files for reviewable diffs, like Strapi's per-type schema.json, but generated from PG.)
 - **`generated/` committed or gitignored?** Commit it (reproducible typechecks; Strapi commits its gen'd
   types) + a CI check that it is up to date with `schema/`.
@@ -159,19 +159,19 @@ hand-wave it.
 - **`absurd.config.ts` typing:** ship a `defineConfig()` helper (Payload/Vite-style) for autocomplete.
 - **Extension discovery:** explicit list in config vs auto-scan `extensions/` (lean: auto-scan + config
   order override, deterministic).
-- **First-run / seeding:** `init` could seed a demo content-type + a first-admin bootstrap (be-09b) prompt.
+- **First-run / seeding:** `init` could seed a demo module + a first-admin bootstrap (be-09b) prompt.
 
 ## 11. One-line summary
 Ship absurd as a **hidden runnable `@conti/core` + a thin scaffolded project + an `absurd` CLI**; keep **PG
 as the schema source of truth with a committed snapshot** (`schema pull/push`) for versioning + dev→prod +
 review (Directus-proven, keeps our Builder + engine-from-PG); **codegen types from the snapshot**;
 `bootstrap.ts` is the single extension/lifecycle entry. The make-or-break long-term piece is a real
-**ALTER-based content-type migration engine** for `schema push` post-launch.
+**ALTER-based module migration engine** for `schema push` post-launch.
 
 ---
 
 ### Sources (verify against current docs when implementing)
-create-strapi-app + ts:generate-types + content-type schema.json (docs.strapi.io); create-payload-app +
+create-strapi-app + ts:generate-types + module schema.json (docs.strapi.io); create-payload-app +
 payload.config + collections-in-config (payloadcms.com/docs); **Directus init + `directus schema
 snapshot/apply`** (directus.io/docs) — the DB-first + committed-snapshot model we mirror; Keystone
 `keystone.ts` config + prisma migrate (keystonejs.com/docs); create-medusa-app + modules (docs.medusajs.com).
