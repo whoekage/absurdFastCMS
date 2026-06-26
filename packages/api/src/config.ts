@@ -9,9 +9,7 @@
  * This prevents "DATABASE_URL is not set" errors during module load.
  */
 
-import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 type NodeEnv = 'development' | 'test' | 'production';
 
@@ -266,22 +264,6 @@ function getAdminDatabaseUrl(): string | undefined {
 }
 
 /**
- * Resolve the prebuilt admin SPA dist directory to serve at the root (or undefined → serve nothing). Order:
- * CONTI_ADMIN_DIR env (an explicit path, or '' to disable) → the bundled '<pkg>/admin' (the published
- * @conti/core ships it) → the monorepo dev build 'apps/admin/dist'. Returns the first that exists.
- */
-function getAdminDir(): string | undefined {
-  const env = process.env.CONTI_ADMIN_DIR;
-  if (env !== undefined) return env === '' ? undefined : env;
-  const srcDir = path.dirname(fileURLToPath(import.meta.url)); // packages/api/src
-  const bundled = path.resolve(srcDir, '..', 'admin'); // packages/api/admin (shipped in the npm package)
-  if (existsSync(bundled)) return bundled;
-  const repoDev = path.resolve(srcDir, '..', '..', '..', 'apps', 'admin', 'dist'); // monorepo dev build
-  if (existsSync(repoDev)) return repoDev;
-  return undefined;
-}
-
-/**
  * Check if testcontainers should reuse existing containers.
  * Defaults to true if TESTCONTAINERS_REUSE_ENABLE is not explicitly 'false'.
  */
@@ -325,10 +307,6 @@ export const config = {
     return getAdminDatabaseUrl();
   },
 
-  get adminDir(): string | undefined {
-    return getAdminDir();
-  },
-  
   get testcontainersReuse(): boolean {
     return getTestcontainersReuse();
   },

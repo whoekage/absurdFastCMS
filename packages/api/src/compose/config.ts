@@ -39,9 +39,10 @@ export interface ContiConfig {
   readonly modules?: { readonly dir: string };
 
   /**
-   * Directory of the prebuilt admin SPA to serve at the root. Defaults (in {@link createConti}) to the
-   * admin bundle shipped inside the installed `@conti/core` package (or the monorepo dev build), resolved
-   * by the core config's `adminDir`. Set this only to override with a custom admin build.
+   * Directory of the prebuilt admin SPA to serve at the root, or `undefined` to run headless (API only).
+   * The generated `conti.config.ts` sets this explicitly to `adminBundleDir()` — @conti/core's own shipped
+   * admin bundle — so there is NO boot-time fallback: serving the admin is a visible config line the user
+   * owns (point it at a custom admin build to override, or drop it to go headless).
    */
   readonly adminDir?: string;
 }

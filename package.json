@@ -18,6 +18,7 @@
     "registry:stop": "docker rm -f conti-verdaccio",
     "publish:local": "npm run build:admin && node scripts/publish-local.mjs",
     "test": "npm test --workspace @conti/core",
+    "test:smoke": "node --test test/scaffold-boot.smoke.test.ts",
     "bench": "npm run bench --workspace @conti/core",
     "db:up": "npm run db:up --workspace @conti/core",
     "db:down": "npm run db:down --workspace @conti/core",
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.1",
-    "@conti/cli": "*"
+    "@conti/cli": "*",
+    "@testcontainers/postgresql": "^12.0.2"
   }
 }

@@ -120,11 +120,12 @@ export async function runMigrateCommand(argv: string[], cwd: string = process.cw
 
 // ----- conti init: scaffold a thin project (the two-file contract + the standard dirs) -----
 
-const CONFIG_TEMPLATE = `import { defineConfig, loadConfigFromEnv } from '@conti/core';
+const CONFIG_TEMPLATE = `import { defineConfig, loadConfigFromEnv, adminBundleDir } from '@conti/core';
 
-// Server config-as-code. Env-driven by default; override any field inline, e.g.:
-//   export default defineConfig({ ...loadConfigFromEnv(), server: { port: 8080 } });
-export default defineConfig(loadConfigFromEnv());
+// Server config-as-code. Env-driven by default (.env). \`adminDir\` serves the prebuilt admin SPA shipped
+// in @conti/core at the root — drop that line to run headless (API only), or point it at a custom build.
+// Override any field inline, e.g.: defineConfig({ ...loadConfigFromEnv(), server: { port: 8080 } }).
+export default defineConfig({ ...loadConfigFromEnv(), adminDir: adminBundleDir() });
 `;
 
 const BOOTSTRAP_TEMPLATE = `import { defineBootstrap } from '@conti/core';

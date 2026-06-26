@@ -8,6 +8,9 @@ export { createConti, defineBootstrap } from './compose/conti.ts';
 export type { ContiApp, ServerLifecycle, ServerContext, StartedContext } from './compose/conti.ts';
 export { defineConfig, loadConfigFromEnv } from './compose/config.ts';
 export type { ContiConfig } from './compose/config.ts';
+// Resolves @conti/core's OWN shipped assets (admin SPA / migrations) from any install layout — a generated
+// `conti.config.ts` calls `adminBundleDir()` to serve the bundled admin at the root.
+export { adminBundleDir, migrationsDir } from './paths.ts';
 export type { S3Config } from './config.ts';
 // Code-first schema authoring DSL (the `schema/<apiId>.ts` surface): defineSchema + the `c.*` builders.
 export { defineSchema, defineHooks, c } from './db/schema/define.ts';
