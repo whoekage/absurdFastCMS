@@ -36,27 +36,53 @@ try {
   }
 }
 
-// 2) @conti/core + @conti/cli — publish with the core's uWS dep rewritten to the exact version, so the
-// PUBLISHED package resolves uWS from the tarball above (not github). Restore the source afterwards.
-const corePath = 'packages/api/package.json';
-const originalCore = readFileSync(corePath, 'utf8');
-const core = JSON.parse(originalCore);
-core.dependencies['uWebSockets.js'] = uwsVersion;
-writeFileSync(corePath, `${JSON.stringify(core, null, 2)}\n`);
+// 2) Build + publish @conti/core and @conti/cli. Node won't type-strip TS under node_modules, so the
+// PUBLISHED packages ship BUILT JS (dist via tsup) — the monorepo source keeps running TS directly (no-build
+// dev). Each package.json is rewritten for npm consumers (exports/bin → dist; core's uWS dep → the tarball
+// version above), published, then restored to its source form (github uWS, src exports/bin).
+console.log('\n› building @conti/core + @conti/cli (tsup → dist)…');
+sh('npm run build --workspace @conti/core --workspace @conti/cli');
 
+const targets = [
+  {
+    pkg: '@conti/core',
+    file: 'packages/api/package.json',
+    rewrite: (p) => {
+      p.dependencies['uWebSockets.js'] = uwsVersion;
+      p.exports = { '.': { types: './dist/index.d.ts', default: './dist/index.js' } };
+      p.types = './dist/index.d.ts';
+      p.files = ['dist', 'admin'];
+    },
+  },
+  {
+    pkg: '@conti/cli',
+    file: 'packages/cli/package.json',
+    rewrite: (p) => {
+      p.bin = { conti: './dist/cli.js' };
+      p.files = ['dist'];
+    },
+  },
+];
+
+const backups = targets.map((t) => ({ ...t, orig: readFileSync(t.file, 'utf8') }));
 try {
-  for (const [pkg, dir] of [['@conti/core', 'packages/api'], ['@conti/cli', 'packages/cli']]) {
-    const version = JSON.parse(readFileSync(`${dir}/package.json`, 'utf8')).version;
-    console.log(`\n› ${pkg}@${version}: (re)publish to ${REGISTRY}`);
+  for (const t of backups) {
+    const p = JSON.parse(t.orig);
+    t.rewrite(p);
+    writeFileSync(t.file, `${JSON.stringify(p, null, 2)}\n`);
+  }
+  for (const t of backups) {
+    const version = JSON.parse(t.orig).version;
+    console.log(`\n› ${t.pkg}@${version}: (re)publish to ${REGISTRY}`);
     // Best-effort unpublish so a re-run REPLACES the same version (the registry grants unpublish for @conti/*).
     try {
-      execSync(`npm unpublish ${pkg}@${version} --registry ${REGISTRY} --force`, { stdio: 'ignore' });
+      execSync(`npm unpublish ${t.pkg}@${version} --registry ${REGISTRY} --force`, { stdio: 'ignore' });
     } catch {
       /* not published yet — fine */
     }
-    sh(`npm publish --workspace ${pkg}`); // publishConfig pins the registry
+    sh(`npm publish --workspace ${t.pkg}`); // publishConfig pins the registry
   }
 } finally {
-  writeFileSync(corePath, originalCore); // restore the github uWS spec for the monorepo
-  console.log('\n✓ publish:local done — @conti/* + uWebSockets.js are in the local registry.');
+  for (const t of backups) writeFileSync(t.file, t.orig); // restore source for the monorepo
+  console.log('\n✓ publish:local done — @conti/* (built JS) + uWebSockets.js are in the local registry.');
 }
