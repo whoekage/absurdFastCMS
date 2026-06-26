@@ -146,6 +146,26 @@ against an external/compose Postgres instead, set `TEST_DATABASE_URL=postgres://
 (admin/superuser-capable; must NOT point at `absurd_golden`). On that escape-hatch the external server will
 accrue `absurd_golden` plus transient `t_*` per-file databases that it does not auto-reap.
 
+## Deployment
+
+A conti project (`conti init`) runs as **one process**: the content API under `/api` and the prebuilt admin
+SPA at the root `/`, served from RAM. The admin bundle ships inside `@conti/core` (no per-project build).
+
+**Same-origin (recommended).** Put a reverse proxy with TLS in front; admin and API share one origin, so the
+admin calls a relative `/api`, cookies are same-origin, and there is no CORS. Nothing to configure.
+
+```caddy
+example.com {
+  reverse_proxy 127.0.0.1:3000   # both / (admin) and /api (content API) — one upstream
+}
+```
+
+**Separate admin origin** (e.g. `admin.example.com` + API on `example.com`). The admin's API base can't be
+baked into the prebuilt bundle, so it is discovered at **runtime**: set `CONTI_PUBLIC_URL=https://example.com`
+and the server injects `window.__CONTI__.apiBase = https://example.com/api` into the served `index.html` — no
+rebuild. (CORS + cross-subdomain auth cookies for this split are not wired yet; same-origin is the supported
+default.)
+
 ## Roadmap
 
 - [x] Columnar storage + scan, equality / sorted / substring / relation indexes

@@ -127,11 +127,11 @@ const CONFIG_TEMPLATE = `import { defineConfig, loadConfigFromEnv, adminBundleDi
 export default defineConfig({
   ...loadConfigFromEnv(),
   adminDir: adminBundleDir(),
-  // server.publicUrl: set ONLY if the admin is served from a DIFFERENT origin than the API (e.g. the admin
-  // on admin.example.com, the API on example.com). Same-origin (one process / reverse proxy) needs nothing —
-  // the admin calls a relative '/api'. When set, the admin's API base is injected at runtime (no rebuild).
-  // server: { ...loadConfigFromEnv().server, publicUrl: 'https://example.com' },
 });
+
+// Serving the admin from a DIFFERENT origin than the API (e.g. admin.example.com + API on example.com)?
+// Set CONTI_PUBLIC_URL=https://example.com in the env and the admin's API base is injected at runtime — no
+// rebuild. Same-origin (one process / reverse proxy) needs nothing: the admin calls a relative '/api'.
 `;
 
 const BOOTSTRAP_TEMPLATE = `import { defineBootstrap } from '@conti/core';
@@ -233,6 +233,7 @@ function envExampleTemplate(authSecret: string, cursorSecret: string): string {
     `AUTH_SECRET=${authSecret}`,
     `CURSOR_SECRET=${cursorSecret}`,
     'PORT=3000',
+    '# CONTI_PUBLIC_URL=https://example.com  # set ONLY if the admin is served from a different origin than the API',
     '',
   ].join('\n');
 }
