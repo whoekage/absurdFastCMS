@@ -4,7 +4,7 @@ import { PostgresStore } from '../db/postgres.store.ts';
 import { loadTypes } from '../db/schema/load.ts';
 import { reconcileBoot } from './boot-reconcile.ts';
 import { HookRegistry } from '../db/schema/hooks.ts';
-import { createServer, type ListenToken } from '../http/uws.adapter.ts';
+import { createServer, type ListenToken } from '../http/server.ts';
 import { CursorCodec } from '../store/cursor.codec.ts';
 import { buildAuth } from '../auth/auth.ts';
 import { setAuthSql } from '../auth/auth.dialect.ts';

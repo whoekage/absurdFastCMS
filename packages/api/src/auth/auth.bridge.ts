@@ -5,7 +5,7 @@ import type { Auth } from './auth.ts';
 /**
  * The uWS ↔ WHATWG-Fetch BRIDGE for better-auth. better-auth's `auth.handler(Request): Promise<Response>`
  * is framework-agnostic Fetch; uWS is a stack-allocated callback API. This adapts one to the other in
- * the proven uWS way (mirroring `uws.adapter.ts`'s write path):
+ * the proven uWS way (mirroring `server.ts`'s write path):
  *
  *  INBOUND (uWS req → Request), read SYNCHRONOUSLY at handler top because `req` is stack-allocated and
  *  invalid after the first await:
@@ -117,7 +117,7 @@ export function handleAuthRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, aut
     return;
   }
 
-  // Buffer the body (capped), then dispatch. Mirrors uws.adapter.ts readBody: each chunk ArrayBuffer is
+  // Buffer the body (capped), then dispatch. Mirrors server.ts readBody: each chunk ArrayBuffer is
   // valid only during the callback, so it is copied before buffering; an oversized body → 413.
   const chunks: Buffer[] = [];
   let size = 0;

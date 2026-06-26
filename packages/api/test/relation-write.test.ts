@@ -1,7 +1,7 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import type { ListenToken } from '../src/http/uws.adapter.ts';
+import type { ListenToken } from '../src/http/server.ts';
 import { deriveLinkTableName } from '../src/db/ddl.ts';
 import type { Schema } from '../src/db/schema/model.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';

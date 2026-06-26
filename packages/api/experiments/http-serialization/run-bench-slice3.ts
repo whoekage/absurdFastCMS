@@ -1,7 +1,7 @@
 /**
  * uWS-MIGRATION SLICE 2 bench — the READ path through the REAL uWS stack on a seeded Engine, with
  * the response cache ON. Confirms end-to-end throughput of the bench-validated send-the-buffer path
- * (no per-request JSON.stringify). Drives a REAL uWS server (the production adapter, createServer)
+ * (no per-request JSON.stringify). Drives a REAL uWS server (the production server, createServer)
  * bound to a free port with autocannon — the same single-process stack the entrypoint serves.
  *
  * Run: node experiments/http-serialization/run-bench-slice3.ts
@@ -9,8 +9,8 @@
 import autocannon from 'autocannon';
 import net from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { seed } from '../../src/http/server.ts';
-import { createServer } from '../../src/http/app.ts';
+import { seed } from '../../src/http/fixtures.ts';
+import { createServer } from '../../src/http/server.ts';
 
 const CONNECTIONS = 100;
 const WARMUP_S = 2;

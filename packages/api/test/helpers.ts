@@ -1,7 +1,7 @@
 import net from 'node:net';
 import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres.store.ts';
-import { createServer } from '../src/http/uws.adapter.ts';
+import { createServer } from '../src/http/server.ts';
 import { loadTypes } from '../src/db/schema/load.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
 import { HookRegistry } from '../src/db/schema/hooks.ts';

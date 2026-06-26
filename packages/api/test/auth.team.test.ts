@@ -6,7 +6,7 @@ import type { Sql } from 'postgres';
 import { runMigrations } from '../src/db/migration.runner.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { PostgresStore } from '../src/db/postgres.store.ts';
-import { createServer } from '../src/http/uws.adapter.ts';
+import { createServer } from '../src/http/server.ts';
 import { freePort } from './helpers.ts';
 import { setAuthSql, closeAuth } from '../src/auth/auth.dialect.ts';
 import { buildAuth } from '../src/auth/auth.ts';

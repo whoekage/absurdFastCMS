@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
-import type { ListenToken } from '../src/http/uws.adapter.ts';
+import type { ListenToken } from '../src/http/server.ts';
 import type { Engine } from '../src/store/engine.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { startTestServerFromSchemas, ARTICLE_SCHEMA } from './helpers.ts';

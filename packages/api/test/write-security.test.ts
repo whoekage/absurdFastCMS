@@ -4,7 +4,7 @@ import type { Sql } from 'postgres';
 import { PostgresStore } from '../src/db/postgres.store.ts';
 import { migrate } from '../src/db/schema/migrate.ts';
 import type { Schema } from '../src/db/schema/model.ts';
-import type { ListenToken } from '../src/http/uws.adapter.ts';
+import type { ListenToken } from '../src/http/server.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { tableExists, startTestServerFromSchemas, schema } from './helpers.ts';
 

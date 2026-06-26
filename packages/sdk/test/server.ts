@@ -3,7 +3,7 @@ import type { Sql } from 'postgres';
 import { createFileDatabase, dropFileDatabase, type FileDatabase } from '../../api/test/db-per-file.ts';
 import { schema as buildSchema, type SchemaSpec } from '../../api/test/helpers.ts';
 import { PostgresStore } from '../../api/src/db/postgres.store.ts';
-import { createServer } from '../../api/src/http/uws.adapter.ts';
+import { createServer } from '../../api/src/http/server.ts';
 import {
   loadType,
   loadAllRelations,

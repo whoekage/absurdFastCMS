@@ -29,7 +29,7 @@ import type { Change } from './schema/diff.ts';
  *     rollback in v1 (single-instance accepted contract).
  */
 
-/** The mutable cell the uWS adapter serves through (see uws.adapter.ts). The swap reassigns its fields. */
+/** The mutable cell the HTTP server serves through (see server.ts). The swap reassigns its fields. */
 export interface LiveCell {
   engine: Engine;
   registry: Registry | undefined;

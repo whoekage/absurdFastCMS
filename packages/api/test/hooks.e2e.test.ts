@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { Sql } from 'postgres';
 import { migrate } from '../src/db/schema/migrate.ts';
 import { PostgresStore } from '../src/db/postgres.store.ts';
-import { createServer } from '../src/http/uws.adapter.ts';
+import { createServer } from '../src/http/server.ts';
 import { HookRegistry, HookError } from '../src/db/schema/hooks.ts';
 import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { freePort, schema } from './helpers.ts';
