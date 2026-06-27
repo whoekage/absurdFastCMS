@@ -33,6 +33,22 @@ export async function runMigrate(config: ContiConfig, opts: { allowDestructive?:
   }
 }
 
+/**
+ * DROP everything in the database — every table, sequence, type, etc. — by dropping and recreating the
+ * `public` schema, leaving an empty database. The dev "clean slate" for the drop & recreate workflow (conti
+ * has no down-migrations): after this, `conti migrate` rebuilds from scratch. Owns + closes its own
+ * connection. DESTRUCTIVE — wipes all data in the configured database.
+ */
+export async function runDrop(config: ContiConfig): Promise<void> {
+  const sql = createSql(config.database.url);
+  try {
+    await sql.unsafe('DROP SCHEMA IF EXISTS public CASCADE');
+    await sql.unsafe('CREATE SCHEMA public');
+  } finally {
+    await sql.end();
+  }
+}
+
 /** Compute the pending change-set + the blocked subset WITHOUT applying (the `migrate lint` command). */
 export async function runMigrateLint(config: ContiConfig): Promise<{ changes: readonly Change[]; blocked: readonly Change[] }> {
   const { schemas } = await loadTypes(modulesDirOf(config));

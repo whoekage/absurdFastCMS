@@ -5,7 +5,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createConti, runMigrate, runMigrateLint, MigrationBlockedError, describeChange, type ContiApp, type ContiConfig, type ServerLifecycle } from '@conti/core';
+import { createConti, runMigrate, runMigrateLint, runDrop, MigrationBlockedError, describeChange, type ContiApp, type ContiConfig, type ServerLifecycle } from '@conti/core';
 
 /**
  * `@conti/cli` — the `conti` binary. It is the process entrypoint (lifted out of @conti/core, which is now
@@ -118,6 +118,20 @@ export async function runMigrateCommand(argv: string[], cwd: string = process.cw
   }
 }
 
+/**
+ * `conti drop` — DROP the whole database (every table + sequence, by resetting the `public` schema) for a
+ * clean slate, then re-run `conti migrate` to rebuild. The dev companion to the drop & recreate workflow
+ * (conti has no down-migrations). DESTRUCTIVE: wipes all data in the `.env` database.
+ */
+export async function runDropCommand(cwd: string = process.cwd()): Promise<void> {
+  loadEnv(cwd);
+  const { config } = await loadProject(cwd);
+  const { host, pathname } = new URL(config.database.url);
+  console.log(`conti drop: wiping all tables + sequences in "${pathname.slice(1)}" @ ${host} …`);
+  await runDrop(config);
+  console.log('conti drop: done — the database is empty. Run `conti migrate` to rebuild.');
+}
+
 // ----- conti init: scaffold a thin project (the two-file contract + the standard dirs) -----
 
 const CONFIG_TEMPLATE = `import { defineConfig, loadConfigFromEnv, adminBundleDir } from '@conti/core';
@@ -218,7 +232,7 @@ function packageJsonTemplate(name: string): string {
       private: true,
       type: 'module',
       engines: { node: '>=24' },
-      scripts: { dev: 'conti dev', start: 'conti start' },
+      scripts: { dev: 'conti dev', start: 'conti start', migrate: 'conti migrate', drop: 'conti drop' },
       dependencies: { '@conti/core': '^0.1.0', '@conti/cli': '^0.1.0' },
     },
     null,
@@ -304,6 +318,9 @@ async function main(argv: string[]): Promise<void> {
     case 'migrate':
       await runMigrateCommand(process.argv);
       break;
+    case 'drop':
+      await runDropCommand();
+      break;
     case 'init': {
       const target = path.resolve(argv[3] ?? '.');
       await initProject(target);
@@ -315,7 +332,7 @@ async function main(argv: string[]): Promise<void> {
       break;
     }
     default:
-      console.error(`conti: unknown command ${JSON.stringify(cmd ?? '')}. Available: start, dev, init, migrate`);
+      console.error(`conti: unknown command ${JSON.stringify(cmd ?? '')}. Available: start, dev, init, migrate, drop`);
       process.exit(1);
   }
 }
