@@ -160,11 +160,18 @@ example.com {
 }
 ```
 
-**Separate admin origin** (e.g. `admin.example.com` + API on `example.com`). The admin's API base can't be
-baked into the prebuilt bundle, so it is discovered at **runtime**: set `CONTI_PUBLIC_URL=https://example.com`
-(a bare origin — validated at boot) and the server injects `window.__CONTI__.apiBase = https://example.com/api`
-into the served `index.html` — no rebuild. (CORS + cross-subdomain auth cookies for this split are not wired
-yet; same-origin is the supported default.)
+**Separate admin origin** (e.g. `admin.example.com` + API on `example.com`). Set two env vars:
+
+- `CONTI_PUBLIC_URL=https://example.com` — the API's own public origin. The admin's API base can't be baked
+  into the prebuilt bundle, so the server injects `window.__CONTI__.apiBase = https://example.com/api` into
+  the served `index.html` at runtime (no rebuild).
+- `CONTI_TRUSTED_ORIGINS=https://admin.example.com` — the origin(s) allowed to call the API with credentials
+  (comma-separated). This switches on the whole credentialed cross-origin bundle: CORS (exact `Allow-Origin`
+  echo + credentials + preflight), a CSRF Origin-check on every write, and `SameSite=None; Secure` session
+  cookies. Each must be a bare https origin (no `*`, no path) — validated at boot.
+
+Both must be `https` (SameSite=None requires Secure). Same-origin (the default) needs neither — the admin
+calls a relative `/api`, cookies stay `SameSite=Lax`, and there is zero CORS surface.
 
 > **Sub-path mounting is not supported.** The admin is served at the origin **root** only — the prebuilt
 > bundle references its assets at an absolute `/assets/…`, so hosting it under a path (`example.com/cms`)

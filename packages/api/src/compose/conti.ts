@@ -5,13 +5,14 @@ import { loadTypes } from '../db/schema/load.ts';
 import { reconcileBoot } from './boot-reconcile.ts';
 import { HookRegistry } from '../db/schema/hooks.ts';
 import { createServer, type ListenToken } from '../http/server.ts';
+import { buildCorsPolicy } from '../http/cors.ts';
 import { CursorCodec } from '../store/cursor.codec.ts';
 import { buildAuth } from '../auth/auth.ts';
 import { setAuthSql } from '../auth/auth.dialect.ts';
 import { SessionCache } from '../auth/session.cache.ts';
 import { RbacRegistry } from '../auth/rbac.registry.ts';
 import { TeamView } from '../auth/team.view.ts';
-import { normalizePublicUrl, type ContiConfig } from './config.ts';
+import { normalizePublicUrl, normalizeTrustedOrigins, type ContiConfig } from './config.ts';
 
 /**
  * The composition root: turn the single-process boot into a LIBRARY entry. `createConti(config)` wires the
@@ -103,10 +104,24 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     const rbac = new RbacRegistry(store.sql);
     // The content-API mounts under '/api' so the admin SPA can own the root; auth aligns at '/api/auth'.
     const API_BASE = '/api';
+    // Cross-origin config (admin on a DIFFERENT origin). `ownOrigin` = the API's own public origin;
+    // `trustedOrigins` = the admin/frontend origins allowed to call us with credentials. Both validated here.
+    // trustedOrigins REQUIRES publicUrl: we must know our own origin to allow same-origin writes through the
+    // CSRF check and to anchor better-auth. Empty trustedOrigins = same-origin only (corsPolicy is null).
+    const ownOrigin = config.server.publicUrl ? normalizePublicUrl(config.server.publicUrl) : undefined;
+    const trustedOrigins = normalizeTrustedOrigins([...(config.cors?.trustedOrigins ?? [])]);
+    if (trustedOrigins.length > 0 && ownOrigin === undefined) {
+      throw new Error(
+        'conti: cors.trustedOrigins requires server.publicUrl (CONTI_PUBLIC_URL) — the API needs to know its own origin to authorize same-origin writes and align auth.',
+      );
+    }
+    const corsPolicy = buildCorsPolicy(trustedOrigins, ownOrigin);
     auth = buildAuth({
       sessionEvictor: sessionCache,
       sql: store.sql,
       basePath: `${API_BASE}/auth`,
+      ...(ownOrigin ? { baseURL: ownOrigin } : {}),
+      trustedOrigins,
       rbacInvalidate: () => rbac.rebuild(),
       teamViewReload: () => teamView.rebuild(),
     });
@@ -117,8 +132,8 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     // inject the absolute API base (validated origin + the API prefix) so the admin reaches the API across
     // origins. normalizePublicUrl throws on a malformed value, failing the boot loud instead of silently
     // serving an admin that calls the wrong API.
-    const adminApiBase = config.server.publicUrl ? `${normalizePublicUrl(config.server.publicUrl)}${API_BASE}` : undefined;
-    const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: hookRegistry, modulesDir, basePath: API_BASE, adminDir: config.adminDir, adminApiBase });
+    const adminApiBase = ownOrigin ? `${ownOrigin}${API_BASE}` : undefined;
+    const server = createServer({ engine, store, registry, auth, sessionCache, rbac, teamView, hooks: hookRegistry, modulesDir, basePath: API_BASE, adminDir: config.adminDir, adminApiBase, cors: corsPolicy });
     close = server.close;
     listenToken = await server.listen(config.server.port);
     const rows = engine.has('article') ? engine.rowCount('article') : 0;

@@ -1,5 +1,6 @@
 import uWS from 'uWebSockets.js';
 import { loadAdminBundle, mountAdmin } from './static.ts';
+import { type CorsPolicy, captureCors, writeCapturedCors, isWriteOriginAllowed, preflightHeaders } from './cors.ts';
 import busboy from 'busboy';
 import type { Engine } from '../store/engine.ts';
 import type { Registry } from '../db/registry.ts';
@@ -108,6 +109,7 @@ function statusLine(status: number): string {
 /** Write a {@link CoreResponse} onto the uWS response (synchronous; offset-safe body view). */
 function writeResponse(res: uWS.HttpResponse, result: CoreResponse): void {
   res.writeStatus(statusLine(result.status));
+  writeCapturedCors(res); // CORS headers (when a cross-origin policy captured them); no-op same-origin
   // A 304 MUST carry no message body (HTTP semantics) — write status + headers (ETag) only.
   if (result.status === 304) {
     if (result.headers) for (const [k, v] of Object.entries(result.headers)) res.writeHeader(k, v);
@@ -211,6 +213,7 @@ function corkSendNoStore(res: uWS.HttpResponse, aborted: () => boolean, status: 
   const body = Buffer.from(JSON.stringify(value), 'utf8');
   res.cork(() => {
     res.writeStatus(statusLine(status));
+    writeCapturedCors(res);
     res.writeHeader('Cache-Control', 'no-store');
     res.writeHeader('Content-Type', JSON_CT);
     res.end(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));
@@ -376,6 +379,12 @@ export interface ServerDeps {
    * the admin then defaults to a relative `/api` and the HTML is served byte-for-byte unchanged.
    */
   adminApiBase?: string | undefined;
+  /**
+   * Cross-origin policy (CORS + CSRF) for credentialed requests from the admin on another origin. `null`
+   * (the default) = same-origin only: every CORS/preflight/CSRF code path is skipped and responses are
+   * byte-identical. Built by {@link createConti} from `cors.trustedOrigins`.
+   */
+  cors?: CorsPolicy | null;
 }
 
 /**
@@ -389,19 +398,52 @@ export interface ServerDeps {
  * WRITE / builder / media routes are gated by the wired RBAC.
  */
 export function createServer(deps: ServerDeps): Server {
-  const { engine, store, registry, publishClock = () => new Date(), auth, sessionCache, rbac, teamView, hooks, modulesDir, basePath = '', adminDir, adminApiBase } = deps;
+  const { engine, store, registry, publishClock = () => new Date(), auth, sessionCache, rbac, teamView, hooks, modulesDir, basePath = '', adminDir, adminApiBase, cors = null } = deps;
+  const corsPolicy = cors;
   const app = uWS.App();
   // Every API route registers under `basePath` (default '' = root). createConti sets '/api' so the admin
   // SPA can own the root. Route handlers reconstruct the core path from getParameter(), so the prefix is
   // transparent to the router; only the `app.any` fallback (which reads getUrl) strips it (below).
   const P = basePath;
   type UwsHandler = (res: uWS.HttpResponse, req: uWS.HttpRequest) => void;
+  // When a CORS policy is active, capture each request's CORS headers SYNCHRONOUSLY here (the Origin is read
+  // before the handler touches `req`) and stash them for the response writers; null policy → identity wrap →
+  // zero overhead, byte-identical. Covers EVERY API route uniformly — no per-handler capture to forget.
+  const corsWrap = corsPolicy
+    ? (h: UwsHandler): UwsHandler => (res, req) => {
+        captureCors(res, req.getHeader('origin'), corsPolicy);
+        h(res, req);
+      }
+    : (h: UwsHandler): UwsHandler => h;
   const route = {
-    get: (p: string, h: UwsHandler) => app.get(P + p, h),
-    post: (p: string, h: UwsHandler) => app.post(P + p, h),
-    put: (p: string, h: UwsHandler) => app.put(P + p, h),
-    del: (p: string, h: UwsHandler) => app.del(P + p, h),
-    any: (p: string, h: UwsHandler) => app.any(P + p, h),
+    get: (p: string, h: UwsHandler) => app.get(P + p, corsWrap(h)),
+    post: (p: string, h: UwsHandler) => app.post(P + p, corsWrap(h)),
+    put: (p: string, h: UwsHandler) => app.put(P + p, corsWrap(h)),
+    del: (p: string, h: UwsHandler) => app.del(P + p, corsWrap(h)),
+    any: (p: string, h: UwsHandler) => app.any(P + p, corsWrap(h)),
+  };
+  // Preflight: answer OPTIONS on every API path with the allow-set (when the Origin is trusted) or a bare
+  // Vary (when not — the browser then blocks). Only registered in cross-origin mode.
+  if (corsPolicy) {
+    app.options(`${P}/*`, (res, req) => {
+      const headers = preflightHeaders(corsPolicy, req.getHeader('origin') || null);
+      res.cork(() => {
+        res.writeStatus('204 No Content');
+        for (const k in headers) res.writeHeader(k, headers[k]!);
+        res.end();
+      });
+    });
+  }
+  // CSRF (cross-origin mode only): a state-changing request must carry an allowlisted Origin. Once cookies
+  // are SameSite=None (required cross-origin), SameSite no longer blocks a forged cross-site write, so this
+  // Origin-check IS the defense. A missing Origin = a non-browser client (no ambient-cookie CSRF vector) →
+  // allowed. Null policy (same-origin, SameSite=Lax) → no check at all. Returns true (+ sends 403) if blocked.
+  const csrfReject = (res: uWS.HttpResponse, headers: Headers, aborted: () => boolean): boolean => {
+    if (corsPolicy && !isWriteOriginAllowed(corsPolicy, headers.get('origin'))) {
+      corkSend(res, aborted, errorResponse(403, 'forbidden'));
+      return true;
+    }
+    return false;
   };
   // S1 (Builder live-reload): the SINGLE mutable cell every schema-reading route closure reads through.
   // A schema edit (Builder route, S4) rebuilds a fresh Engine/Registry off-side and swaps these three
@@ -495,6 +537,7 @@ export function createServer(deps: ServerDeps): Server {
     req.forEach((k, v) => headers.set(k, v));
 
     const run = (body: Buffer | null, aborted: () => boolean): void => {
+      if (csrfReject(res, headers, aborted)) return;
       void (async () => {
         let ctx: AuthContext;
         try {
@@ -536,6 +579,7 @@ export function createServer(deps: ServerDeps): Server {
     req.forEach((k, v) => headers.set(k, v));
 
     const run = (body: Buffer | null, aborted: () => boolean): void => {
+      if (csrfReject(res, headers, aborted)) return;
       void (async () => {
         let ctx: AuthContext;
         try {
@@ -581,6 +625,7 @@ export function createServer(deps: ServerDeps): Server {
     req.forEach((k, v) => headers.set(k, v));
 
     const run = (body: Buffer | null, aborted: () => boolean): void => {
+      if (csrfReject(res, headers, aborted)) return;
       void (async () => {
         let ctx: AuthContext;
         try {
@@ -625,6 +670,7 @@ export function createServer(deps: ServerDeps): Server {
     res.onAborted(() => {
       aborted = true;
     });
+    if (csrfReject(res, headers, () => aborted)) return; // cross-origin CSRF: reject before buffering bytes
 
     const cap = config.uploadMaxBytes;
     const chunks: Buffer[] = [];
@@ -768,7 +814,9 @@ export function createServer(deps: ServerDeps): Server {
   // module can never be named `auth` and shadow these in reverse; reads of OTHER types are
   // byte-untouched. ALWAYS mounted (auth is a required dep). This slice gates NOTHING — it only proxies
   // the provider.
-  const onAuth = (res: uWS.HttpResponse, req: uWS.HttpRequest): void => handleAuthRoute(res, req, auth);
+  // corsPolicy ? writeCapturedCors : a no-op — the auth bridge stays http-agnostic (layering), the CORS
+  // headers captured by corsWrap above are emitted inside the auth response cork only in cross-origin mode.
+  const onAuth = (res: uWS.HttpResponse, req: uWS.HttpRequest): void => handleAuthRoute(res, req, auth, corsPolicy ? writeCapturedCors : undefined);
   route.get('/auth/:p', onAuth);
   route.post('/auth/:p', onAuth);
   route.put('/auth/:p', onAuth);

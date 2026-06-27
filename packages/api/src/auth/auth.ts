@@ -71,6 +71,13 @@ export interface BuildAuthOptions {
    */
   basePath?: string;
   /**
+   * Origins permitted to make CREDENTIALED cross-origin auth requests (the admin on a DIFFERENT origin).
+   * When non-empty, better-auth's CSRF Origin-check accepts them AND session cookies switch to
+   * `SameSite=None; Secure` (required for a cookie to travel cross-site). Empty/absent = same-origin only
+   * (SameSite=Lax, better-auth's default). Mirrors the server's `cors.trustedOrigins`.
+   */
+  trustedOrigins?: readonly string[];
+  /**
    * be-09b — the Postgres handle the FIRST-ADMIN bootstrap runs on (the boot store's `sql`). When present
    * (with {@link rbacInvalidate}), the `user.create.after` hook promotes the FIRST-ever user to
    * `super-admin` under an advisory lock. Absent for the CLI `generate` / read-only servers → the hook is
@@ -138,10 +145,20 @@ async function promoteFirstAdmin(sql: Sql, newUserId: string): Promise<boolean> 
 
 /** Build the better-auth provider, wiring the secret, the dedicated DB dialect, and the evict hook. */
 export function buildAuth(opts: BuildAuthOptions = {}) {
+  // Cross-origin mode (the admin on another origin): trust those origins for better-auth's CSRF Origin-check
+  // and switch session cookies to SameSite=None; Secure so they travel cross-site. Same-origin (the default)
+  // touches neither — cookies stay SameSite=Lax. SameSite=None requires HTTPS (Secure) → cross-origin is prod.
+  const crossOrigin = (opts.trustedOrigins?.length ?? 0) > 0;
   return betterAuth({
     secret: config.authSecret,
     baseURL: opts.baseURL ?? config.publicBaseUrl,
     basePath: opts.basePath ?? '/auth',
+    ...(crossOrigin
+      ? {
+          trustedOrigins: [...(opts.trustedOrigins ?? [])],
+          advanced: { defaultCookieAttributes: { sameSite: 'none' as const, secure: true } },
+        }
+      : {}),
     database: { dialect: authDialect(), type: 'postgres' },
     emailAndPassword: { enabled: true },
     session: { expiresIn: 604800, updateAge: 86400 }, // 7d expiry / 1d refresh; NO cookieCache (see above)

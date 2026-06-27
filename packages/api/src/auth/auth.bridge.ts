@@ -58,14 +58,24 @@ function setCookies(res: Response): string[] {
   return folded === null ? [] : splitCookiesString(folded);
 }
 
-/** Write a WHATWG `Response` onto a uWS response inside a cork (caller guards the abort probe). */
-async function writeFetchResponse(res: uWS.HttpResponse, response: Response, aborted: () => boolean): Promise<void> {
+/**
+ * Write a WHATWG `Response` onto a uWS response inside a cork (caller guards the abort probe). `corkHook`
+ * runs inside the cork right after the status line — the http layer threads its CORS-header writer here so
+ * the auth layer never imports http (layering: auth must not depend on http).
+ */
+async function writeFetchResponse(
+  res: uWS.HttpResponse,
+  response: Response,
+  aborted: () => boolean,
+  corkHook: (res: uWS.HttpResponse) => void,
+): Promise<void> {
   // Read the body BEFORE corking (await is illegal inside the synchronous cork callback).
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (aborted()) return;
   const cookies = setCookies(response);
   res.cork(() => {
     res.writeStatus(`${response.status} ${response.statusText || ''}`.trim());
+    corkHook(res); // http layer's CORS-header writer (no-op same-origin)
     response.headers.forEach((value, key) => {
       // Set-Cookie is emitted separately (split), never via the folded Headers value.
       if (key.toLowerCase() === 'set-cookie') return;
@@ -81,7 +91,12 @@ async function writeFetchResponse(res: uWS.HttpResponse, response: Response, abo
  * `auth.handler`, and writes the Fetch `Response` back (splitting Set-Cookie). Mounted in
  * `createServer` BEFORE the `app.any('/*')` fallthrough.
  */
-export function handleAuthRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, auth: Auth): void {
+export function handleAuthRoute(
+  res: uWS.HttpResponse,
+  req: uWS.HttpRequest,
+  auth: Auth,
+  corkHook: (res: uWS.HttpResponse) => void = () => {},
+): void {
   // SYNCHRONOUS reads off the stack-allocated req (invalid after the first await).
   const method = req.getMethod().toUpperCase();
   const path = req.getUrl();
@@ -99,7 +114,7 @@ export function handleAuthRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, aut
       try {
         const request = toRequest(method, path, query, headers, body);
         const response = await auth.handler(request);
-        if (!aborted) await writeFetchResponse(res, response, () => aborted);
+        if (!aborted) await writeFetchResponse(res, response, () => aborted, corkHook);
       } catch {
         if (!aborted) {
           res.cork(() => {

@@ -144,8 +144,10 @@ export default defineConfig({
 });
 
 // Serving the admin from a DIFFERENT origin than the API (e.g. admin.example.com + API on example.com)?
-// Set CONTI_PUBLIC_URL=https://example.com in the env and the admin's API base is injected at runtime — no
-// rebuild. Same-origin (one process / reverse proxy) needs nothing: the admin calls a relative '/api'.
+// Set CONTI_PUBLIC_URL=https://example.com (the API's runtime-injected base, no rebuild) AND
+// CONTI_TRUSTED_ORIGINS=https://admin.example.com (turns on CORS + a CSRF Origin-check + SameSite=None
+// cookies for those origins). Same-origin (one process / reverse proxy) needs neither — relative '/api',
+// SameSite=Lax, zero CORS. Origins must be bare https origins (validated at boot).
 `;
 
 const BOOTSTRAP_TEMPLATE = `import { defineBootstrap } from '@conti/core';
@@ -247,7 +249,10 @@ function envExampleTemplate(authSecret: string, cursorSecret: string): string {
     `AUTH_SECRET=${authSecret}`,
     `CURSOR_SECRET=${cursorSecret}`,
     'PORT=3000',
-    '# CONTI_PUBLIC_URL=https://example.com  # set ONLY if the admin is served from a different origin than the API',
+    '# Cross-origin admin (admin on a DIFFERENT origin than the API). Set BOTH: the API\'s own public origin,',
+    '# and the admin origin(s) allowed to call it with credentials (comma-separated). Same-origin needs neither.',
+    '# CONTI_PUBLIC_URL=https://example.com',
+    '# CONTI_TRUSTED_ORIGINS=https://admin.example.com',
     '',
   ].join('\n');
 }

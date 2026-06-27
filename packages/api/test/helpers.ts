@@ -242,6 +242,8 @@ export interface StartTestServerOpts {
   basePath?: string;
   /** Serve a prebuilt admin SPA bundle from this dir at the root (admin-serving test). */
   adminDir?: string;
+  /** Cross-origin CORS + CSRF policy (cors.e2e). Default null = same-origin only. */
+  cors?: import('../src/http/cors.ts').CorsPolicy | null;
 }
 
 /** The handle {@link startTestServer} returns: the FULL gated server + an authed + an anon fetch + auth helpers. */
@@ -315,6 +317,7 @@ export async function startTestServer(sql: Sql, schemas: Schema[], opts: StartTe
     modulesDir,
     ...(opts.basePath !== undefined ? { basePath: opts.basePath } : {}),
     ...(opts.adminDir !== undefined ? { adminDir: opts.adminDir } : {}),
+    ...(opts.cors !== undefined ? { cors: opts.cors } : {}),
   };
   const server = createServer(deps);
   const token = await server.listen(port);

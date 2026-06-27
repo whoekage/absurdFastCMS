@@ -54,6 +54,18 @@ export interface ContiConfig {
    * owns (point it at a custom admin build to override, or drop it to go headless).
    */
   readonly adminDir?: string;
+
+  /**
+   * Cross-origin access. By default empty = SAME-ORIGIN ONLY (the admin served at `/` + API at `/api`, one
+   * process / reverse proxy): no CORS headers, cookies stay SameSite=Lax, zero cross-origin attack surface.
+   * Setting `trustedOrigins` switches on the whole credentialed cross-origin bundle at once — CORS (exact
+   * ACAO echo + credentials + preflight), a CSRF Origin-check on writes, and SameSite=None cookies — for the
+   * admin/a trusted frontend on a DIFFERENT origin. Requires `server.publicUrl` (the API's own origin). Each
+   * entry is an exact bare https origin (no `*`, no path); validated at boot.
+   */
+  readonly cors?: {
+    readonly trustedOrigins?: readonly string[];
+  };
 }
 
 /**
@@ -74,27 +86,51 @@ export function defineConfig(config: ContiConfig): ContiConfig {
  * Payload's serverURL footguns (doubled origin #14900, path-in-serverURL #24) and Directus's PUBLIC_URL
  * boot warning.
  */
-export function normalizePublicUrl(value: string): string {
+function assertOrigin(value: string, label: string): string {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new Error(
-      `conti: server.publicUrl (CONTI_PUBLIC_URL) must be an absolute URL like "https://example.com" — got ${JSON.stringify(value)}`,
-    );
+    throw new Error(`conti: ${label} must be an absolute URL like "https://example.com" — got ${JSON.stringify(value)}`);
   }
   const bad: string[] = [];
   if (url.protocol !== 'http:' && url.protocol !== 'https:') bad.push(`protocol must be http or https (got "${url.protocol}")`);
-  if (url.pathname !== '/' && url.pathname !== '') bad.push('it must be a bare ORIGIN with no path (conti does not serve the admin under a sub-path)');
+  if (url.hostname.includes('*')) bad.push('wildcard hosts are not allowed — list exact origins (a subdomain wildcard would inherit any subdomain XSS)');
+  if (url.pathname !== '/' && url.pathname !== '') bad.push('it must be a bare ORIGIN with no path');
   if (url.search) bad.push('it must not contain a query string');
   if (url.hash) bad.push('it must not contain a fragment');
   if (url.username || url.password) bad.push('it must not contain credentials');
   if (bad.length > 0) {
-    throw new Error(
-      `conti: server.publicUrl (CONTI_PUBLIC_URL) = ${JSON.stringify(value)} is invalid — ${bad.join('; ')}. Use a bare origin like "https://example.com".`,
-    );
+    throw new Error(`conti: ${label} = ${JSON.stringify(value)} is invalid — ${bad.join('; ')}. Use a bare origin like "https://example.com".`);
   }
   return url.origin;
+}
+
+/**
+ * Validate `server.publicUrl` (CONTI_PUBLIC_URL) and return its canonical ORIGIN (`https://example.com`,
+ * port preserved only when non-default, no trailing slash). It MUST be an absolute http(s) origin and
+ * nothing more — a bare host (`example.com`) is treated as a RELATIVE path by the browser, and a path
+ * (`…/cms`) implies sub-path mounting, which conti does not support (the prebuilt admin references its
+ * assets at an absolute `/assets/…`). Throws a descriptive error on boot so a misconfigured cross-origin
+ * deploy fails fast and loud instead of silently serving an admin that calls the wrong API. Learned from
+ * Payload's serverURL footguns (doubled origin #14900, path-in-serverURL #24) and Directus's PUBLIC_URL
+ * boot warning.
+ */
+export function normalizePublicUrl(value: string): string {
+  return assertOrigin(value, 'server.publicUrl (CONTI_PUBLIC_URL)');
+}
+
+/**
+ * Validate `cors.trustedOrigins` (CONTI_TRUSTED_ORIGINS) — the allowlist of origins permitted to make
+ * CREDENTIALED cross-origin requests (the admin / a trusted frontend on another origin). Each must be a
+ * bare http(s) origin (same rule as publicUrl); returns the canonical, de-duplicated set. Exact-match only —
+ * NO wildcards, NO `*`, NO `null`, NO paths — pre-empting the CORS-misconfig vuln class (reflect-any,
+ * `example.com.evil.com` suffix matches, sandboxed-iframe `null`). Throws on any bad entry.
+ */
+export function normalizeTrustedOrigins(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  for (const v of values) seen.add(assertOrigin(v, 'cors.trustedOrigins (CONTI_TRUSTED_ORIGINS)'));
+  return [...seen];
 }
 
 /**
@@ -123,5 +159,6 @@ export function loadConfigFromEnv(cliPort?: string): ContiConfig {
     debug: { inspector: config.debugInspector },
     // The project dir is cwd (the CLI loads conti.config.ts from there); the modules/ dir sits beside it.
     modules: { dir: path.join(process.cwd(), 'modules') },
+    cors: { trustedOrigins: config.trustedOrigins },
   };
 }

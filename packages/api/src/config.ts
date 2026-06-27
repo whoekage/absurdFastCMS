@@ -220,6 +220,16 @@ function getServerPublicUrl(): string | undefined {
 }
 
 /**
+ * Origins allowed to make CREDENTIALED cross-origin requests (CONTI_TRUSTED_ORIGINS) — the admin / a trusted
+ * frontend on a DIFFERENT origin than the API. Comma- or whitespace-separated. EMPTY by default = same-origin
+ * only (no CORS, cookies stay SameSite=Lax). Validated + canonicalized by `normalizeTrustedOrigins` at boot.
+ */
+function getTrustedOrigins(): string[] {
+  const raw = process.env.CONTI_TRUSTED_ORIGINS?.trim();
+  return raw ? raw.split(/[\s,]+/).filter((o) => o.length > 0) : [];
+}
+
+/**
  * be-04 MEDIA — the max upload size in bytes (UPLOAD_MAX_BYTES). Separate from the 1 MiB JSON-body cap;
  * defaults to 25 MiB. The multipart parser enforces it natively and rejects an oversized file with 413.
  */
@@ -343,6 +353,10 @@ export const config = {
 
   get publicUrl(): string | undefined {
     return getServerPublicUrl();
+  },
+
+  get trustedOrigins(): string[] {
+    return getTrustedOrigins();
   },
 
   get uploadMaxBytes(): number {
