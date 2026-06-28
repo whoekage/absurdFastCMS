@@ -17,14 +17,54 @@ const ACCENT = '#4f5bd5';
 const ACCENT2 = '#10b5a3';
 const GLYPH = `linear-gradient(145deg, ${ACCENT}, ${ACCENT2})`;
 const CARD_SHADOW = '0 22px 60px -16px rgba(22,18,32,0.22), 0 2px 6px rgba(0,0,0,0.04)';
+const AUTH_FONT = "'Space Grotesk', system-ui, sans-serif";
 
 type PwnedState = { status: 'idle' | 'checking' | 'safe' | 'breached' | 'error'; count: number };
+
+/**
+ * Resolve `true` only once the auth screen's web fonts have actually loaded — so the screen paints ONCE,
+ * fully styled, instead of flashing the system fallback and swapping to Space Grotesk on every refresh.
+ * Falls open after 1.5s so a slow/blocked font CDN can never strand the sign-in screen on the splash.
+ */
+function useAuthFontsReady(): boolean {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let done = false;
+    const finish = (): void => {
+      if (!done) {
+        done = true;
+        setReady(true);
+      }
+    };
+    const faces = ['400 1rem "Space Grotesk"', '600 1rem "Space Grotesk"', '700 1rem "Space Grotesk"', '500 1rem "JetBrains Mono"'];
+    if (typeof document !== 'undefined' && 'fonts' in document) {
+      Promise.all(faces.map((f) => document.fonts.load(f)))
+        .then(finish)
+        .catch(finish);
+    } else {
+      finish();
+    }
+    const t = setTimeout(finish, 1500);
+    return () => clearTimeout(t);
+  }, []);
+  return ready;
+}
+
+/** A neutral, font-independent splash shown while the data + fonts settle — no text, no flippable content. */
+function AuthSplash() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-[#f1f0ec]">
+      <Loader2 className="h-6 w-6 animate-spin" style={{ color: `${ACCENT}99` }} />
+    </div>
+  );
+}
 
 function SignInPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const session = useSession();
   const needsSetup = useNeedsSetup();
+  const fontsReady = useAuthFontsReady();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -64,6 +104,9 @@ function SignInPage() {
     };
   }, [password, firstAdmin]);
 
+  // Paint the screen ONCE: hold on the neutral splash until the fonts + the setup/session queries settle,
+  // so the user never sees the sign-in→owner content flip or the font swap on refresh.
+  if (!fontsReady || session.isLoading || needsSetup.isLoading) return <AuthSplash />;
   if (session.data) return <Navigate to="/" />;
 
   const breached = firstAdmin && pwned.status === 'breached';
@@ -210,7 +253,7 @@ function SignInPage() {
   );
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#f1f0ec] p-6" style={{ fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
+    <div className="flex min-h-screen items-center justify-center bg-[#f1f0ec] p-6" style={{ fontFamily: AUTH_FONT }}>
       <div
         className="flex w-full max-w-[1000px] overflow-hidden rounded-[18px] border border-black/[0.05] bg-white"
         style={{ boxShadow: CARD_SHADOW }}

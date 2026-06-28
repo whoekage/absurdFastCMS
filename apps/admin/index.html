@@ -26,6 +26,11 @@
               window.matchMedia &&
               window.matchMedia('(prefers-color-scheme: dark)').matches);
           document.documentElement.classList.toggle('dark', dark);
+          // The auth screens are always light (#f1f0ec) and render outside the themed shell — paint that
+          // background BEFORE React so a refresh on /sign-in never flashes white first.
+          if (/^\/(sign-in|auth-gallery)/.test(location.pathname)) {
+            document.documentElement.style.backgroundColor = '#f1f0ec';
+          }
         } catch (e) {
           /* localStorage/matchMedia unavailable — fall back to the default light theme. */
         }
