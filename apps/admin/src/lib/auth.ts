@@ -33,6 +33,37 @@ export class RateLimitError extends Error {
   }
 }
 
+// The rate limit is enforced server-side per IP, so a refresh during the cooldown must STILL show the lockout
+// (not the form — submitting again, even with the right password, just 429s). Persist the absolute unlock time
+// so the sign-in screen can restore the countdown across reloads. Key: epoch-ms when sign-in reopens.
+const LOCKOUT_KEY = 'conti-auth-lockout';
+
+/** The stored unlock time if a cooldown is still in the future, else null (also prunes a stale entry). */
+export function readLockout(): number | null {
+  try {
+    const v = Number(localStorage.getItem(LOCKOUT_KEY));
+    if (Number.isFinite(v) && v > Date.now()) return v;
+    localStorage.removeItem(LOCKOUT_KEY);
+  } catch {
+    /* localStorage unavailable */
+  }
+  return null;
+}
+export function writeLockout(until: number): void {
+  try {
+    localStorage.setItem(LOCKOUT_KEY, String(until));
+  } catch {
+    /* localStorage unavailable */
+  }
+}
+export function clearLockout(): void {
+  try {
+    localStorage.removeItem(LOCKOUT_KEY);
+  } catch {
+    /* localStorage unavailable */
+  }
+}
+
 async function postJson(path: string, body: unknown): Promise<Response> {
   return fetch(`${base}${path}`, {
     method: 'POST',

@@ -3,7 +3,7 @@ import { createFileRoute, Navigate, useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Loader2, ShieldCheck, ShieldAlert, ArrowRight, Mail, Lock, AlertCircle, Eye, Check, Users, Shield } from 'lucide-react';
 import { useSession, useNeedsSetup } from '@/lib/session';
-import { signIn, signUpFirstAdmin, AuthError, RateLimitError, SESSION_KEY, NEEDS_SETUP_KEY } from '@/lib/auth';
+import { signIn, signUpFirstAdmin, AuthError, RateLimitError, readLockout, writeLockout, clearLockout, SESSION_KEY, NEEDS_SETUP_KEY } from '@/lib/auth';
 import { pwnedBreachCount, pwnedVerdict } from '@/lib/pwned';
 import { cn } from '@/lib/utils';
 
@@ -114,7 +114,7 @@ function SignInPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pwned, setPwned] = useState<PwnedState>({ status: 'idle', count: 0 });
-  const [lockedUntil, setLockedUntil] = useState<number | null>(null);
+  const [lockedUntil, setLockedUntil] = useState<number | null>(() => readLockout());
 
   const firstAdmin = needsSetup.data === true;
 
@@ -151,7 +151,16 @@ function SignInPage() {
   if (!fontsReady || session.isLoading || needsSetup.isLoading) return <AuthSplash />;
   if (session.data) return <Navigate to="/" />;
   // Rate-limited (429): show the cooldown instead of the form until it elapses, then return to sign-in.
-  if (lockedUntil !== null) return <TooManyAttempts until={lockedUntil} onExpire={() => setLockedUntil(null)} />;
+  if (lockedUntil !== null)
+    return (
+      <TooManyAttempts
+        until={lockedUntil}
+        onExpire={() => {
+          clearLockout();
+          setLockedUntil(null);
+        }}
+      />
+    );
 
   const breached = firstAdmin && pwned.status === 'breached';
   const str = strength(password);
@@ -174,7 +183,9 @@ function SignInPage() {
       await navigate({ to: '/' });
     } catch (err) {
       if (err instanceof RateLimitError) {
-        setLockedUntil(Date.now() + err.retryAfterSeconds * 1000);
+        const until = Date.now() + err.retryAfterSeconds * 1000;
+        writeLockout(until); // persist so a refresh during the cooldown still shows the lockout, not the form
+        setLockedUntil(until);
       } else {
         setError(err instanceof AuthError ? err.message : 'Something went wrong. Please try again.');
       }
