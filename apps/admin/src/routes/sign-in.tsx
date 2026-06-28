@@ -1,9 +1,7 @@
 import { useState, useEffect, type FormEvent, type ReactNode } from 'react';
 import { createFileRoute, Navigate, useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { Loader2, ShieldCheck, ShieldAlert, ArrowRight, Mail, Lock, AlertCircle, Eye, EyeOff, Users } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
+import { Loader2, ShieldCheck, ShieldAlert, ArrowRight, Mail, Lock, AlertCircle, Eye, Check, Users, Shield } from 'lucide-react';
 import { useSession, useNeedsSetup } from '@/lib/session';
 import { signIn, signUpFirstAdmin, AuthError, SESSION_KEY, NEEDS_SETUP_KEY } from '@/lib/auth';
 import { pwnedCount } from '@/lib/pwned';
@@ -13,15 +11,15 @@ export const Route = createFileRoute('/sign-in')({
   component: SignInPage,
 });
 
+// Pixel-for-pixel with the Lua Auth Flow design (variant A). The screen is always LIGHT regardless of the
+// app theme — it renders outside the shell — so colors are the design's exact values, not theme tokens.
+const ACCENT = '#4f5bd5';
+const ACCENT2 = '#10b5a3';
+const GLYPH = `linear-gradient(145deg, ${ACCENT}, ${ACCENT2})`;
+const CARD_SHADOW = '0 22px 60px -16px rgba(22,18,32,0.22), 0 2px 6px rgba(0,0,0,0.04)';
+
 type PwnedState = { status: 'idle' | 'checking' | 'safe' | 'breached' | 'error'; count: number };
 
-const GLYPH_GRADIENT = 'linear-gradient(145deg, hsl(var(--primary)), #10b5a3)';
-
-/**
- * Standalone auth screen (rendered outside the app shell by __root) in the Lua split layout: a form column
- * on the left, a brand/setup panel on the right. Two modes driven by /_setup — create-the-owner (first run,
- * with a live HIBP breach check on the password) and sign-in. Errors are GENERIC (anti-enumeration).
- */
 function SignInPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -38,7 +36,6 @@ function SignInPage() {
 
   const firstAdmin = needsSetup.data === true;
 
-  // Live, debounced breach check on the new owner password (advisory — only gates setup, never sign-in).
   useEffect(() => {
     if (!firstAdmin || password.length < 8) {
       setPwned({ status: 'idle', count: 0 });
@@ -60,6 +57,7 @@ function SignInPage() {
   if (session.data) return <Navigate to="/" />;
 
   const breached = firstAdmin && pwned.status === 'breached';
+  const str = strength(password);
 
   async function onSubmit(e: FormEvent): Promise<void> {
     e.preventDefault();
@@ -84,225 +82,273 @@ function SignInPage() {
     }
   }
 
-  return (
-    <div className="flex min-h-screen bg-background">
-      {/* ── Form column ───────────────────────────────────────────────────────── */}
-      <div className="flex flex-1 items-center justify-center px-6 py-12">
-        <div className="w-full max-w-[380px]">
-          <div className="mb-6 flex items-center gap-2.5">
-            <Glyph />
-            <span className="font-display text-[15px] font-bold tracking-tight">conti</span>
-            <span className="rounded-[5px] border border-border px-1.5 py-px font-mono text-[10px] text-muted-foreground">
-              {firstAdmin ? 'first run' : 'admin'}
-            </span>
-          </div>
-
-          <h1 className="font-display text-[27px] font-bold leading-tight tracking-[-0.025em] text-foreground">
-            {firstAdmin ? 'Create your owner account' : 'Sign in'}
-          </h1>
-          <p className="mt-2 max-w-[360px] text-[13.5px] leading-relaxed text-muted-foreground">
-            {firstAdmin ? (
-              <>
-                You're the first one here. This account becomes the workspace{' '}
-                <strong className="font-semibold text-foreground/80">owner</strong> — it controls every role and invite after it.
-              </>
-            ) : (
-              'Welcome back.'
-            )}
-          </p>
-
-          {error && (
-            <div className="mt-5 flex items-center gap-2.5 rounded-[10px] border border-destructive/25 bg-destructive/[0.08] px-3 py-2.5">
-              <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
-              <span className="text-[12.5px] font-medium text-destructive">{error}</span>
-            </div>
-          )}
-
-          <form onSubmit={onSubmit} className="mt-6 space-y-4" noValidate>
-            {firstAdmin && (
-              <Field label="Name" htmlFor="name">
-                <input
-                  id="name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  autoComplete="name"
-                  placeholder="Your name"
-                  className={inputCls}
-                />
-              </Field>
-            )}
-            <Field label="Email" htmlFor="email">
-              <div className="relative">
-                <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/70" />
-                <input
-                  id="email"
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  autoComplete="username"
-                  placeholder="you@company.com"
-                  className={cn(inputCls, 'pl-10')}
-                />
-              </div>
-            </Field>
-            <Field label="Password" htmlFor="password">
-              <div className="relative">
-                <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/70" />
-                <input
-                  id="password"
-                  type={show ? 'text' : 'password'}
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoComplete={firstAdmin ? 'new-password' : 'current-password'}
-                  placeholder="••••••••"
-                  className={cn(inputCls, 'pl-10 pr-10')}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShow((s) => !s)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/70 hover:text-foreground"
-                  aria-label={show ? 'Hide password' : 'Show password'}
-                >
-                  {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-              {firstAdmin && pwned.status !== 'idle' && <BreachHint state={pwned} />}
-            </Field>
-
-            <Button type="submit" className="!mt-6 w-full gap-2" disabled={busy || breached}>
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {firstAdmin ? 'Create owner account' : 'Sign in'}
-              {!busy && <ArrowRight className="h-4 w-4" />}
-            </Button>
-          </form>
-
-          <p className="mt-4 flex items-center gap-1.5 text-[11.5px] text-muted-foreground/80">
-            <ShieldCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-            {firstAdmin ? 'Created locally on your conti instance — no data leaves the server.' : 'Signing in to your conti instance.'}
-          </p>
-        </div>
+  const form = (
+    <div className="flex flex-1 flex-col justify-center px-[50px] py-[42px]">
+      {/* brand row */}
+      <div className="mb-6 flex items-center gap-2.5">
+        <Glyph size={32} />
+        <span className="text-[15px] font-bold tracking-[-0.01em] text-[#18171a]">conti</span>
+        <span className="rounded-[5px] border border-black/[0.08] px-1.5 py-px font-mono text-[10.5px] text-[#a0a0ac]">
+          {firstAdmin ? 'first run' : 'admin'}
+        </span>
       </div>
 
-      {/* ── Brand / setup panel (desktop only) ────────────────────────────────── */}
-      {firstAdmin ? <OwnerSetupPanel /> : <SignInBrandPanel />}
+      <h1 className="text-[27px] font-bold leading-[1.1] tracking-[-0.025em] text-[#16141c]">
+        {firstAdmin ? 'Create your owner account' : 'Sign in'}
+      </h1>
+      <p className="mt-2 max-w-[400px] text-[13.5px] leading-[1.55] text-[#6a6a76]">
+        {firstAdmin ? (
+          <>
+            You're the first one here. This account becomes the workspace{' '}
+            <strong className="font-semibold text-[#3a3a44]">owner</strong> — it controls every role and invite after it.
+          </>
+        ) : (
+          'Welcome back.'
+        )}
+      </p>
+
+      {error && (
+        <div
+          className="mt-[18px] flex items-center gap-2.5 rounded-[10px] px-[13px] py-2.5"
+          style={{ background: 'rgba(192,86,31,0.08)', border: '1px solid rgba(192,86,31,0.22)' }}
+        >
+          <AlertCircle className="h-4 w-4 shrink-0" style={{ color: '#c0561f' }} />
+          <span className="text-[12.5px] font-medium" style={{ color: '#a8481f' }}>
+            {error}
+          </span>
+        </div>
+      )}
+
+      <form onSubmit={onSubmit} className="mt-7 flex flex-col gap-[17px]" noValidate>
+        {firstAdmin && (
+          <Field label="Name" htmlFor="name">
+            <input id="name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" placeholder="Your name" className={inputCls()} />
+          </Field>
+        )}
+        <Field label="Email" htmlFor="email">
+          <div className="relative">
+            <Mail className="pointer-events-none absolute left-[13px] top-1/2 h-4 w-4 -translate-y-1/2 text-[#a8a8b2]" />
+            <input
+              id="email"
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="username"
+              placeholder="you@company.com"
+              className={inputCls('pl-[38px]')}
+            />
+          </div>
+        </Field>
+        <Field
+          label="Password"
+          htmlFor="password"
+          aside={
+            <button type="button" onClick={() => setShow((s) => !s)} className="flex items-center gap-1.5 text-[11.5px] font-semibold text-[#9a9aa6] hover:text-[#5a5a66]">
+              <Eye className="h-3.5 w-3.5" />
+              {show ? 'Hide' : 'Show'}
+            </button>
+          }
+        >
+          <input
+            id="password"
+            type={show ? 'text' : 'password'}
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete={firstAdmin ? 'new-password' : 'current-password'}
+            placeholder="••••••••"
+            className={inputCls()}
+          />
+          {firstAdmin && password.length > 0 && (
+            <>
+              <div className="mt-[9px] flex gap-[5px]">
+                {[0, 1, 2, 3].map((i) => (
+                  <span key={i} className="h-1 flex-1 rounded-[3px]" style={{ background: i < str.score ? str.color : 'rgba(0,0,0,0.09)' }} />
+                ))}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
+                {str.label && (
+                  <span className="flex items-center gap-1.5 font-semibold" style={{ color: str.color }}>
+                    {str.score >= 4 && <Check className="h-3 w-3" strokeWidth={2.6} />}
+                    {str.label}
+                  </span>
+                )}
+                {pwned.status !== 'idle' && <span className="h-[11px] w-px bg-black/[0.12]" />}
+                <BreachHint state={pwned} />
+              </div>
+            </>
+          )}
+        </Field>
+
+        <button
+          type="submit"
+          disabled={busy || breached}
+          className="mt-[9px] flex w-full items-center justify-center gap-2 rounded-[11px] py-[13px] text-[14.5px] font-semibold text-white transition hover:brightness-105 disabled:opacity-60"
+          style={{ background: ACCENT, boxShadow: '0 8px 20px rgba(79,91,213,0.3)' }}
+        >
+          {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+          {firstAdmin ? 'Create owner account' : 'Sign in'}
+          {!busy && <ArrowRight className="h-4 w-4" strokeWidth={2.4} />}
+        </button>
+      </form>
+
+      <p className="mt-4 text-[11.5px] leading-[1.5] text-[#a2a2ae]">
+        {firstAdmin ? 'This account is created locally on your conti instance. No data leaves the server.' : 'Signing in to your conti instance.'}
+      </p>
+    </div>
+  );
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-[#f1f0ec] p-6">
+      <div
+        className="flex w-full max-w-[1000px] overflow-hidden rounded-[18px] border border-black/[0.05] bg-white"
+        style={{ boxShadow: CARD_SHADOW }}
+      >
+        {form}
+        {firstAdmin ? <OwnerPanel /> : <SignInPanel />}
+      </div>
     </div>
   );
 }
 
-const inputCls =
-  'h-11 w-full rounded-[10px] border border-input bg-background px-3.5 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus-visible:border-primary focus-visible:ring-[3px] focus-visible:ring-primary/15';
+function inputCls(extra?: string): string {
+  return cn(
+    'h-[42px] w-full rounded-[10px] border border-black/[0.12] bg-white px-[13px] text-[14px] text-[#18171a] outline-none transition placeholder:text-[#a8a8b2]',
+    'focus:border-[#4f5bd5] focus:ring-[3px] focus:ring-[#4f5bd5]/[0.15]',
+    extra,
+  );
+}
 
-function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }) {
+function Field({ label, htmlFor, aside, children }: { label: string; htmlFor: string; aside?: ReactNode; children: ReactNode }) {
   return (
-    <div className="space-y-1.5">
-      <Label htmlFor={htmlFor} className="text-[12.5px] font-semibold text-muted-foreground">
-        {label}
-      </Label>
+    <div>
+      <div className="mb-[7px] flex items-center justify-between">
+        <label htmlFor={htmlFor} className="text-[12.5px] font-semibold text-[#5a5a66]">
+          {label}
+        </label>
+        {aside}
+      </div>
       {children}
     </div>
   );
 }
 
-/** The brand glyph — a gradient square with an inset rotated diamond (matches the Lua mark). */
-function Glyph({ size = 32 }: { size?: number }) {
-  const inner = Math.round(size * 0.34);
+/** The Lua brand glyph — gradient square with an inset white diamond. */
+function Glyph({ size }: { size: number }) {
+  const inner = Math.round(size * 0.345);
   return (
     <div
-      className="relative flex shrink-0 items-center justify-center rounded-[28%]"
-      style={{ width: size, height: size, background: GLYPH_GRADIENT, boxShadow: '0 4px 14px hsl(var(--primary) / 0.3)' }}
+      className="relative flex shrink-0 items-center justify-center"
+      style={{ width: size, height: size, borderRadius: size * 0.28, background: GLYPH, boxShadow: `0 4px 12px ${ACCENT}47` }}
     >
       <div style={{ width: inner, height: inner, background: '#fff', borderRadius: 3, transform: 'rotate(45deg)' }} />
     </div>
   );
 }
 
-/** Dark, calm setup panel for the first-run owner screen — the three TRUE security marks. */
-function OwnerSetupPanel() {
+/** Light setup panel (owner first-run) — the three TRUE security marks. */
+function OwnerPanel() {
   return (
-    <div className="relative hidden w-[42%] max-w-[560px] shrink-0 flex-col justify-between overflow-hidden bg-[#15131b] p-12 lg:flex">
+    <div className="relative hidden w-[392px] shrink-0 flex-col justify-between overflow-hidden px-[38px] py-[44px] lg:flex" style={{ background: '#efeee7' }}>
       <div
         aria-hidden
-        className="pointer-events-none absolute -right-[18%] -top-[20%] h-[55%] w-[72%] rounded-full blur-[70px]"
-        style={{ background: 'radial-gradient(circle, hsl(var(--primary) / 0.6), transparent 64%)', opacity: 0.6 }}
+        className="pointer-events-none absolute -right-[20%] -top-[30%] h-[55%] w-[70%] rounded-full"
+        style={{ background: `radial-gradient(circle, ${ACCENT}38, transparent 66%)`, filter: 'blur(64px)', mixBlendMode: 'multiply' }}
       />
-      <div className="relative z-10 flex items-center gap-3">
+      <div className="relative z-10 flex items-center gap-[11px]">
         <Glyph size={40} />
-        <div className="leading-tight">
-          <div className="font-display text-[17px] font-bold tracking-tight text-white">conti</div>
-          <div className="font-mono text-[10.5px] text-white/50">first run · setup</div>
+        <div className="leading-[1.15]">
+          <div className="text-[17px] font-bold tracking-[-0.01em] text-[#1a1812]">conti</div>
+          <div className="font-mono text-[10.5px] text-[#9a9588]">first run · setup</div>
         </div>
       </div>
 
       <div className="relative z-10">
-        <div className="mb-5 flex flex-wrap gap-2">
-          <Chip icon={<ShieldCheck className="h-3 w-3 text-emerald-400" />}>Checked against Have I Been Pwned</Chip>
-          <Chip icon={<Lock className="h-3 w-3 text-[#10b5a3]" />}>httpOnly, revocable sessions</Chip>
-          <Chip icon={<Users className="h-3 w-3 text-white/60" />}>Role-based access</Chip>
+        <div className="mb-5 flex flex-wrap gap-[7px]">
+          <PanelChip icon={<Shield className="h-3 w-3" style={{ color: '#15a86b' }} />}>HIBP breach check</PanelChip>
+          <PanelChip icon={<Lock className="h-3 w-3" style={{ color: ACCENT }} />}>httpOnly sessions</PanelChip>
+          <PanelChip icon={<Users className="h-3 w-3" style={{ color: '#8a8576' }} />}>Role-based access</PanelChip>
         </div>
-        <p className="m-0 text-[18px] font-medium leading-snug tracking-[-0.01em] text-white/90">
-          You're setting up <strong className="font-bold text-white">conti</strong> — this first account owns the workspace.
+        <p className="text-[18px] font-medium leading-[1.45] tracking-[-0.01em] text-[#2a281f]">
+          You're setting up <strong className="font-bold">conti</strong> — this first account owns the workspace.
         </p>
       </div>
 
-      <div className="relative z-10 font-mono text-[11px] tracking-wide text-white/40">self-hosted · open source</div>
+      <div className="relative z-10 font-mono text-[11px] tracking-[0.03em] text-[#9a9588]">self-hosted · open source</div>
     </div>
   );
 }
 
-/** Minimal light brand panel for the returning sign-in screen. */
-function SignInBrandPanel() {
+/** Minimal light brand panel (returning sign-in). */
+function SignInPanel() {
   return (
-    <div className="relative hidden w-[42%] max-w-[560px] shrink-0 items-center justify-center overflow-hidden bg-[#efeee7] p-12 dark:bg-muted lg:flex">
+    <div className="relative hidden w-[360px] shrink-0 items-center justify-center overflow-hidden p-10 lg:flex" style={{ background: '#efeee7' }}>
       <div
         aria-hidden
-        className="pointer-events-none absolute -right-[18%] -top-[24%] h-[50%] w-[70%] rounded-full blur-[60px]"
-        style={{ background: 'radial-gradient(circle, hsl(var(--primary) / 0.2), transparent 66%)' }}
+        className="pointer-events-none absolute -right-[18%] -top-[24%] h-[50%] w-[70%] rounded-full"
+        style={{ background: `radial-gradient(circle, ${ACCENT}33, transparent 66%)`, filter: 'blur(60px)', mixBlendMode: 'multiply' }}
       />
       <div className="relative z-10 text-center">
-        <div className="mx-auto mb-4">
+        <div className="mx-auto mb-4 w-fit">
           <Glyph size={52} />
         </div>
-        <div className="font-display text-[22px] font-bold tracking-[-0.02em] text-[#1a1812] dark:text-foreground">conti</div>
-        <div className="mt-1.5 font-mono text-[11px] text-muted-foreground">files-first headless CMS</div>
+        <div className="text-[22px] font-bold tracking-[-0.02em] text-[#1a1812]">conti</div>
+        <div className="mt-1.5 font-mono text-[11px] text-[#9a9588]">self-hosted CMS</div>
       </div>
     </div>
   );
 }
 
-function Chip({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+function PanelChip({ icon, children }: { icon: ReactNode; children: ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.07] px-2.5 py-1.5 text-[11.5px] font-semibold text-white/75">
+    <span
+      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-[5px] text-[11.5px] font-semibold text-[#5e5a4e]"
+      style={{ background: 'rgba(255,255,255,0.7)', border: '1px solid rgba(0,0,0,0.07)' }}
+    >
       {icon}
       {children}
     </span>
   );
 }
 
-/** The live HIBP indicator under the owner password — a real, free breach check (k-anonymity). */
+/** Live HIBP indicator (real, free, k-anonymity). Renders inline next to the strength label. */
 function BreachHint({ state }: { state: PwnedState }) {
+  if (state.status === 'idle') return null;
   if (state.status === 'checking') {
     return (
-      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Loader2 className="h-3 w-3 animate-spin" /> Checking against known breaches…
-      </p>
+      <span className="flex items-center gap-1.5 text-[#9a9aa6]">
+        <Loader2 className="h-3 w-3 animate-spin" /> Checking…
+      </span>
     );
   }
   if (state.status === 'safe') {
     return (
-      <p className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-        <ShieldCheck className="h-3.5 w-3.5" /> Not found in any known breach
-        <span className="font-mono text-[10px] text-muted-foreground/70">HIBP ✓</span>
-      </p>
+      <span className="flex items-center gap-1.5" style={{ color: '#6a8a76' }}>
+        <ShieldCheck className="h-3 w-3" style={{ color: '#15a86b' }} /> Not found in any known breach
+        <span className="font-mono text-[10px] text-[#b0b0bc]">HIBP ✓</span>
+      </span>
     );
   }
   if (state.status === 'breached') {
     return (
-      <p className="flex items-center gap-1.5 text-xs font-medium text-destructive">
-        <ShieldAlert className="h-3.5 w-3.5" /> Found in {state.count.toLocaleString()} known breaches — choose another
-      </p>
+      <span className="flex items-center gap-1.5 font-medium" style={{ color: '#c0561f' }}>
+        <ShieldAlert className="h-3 w-3" /> Found in {state.count.toLocaleString()} breaches
+      </span>
     );
   }
-  return <p className="text-xs text-muted-foreground">Couldn’t reach the breach service — choose your password carefully.</p>;
+  return <span className="text-[#9a9aa6]">Breach service unreachable</span>;
+}
+
+/** A small password-strength heuristic for the meter (length + character variety). */
+function strength(pw: string): { score: number; label: string; color: string } {
+  if (!pw) return { score: 0, label: '', color: '#e0683b' };
+  let s = 0;
+  if (pw.length >= 8) s++;
+  if (pw.length >= 12) s++;
+  if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) s++;
+  if (/\d/.test(pw) && /[^a-zA-Z0-9]/.test(pw)) s++;
+  const label = ['Too short', 'Weak', 'Fair', 'Good', 'Strong'][s] ?? 'Strong';
+  const color = s >= 4 ? '#15a86b' : s === 3 ? '#7ba83b' : s === 2 ? '#d98b2b' : '#e0683b';
+  return { score: s, label, color };
 }

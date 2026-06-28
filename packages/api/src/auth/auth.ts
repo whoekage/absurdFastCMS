@@ -1,8 +1,10 @@
 import { betterAuth } from 'better-auth';
+import { APIError, createAuthMiddleware } from 'better-auth/api';
 import { apiKey } from '@better-auth/api-key';
 import { admin } from 'better-auth/plugins';
 import { createAccessControl } from 'better-auth/plugins/access';
 import { defaultStatements, adminAc } from 'better-auth/plugins/admin/access';
+import { pwnedBreachCount, pwnedVerdict } from './pwned-passwords.ts';
 
 /**
  * be-09f — the admin plugin REQUIRES every `adminRoles` entry to exist in its `roles` access-control map. We
