@@ -139,7 +139,7 @@ export function Sidebar() {
   );
 }
 
-/** The signed-in user + a sign-out button — the real session (name/email), no longer hardcoded. */
+/** The signed-in user + the Lua sign-out button (design: tinted #c0561f, full-width) — real session data. */
 function UserFooter() {
   const session = useSession();
   const signOut = useSignOut();
@@ -147,25 +147,32 @@ function UserFooter() {
   const label = user?.name || user?.email || 'Admin';
   const initial = (user?.name || user?.email || 'A').trim().charAt(0).toUpperCase();
   return (
-    <div className="flex items-center gap-2.5 border-t px-4 py-3">
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 font-display text-sm font-semibold text-primary">
-        {initial}
-      </span>
-      <div className="min-w-0 flex-1 leading-tight">
-        <p className="truncate text-sm font-medium">{label}</p>
-        {user?.email && <p className="truncate text-[11px] text-muted-foreground">{user.email}</p>}
+    <div className="space-y-2 border-t px-3 py-3">
+      <div className="flex items-center gap-2.5 px-1">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 font-display text-sm font-semibold text-primary">
+          {initial}
+        </span>
+        <div className="min-w-0 flex-1 leading-tight">
+          <p className="truncate text-[13px] font-semibold text-foreground">{label}</p>
+          <p className="truncate text-[11px] text-muted-foreground">{roleLabel(user?.role) ?? user?.email ?? ''}</p>
+        </div>
       </div>
       <button
         type="button"
         onClick={() => void signOut()}
-        title="Sign out"
-        aria-label="Sign out"
-        className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="flex w-full items-center gap-2.5 rounded-[9px] bg-[#c0561f]/[0.08] px-2.5 py-2.5 text-[13px] font-semibold text-[#c0561f] transition-colors hover:bg-[#c0561f]/[0.14] dark:bg-orange-400/10 dark:text-orange-400 dark:hover:bg-orange-400/20"
       >
         <LogOut className="h-4 w-4" />
+        Sign out
       </button>
     </div>
   );
+}
+
+/** Human-readable role for the sidebar (the super-admin reads as the workspace Owner, matching the design). */
+function roleLabel(role?: string | null): string | undefined {
+  if (!role) return undefined;
+  return role === 'super-admin' ? 'Owner · Super Admin' : role.charAt(0).toUpperCase() + role.slice(1);
 }
 
 /** A right-aligned per-type count: a subtle skeleton until loaded, a dash when the count errors. */
