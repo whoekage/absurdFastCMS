@@ -244,8 +244,9 @@ function packageJsonTemplate(name: string): string {
 
 function envExampleTemplate(authSecret: string, cursorSecret: string): string {
   return [
-    '# Copy to .env and set DATABASE_URL. Dev reads .env; tests read .env.test.',
-    'DATABASE_URL=postgres://conti:conti@localhost:5432/conti_dev',
+    '# Dev reads .env; tests read .env.test. DATABASE_URL below is a convenience default — point it at your',
+    '# own Postgres before going further (it assumes a conti/conti @ :5673 / conti_dev dev database).',
+    'DATABASE_URL=postgres://conti:conti@localhost:5673/conti_dev',
     `AUTH_SECRET=${authSecret}`,
     `CURSOR_SECRET=${cursorSecret}`,
     'PORT=3000',
@@ -283,10 +284,11 @@ export async function initProject(dir: string, opts: { name?: string } = {}): Pr
   await writeFile(path.join(dir, 'conti.config.ts'), CONFIG_TEMPLATE);
   await writeFile(path.join(dir, 'bootstrap.ts'), BOOTSTRAP_TEMPLATE);
   await writeFile(path.join(dir, 'package.json'), packageJsonTemplate(name));
-  await writeFile(
-    path.join(dir, '.env.example'),
-    envExampleTemplate(randomBytes(32).toString('hex'), randomBytes(32).toString('hex')),
-  );
+  // Write BOTH a working `.env` (gitignored — the project runs out of the box, no `cp` needed) and a
+  // committed `.env.example` reference, sharing freshly-generated secrets so they don't drift.
+  const envFile = envExampleTemplate(randomBytes(32).toString('hex'), randomBytes(32).toString('hex'));
+  await writeFile(path.join(dir, '.env'), envFile);
+  await writeFile(path.join(dir, '.env.example'), envFile);
   await writeFile(path.join(dir, '.gitignore'), GITIGNORE_TEMPLATE);
   await writeFile(path.join(dir, '.npmrc'), NPMRC_TEMPLATE);
 }
@@ -331,7 +333,7 @@ async function main(argv: string[]): Promise<void> {
       await initProject(target);
       console.log(
         `conti: scaffolded a project in ${target}\n` +
-          'next: 1) npm install   2) cp .env.example .env (set DATABASE_URL)   3) npm run dev\n' +
+          'next: 1) npm install   2) npm run dev   (a working .env is already written — adjust DATABASE_URL if your Postgres differs)\n' +
           '(@conti/* install from the local Verdaccio registry — run `npm run registry` + `npm run publish:local` in the conti repo first.)',
       );
       break;
