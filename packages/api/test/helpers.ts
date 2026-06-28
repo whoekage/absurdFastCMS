@@ -109,7 +109,7 @@ export async function assembleAuth(
   sql: Sql,
   base: string,
   basePath?: string,
-  authOpts?: { pwnedPasswords?: boolean; pwnedEndpoint?: string; pwnedTimeoutMs?: number },
+  authOpts?: { pwnedPasswords?: boolean; pwnedEndpoint?: string; pwnedTimeoutMs?: number; rateLimit?: boolean },
 ): Promise<{ auth: Auth; sessionCache: SessionCache; rbac: RbacRegistry; teamView: TeamView }> {
   setAuthSql(sql); // FIRST: the auth dialect runs over the shared per-file handle
   let auth: Auth;
@@ -128,6 +128,8 @@ export async function assembleAuth(
     pwnedPasswords: authOpts?.pwnedPasswords ?? false,
     ...(authOpts?.pwnedEndpoint !== undefined ? { pwnedEndpoint: authOpts.pwnedEndpoint } : {}),
     ...(authOpts?.pwnedTimeoutMs !== undefined ? { pwnedTimeoutMs: authOpts.pwnedTimeoutMs } : {}),
+    // Rate limiting OFF for the harness by default (the suite does many sign-ins); auth-ratelimit.e2e opts IN.
+    rateLimit: authOpts?.rateLimit ?? false,
   });
   await rbac.rebuild();
   await teamView.rebuild();

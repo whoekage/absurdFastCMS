@@ -1,5 +1,6 @@
 import type uWS from 'uWebSockets.js';
 import { splitCookiesString } from 'set-cookie-parser';
+import { config } from '../config.ts';
 import type { Auth } from './auth.ts';
 
 /**
@@ -86,6 +87,15 @@ async function writeFetchResponse(
   });
 }
 
+/** Decode the uWS socket address (an ArrayBuffer of the IP text, e.g. "127.0.0.1" / an IPv6 form). */
+function decodeRemoteIp(res: uWS.HttpResponse): string {
+  try {
+    return new TextDecoder().decode(res.getRemoteAddressAsText()).trim();
+  } catch {
+    return '';
+  }
+}
+
 /**
  * The `/auth/*` catch-all handler. Reads the uWS request synchronously, buffers any body, calls
  * `auth.handler`, and writes the Fetch `Response` back (splitting Set-Cookie). Mounted in
@@ -103,6 +113,14 @@ export function handleAuthRoute(
   const query = req.getQuery() ?? '';
   const headers = new Headers();
   req.forEach((k, v) => headers.set(k, v));
+
+  // Real client IP for better-auth's per-IP rate limiter (it has no socket-IP fallback in a custom server).
+  // Default: the uWS socket address. Behind a TRUSTED reverse proxy (CONTI_TRUST_PROXY=true) the proxy's
+  // X-Forwarded-For (leftmost) is the real client — read it ONLY then, so a raw spoofed header can't rotate
+  // the rate-limit key when we're directly exposed. better-auth reads only this computed `x-conti-client-ip`.
+  const fwd = config.trustProxy ? headers.get('x-forwarded-for')?.split(',')[0]?.trim() : undefined;
+  const clientIp = fwd || decodeRemoteIp(res);
+  if (clientIp) headers.set('x-conti-client-ip', clientIp);
 
   let aborted = false;
   res.onAborted(() => {

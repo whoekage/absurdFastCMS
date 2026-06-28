@@ -26,6 +26,13 @@ export interface SessionUser {
 /** A failed auth action carrying an already-generic, user-facing message. */
 export class AuthError extends Error {}
 
+/** Sign-in was rate-limited (429). `retryAfterSeconds` drives the "too many attempts" cooldown. */
+export class RateLimitError extends Error {
+  constructor(public readonly retryAfterSeconds: number) {
+    super('Too many attempts.');
+  }
+}
+
 async function postJson(path: string, body: unknown): Promise<Response> {
   return fetch(`${base}${path}`, {
     method: 'POST',
@@ -60,6 +67,13 @@ export async function getNeedsSetup(): Promise<boolean> {
 
 export async function signIn(email: string, password: string): Promise<void> {
   const res = await postJson('/auth/sign-in/email', { email, password });
+  if (res.status === 429) {
+    // Too many attempts from this source. X-Retry-After (seconds) drives the cooldown; default to 5 min when
+    // it's unreadable (e.g. a cross-origin response that didn't expose the header).
+    const hdr = res.headers.get('x-retry-after') ?? res.headers.get('retry-after');
+    const secs = Number(hdr);
+    throw new RateLimitError(Number.isFinite(secs) && secs > 0 ? Math.ceil(secs) : 300);
+  }
   // ONE generic message regardless of which field was wrong (anti-enumeration).
   if (!res.ok) throw new AuthError('Invalid email or password.');
 }

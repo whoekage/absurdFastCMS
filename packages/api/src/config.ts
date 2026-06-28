@@ -230,6 +230,15 @@ function getTrustedOrigins(): string[] {
 }
 
 /**
+ * Whether to trust a reverse proxy's `X-Forwarded-For` for the client IP (CONTI_TRUST_PROXY). Default FALSE
+ * = use the direct socket address (a raw, spoofable XFF can't rotate the rate-limit key when we're exposed
+ * directly). Set true ONLY when the app is reachable solely THROUGH a proxy that overwrites XFF.
+ */
+function getTrustProxy(): boolean {
+  return process.env.CONTI_TRUST_PROXY === 'true';
+}
+
+/**
  * be-04 MEDIA — the max upload size in bytes (UPLOAD_MAX_BYTES). Separate from the 1 MiB JSON-body cap;
  * defaults to 25 MiB. The multipart parser enforces it natively and rejects an oversized file with 413.
  */
@@ -357,6 +366,10 @@ export const config = {
 
   get trustedOrigins(): string[] {
     return getTrustedOrigins();
+  },
+
+  get trustProxy(): boolean {
+    return getTrustProxy();
   },
 
   get uploadMaxBytes(): number {

@@ -37,7 +37,12 @@ export function buildCorsPolicy(trustedOrigins: readonly string[], ownOrigin: st
 /** CORS response headers for a credentialed request: ACAO echo + credentials when trusted, always `Vary`. */
 export function corsHeaders(policy: CorsPolicy, origin: string | null | undefined): Record<string, string> {
   if (origin && policy.read.has(origin)) {
-    return { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Credentials': 'true', Vary: 'Origin' };
+    return {
+      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Credentials': 'true',
+      'Access-Control-Expose-Headers': 'X-Retry-After', // so a cross-origin admin can read the rate-limit cooldown
+      Vary: 'Origin',
+    };
   }
   return { Vary: 'Origin' }; // untrusted/no-origin → no grant, but still Vary so caches don't leak a grant
 }

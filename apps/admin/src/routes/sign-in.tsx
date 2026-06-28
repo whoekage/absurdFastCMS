@@ -3,7 +3,7 @@ import { createFileRoute, Navigate, useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Loader2, ShieldCheck, ShieldAlert, ArrowRight, Mail, Lock, AlertCircle, Eye, Check, Users, Shield } from 'lucide-react';
 import { useSession, useNeedsSetup } from '@/lib/session';
-import { signIn, signUpFirstAdmin, AuthError, SESSION_KEY, NEEDS_SETUP_KEY } from '@/lib/auth';
+import { signIn, signUpFirstAdmin, AuthError, RateLimitError, SESSION_KEY, NEEDS_SETUP_KEY } from '@/lib/auth';
 import { pwnedBreachCount, pwnedVerdict } from '@/lib/pwned';
 import { cn } from '@/lib/utils';
 
@@ -59,6 +59,47 @@ function AuthSplash() {
   );
 }
 
+/**
+ * The "too many attempts" cooldown (design 3.2) — shown after a 429. A live mm:ss countdown to `until`; when
+ * it elapses, `onExpire` returns the user to the sign-in form. The throttle is per source (IP), not a
+ * per-account lock, so the copy says "paused", not "your account is locked".
+ */
+function TooManyAttempts({ until, onExpire }: { until: number; onExpire: () => void }) {
+  const [remaining, setRemaining] = useState(() => Math.max(0, Math.ceil((until - Date.now()) / 1000)));
+  useEffect(() => {
+    const tick = (): void => {
+      const r = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+      setRemaining(r);
+      if (r <= 0) onExpire();
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [until, onExpire]);
+  const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
+  const ss = String(remaining % 60).padStart(2, '0');
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-[#f1f0ec] p-6" style={{ fontFamily: AUTH_FONT }}>
+      <div className="w-[380px] rounded-[20px] border border-black/[0.06] bg-white px-[34px] py-[34px] text-center" style={{ boxShadow: '0 24px 60px -18px rgba(22,18,32,0.22)' }}>
+        <div className="mx-auto mb-[18px] flex h-[54px] w-[54px] items-center justify-center rounded-[15px]" style={{ background: 'rgba(200,90,30,0.12)', color: '#c0561f' }}>
+          <ShieldAlert className="h-[26px] w-[26px]" strokeWidth={1.8} />
+        </div>
+        <h1 className="text-[20px] font-bold tracking-[-0.02em] text-[#16141c]">Too many attempts</h1>
+        <p className="mb-[18px] mt-2 text-[13px] leading-[1.55] text-[#6a6a76]">For your security, sign-in is paused for a moment. Try again in</p>
+        <div className="font-mono text-[40px] font-semibold tracking-[-0.02em]" style={{ color: '#c0561f' }}>
+          {mm}:{ss}
+        </div>
+        <div className="mb-[22px] mt-1.5 flex justify-center gap-1.5">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <span key={i} className="h-[9px] w-[9px] rounded-full" style={{ background: i < Math.min(5, Math.ceil(remaining / 60) + 1) ? '#c0561f' : 'rgba(192,86,31,0.25)' }} />
+          ))}
+        </div>
+        <p className="text-[11.5px] leading-[1.5] text-[#a2a2ae]">Too many sign-in attempts from your network were blocked. The cooldown clears automatically — this attempt was logged.</p>
+      </div>
+    </div>
+  );
+}
+
 function SignInPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -73,6 +114,7 @@ function SignInPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pwned, setPwned] = useState<PwnedState>({ status: 'idle', count: 0 });
+  const [lockedUntil, setLockedUntil] = useState<number | null>(null);
 
   const firstAdmin = needsSetup.data === true;
 
@@ -108,6 +150,8 @@ function SignInPage() {
   // so the user never sees the sign-in→owner content flip or the font swap on refresh.
   if (!fontsReady || session.isLoading || needsSetup.isLoading) return <AuthSplash />;
   if (session.data) return <Navigate to="/" />;
+  // Rate-limited (429): show the cooldown instead of the form until it elapses, then return to sign-in.
+  if (lockedUntil !== null) return <TooManyAttempts until={lockedUntil} onExpire={() => setLockedUntil(null)} />;
 
   const breached = firstAdmin && pwned.status === 'breached';
   const str = strength(password);
@@ -129,7 +173,11 @@ function SignInPage() {
       ]);
       await navigate({ to: '/' });
     } catch (err) {
-      setError(err instanceof AuthError ? err.message : 'Something went wrong. Please try again.');
+      if (err instanceof RateLimitError) {
+        setLockedUntil(Date.now() + err.retryAfterSeconds * 1000);
+      } else {
+        setError(err instanceof AuthError ? err.message : 'Something went wrong. Please try again.');
+      }
     } finally {
       setBusy(false);
     }

@@ -85,6 +85,15 @@ export interface BuildAuthOptions {
   /** Override the HIBP request timeout in ms (tests use a short one for the fail-open path). */
   pwnedTimeoutMs?: number;
   /**
+   * Per-IP rate limiting on the auth endpoints (better-auth built-in). When ON, a strict custom rule on
+   * `/sign-in/email` + `/sign-up/email` (5 / 5 min per client IP) returns 429 + `X-Retry-After` once
+   * exceeded — the "too many attempts" cooldown. Per-IP by SOURCE, NOT a per-account lockout (a hard
+   * account lock is a DoS vector — OWASP / Payload #4950). Defaults to `RATE_LIMIT_ENABLED` env (`!== 'false'`
+   * ⇒ on; the test harness passes `false` so the suite's many sign-ins aren't throttled). The real client IP
+   * is injected by the uWS bridge (better-auth has no socket-IP fallback in a custom server).
+   */
+  rateLimit?: boolean;
+  /**
    * Origins permitted to make CREDENTIALED cross-origin auth requests (the admin on a DIFFERENT origin).
    * When non-empty, better-auth's CSRF Origin-check accepts them AND session cookies switch to
    * `SameSite=None; Secure` (required for a cookie to travel cross-site). Empty/absent = same-origin only
@@ -169,6 +178,9 @@ export function buildAuth(opts: BuildAuthOptions = {}) {
   // a HIBP outage ALLOWS the password (the breach check is defence-in-depth — it must NOT be a single point
   // of failure for auth availability; this is exactly where the official better-auth plugin fails closed).
   const pwnedEnabled = opts.pwnedPasswords ?? process.env.PWNED_PASSWORDS_ENABLED !== 'false';
+  // Per-IP rate limiting (better-auth built-in). Explicit `enabled` overrides better-auth's prod-only default
+  // so it also protects dev. Default ON unless RATE_LIMIT_ENABLED=false (the test harness passes false).
+  const rateLimitEnabled = opts.rateLimit ?? process.env.RATE_LIMIT_ENABLED !== 'false';
   const PWNED_PATHS = ['/sign-up/email', '/change-password', '/reset-password'];
   const pwnedBefore = createAuthMiddleware(async (mw) => {
     if (!PWNED_PATHS.includes(mw.path)) return;
@@ -196,12 +208,24 @@ export function buildAuth(opts: BuildAuthOptions = {}) {
     secret: config.authSecret,
     baseURL: opts.baseURL ?? config.publicBaseUrl,
     basePath: opts.basePath ?? '/auth',
-    ...(crossOrigin
-      ? {
-          trustedOrigins: [...(opts.trustedOrigins ?? [])],
-          advanced: { defaultCookieAttributes: { sameSite: 'none' as const, secure: true } },
-        }
-      : {}),
+    ...(crossOrigin ? { trustedOrigins: [...(opts.trustedOrigins ?? [])] } : {}),
+    advanced: {
+      // The uWS bridge injects the real client IP here so the per-IP rate limiter keys correctly (better-auth
+      // has NO socket-IP fallback in a custom server). We read ONLY this computed header — never a raw,
+      // spoofable X-Forwarded-For (the trust-proxy decision is made in the bridge).
+      ipAddress: { ipAddressHeaders: ['x-conti-client-ip'] },
+      ...(crossOrigin ? { defaultCookieAttributes: { sameSite: 'none' as const, secure: true } } : {}),
+    },
+    rateLimit: {
+      enabled: rateLimitEnabled,
+      storage: 'memory', // single-instance deploy → in-process is fine + fastest
+      // The global default (100 / 60s) covers chatty paths (session polling). A STRICT rule throttles the
+      // brute-force surface: 5 attempts / 5 min per IP, then 429 + X-Retry-After (the cooldown the UI shows).
+      customRules: {
+        '/sign-in/email': { window: 300, max: 5 },
+        '/sign-up/email': { window: 300, max: 5 },
+      },
+    },
     database: { dialect: authDialect(), type: 'postgres' },
     emailAndPassword: { enabled: true },
     ...(pwnedEnabled ? { hooks: { before: pwnedBefore } } : {}),
