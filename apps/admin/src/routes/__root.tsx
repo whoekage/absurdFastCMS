@@ -43,8 +43,8 @@ function RootLayout() {
     return () => channel?.close();
   }, [qc]);
 
-  // The sign-in screen is OUTSIDE the gate — it renders bare (no sidebar/topbar), no session required.
-  if (pathname === '/sign-in') return <Outlet />;
+  // Standalone screens render OUTSIDE the gate — bare (no sidebar/topbar), no session required.
+  if (pathname === '/sign-in' || pathname === '/auth-gallery') return <Outlet />;
 
   if (session.isLoading) {
     return (

@@ -200,7 +200,7 @@ function SignInPage() {
   );
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#f1f0ec] p-6">
+    <div className="flex min-h-screen items-center justify-center bg-[#f1f0ec] p-6" style={{ fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
       <div
         className="flex w-full max-w-[1000px] overflow-hidden rounded-[18px] border border-black/[0.05] bg-white"
         style={{ boxShadow: CARD_SHADOW }}

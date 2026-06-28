@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SignInRouteImport } from './routes/sign-in'
+import { Route as AuthGalleryRouteImport } from './routes/auth-gallery'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ModulesIndexRouteImport } from './routes/modules.index'
 import { Route as MediaIndexRouteImport } from './routes/media.index'
@@ -28,6 +29,11 @@ import { Route as ContentApiIdIdEditRouteImport } from './routes/content.$apiId.
 const SignInRoute = SignInRouteImport.update({
   id: '/sign-in',
   path: '/sign-in',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthGalleryRoute = AuthGalleryRouteImport.update({
+  id: '/auth-gallery',
+  path: '/auth-gallery',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -103,6 +109,7 @@ const ContentApiIdIdEditRoute = ContentApiIdIdEditRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/auth-gallery': typeof AuthGalleryRoute
   '/sign-in': typeof SignInRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
@@ -120,6 +127,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/auth-gallery': typeof AuthGalleryRoute
   '/sign-in': typeof SignInRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
@@ -138,6 +146,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/auth-gallery': typeof AuthGalleryRoute
   '/sign-in': typeof SignInRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
@@ -157,6 +166,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/auth-gallery'
     | '/sign-in'
     | '/articles/$id'
     | '/articles/new'
@@ -174,6 +184,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/auth-gallery'
     | '/sign-in'
     | '/articles/$id'
     | '/articles/new'
@@ -191,6 +202,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/auth-gallery'
     | '/sign-in'
     | '/articles/$id'
     | '/articles/new'
@@ -209,6 +221,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AuthGalleryRoute: typeof AuthGalleryRoute
   SignInRoute: typeof SignInRoute
   ArticlesIdRoute: typeof ArticlesIdRouteWithChildren
   ArticlesNewRoute: typeof ArticlesNewRoute
@@ -230,6 +243,13 @@ declare module '@tanstack/react-router' {
       path: '/sign-in'
       fullPath: '/sign-in'
       preLoaderRoute: typeof SignInRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth-gallery': {
+      id: '/auth-gallery'
+      path: '/auth-gallery'
+      fullPath: '/auth-gallery'
+      preLoaderRoute: typeof AuthGalleryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -359,6 +379,7 @@ const ContentApiIdIdRouteWithChildren = ContentApiIdIdRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AuthGalleryRoute: AuthGalleryRoute,
   SignInRoute: SignInRoute,
   ArticlesIdRoute: ArticlesIdRouteWithChildren,
   ArticlesNewRoute: ArticlesNewRoute,
