@@ -109,6 +109,7 @@ export async function assembleAuth(
   sql: Sql,
   base: string,
   basePath?: string,
+  authOpts?: { pwnedPasswords?: boolean; pwnedEndpoint?: string; pwnedTimeoutMs?: number },
 ): Promise<{ auth: Auth; sessionCache: SessionCache; rbac: RbacRegistry; teamView: TeamView }> {
   setAuthSql(sql); // FIRST: the auth dialect runs over the shared per-file handle
   let auth: Auth;
@@ -122,6 +123,7 @@ export async function assembleAuth(
     sql,
     rbacInvalidate: () => rbac.rebuild(),
     teamViewReload: () => teamView.rebuild(),
+    ...(authOpts ?? {}),
   });
   await rbac.rebuild();
   await teamView.rebuild();

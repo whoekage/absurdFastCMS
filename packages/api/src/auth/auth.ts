@@ -73,6 +73,18 @@ export interface BuildAuthOptions {
    */
   basePath?: string;
   /**
+   * HIBP Pwned Passwords breach check on the set-password flows (sign-up / change / reset). When ON a
+   * `hooks.before` middleware queries {@link pwnedBreachCount} and rejects a compromised password
+   * (`PASSWORD_COMPROMISED`, 400). Defaults to the `PWNED_PASSWORDS_ENABLED` env (`!== 'false'` ⇒ on; the
+   * test env sets it off so the suite makes no per-sign-up HIBP call). It FAILS OPEN — a HIBP outage allows
+   * the password (the check is defence-in-depth, never a single point of failure for auth availability).
+   */
+  pwnedPasswords?: boolean;
+  /** Override the HIBP range endpoint (tests point this at an unreachable host to exercise the fail-open path). */
+  pwnedEndpoint?: string;
+  /** Override the HIBP request timeout in ms (tests use a short one for the fail-open path). */
+  pwnedTimeoutMs?: number;
+  /**
    * Origins permitted to make CREDENTIALED cross-origin auth requests (the admin on a DIFFERENT origin).
    * When non-empty, better-auth's CSRF Origin-check accepts them AND session cookies switch to
    * `SameSite=None; Secure` (required for a cookie to travel cross-site). Empty/absent = same-origin only
@@ -151,6 +163,35 @@ export function buildAuth(opts: BuildAuthOptions = {}) {
   // and switch session cookies to SameSite=None; Secure so they travel cross-site. Same-origin (the default)
   // touches neither — cookies stay SameSite=Lax. SameSite=None requires HTTPS (Secure) → cross-origin is prod.
   const crossOrigin = (opts.trustedOrigins?.length ?? 0) > 0;
+
+  // HIBP Pwned Passwords guard — thin wiring over the plain ./pwned-passwords.ts module. A `hooks.before`
+  // middleware on the SET-password flows (sign-up / change / reset) rejects a breached password. FAIL-OPEN:
+  // a HIBP outage ALLOWS the password (the breach check is defence-in-depth — it must NOT be a single point
+  // of failure for auth availability; this is exactly where the official better-auth plugin fails closed).
+  const pwnedEnabled = opts.pwnedPasswords ?? process.env.PWNED_PASSWORDS_ENABLED !== 'false';
+  const PWNED_PATHS = ['/sign-up/email', '/change-password', '/reset-password'];
+  const pwnedBefore = createAuthMiddleware(async (mw) => {
+    if (!PWNED_PATHS.includes(mw.path)) return;
+    const body = mw.body as { password?: unknown; newPassword?: unknown } | undefined;
+    const pw =
+      typeof body?.password === 'string' ? body.password : typeof body?.newPassword === 'string' ? body.newPassword : undefined;
+    if (!pw) return;
+    const verdict = pwnedVerdict(
+      await pwnedBreachCount(pw, {
+        ...(opts.pwnedEndpoint !== undefined ? { endpoint: opts.pwnedEndpoint } : {}),
+        ...(opts.pwnedTimeoutMs !== undefined ? { timeoutMs: opts.pwnedTimeoutMs } : {}),
+      }),
+    );
+    if (verdict === 'compromised') {
+      throw new APIError('BAD_REQUEST', {
+        message: 'This password has appeared in a known data breach. Please choose a different one.',
+        code: 'PASSWORD_COMPROMISED',
+      });
+    }
+    // 'unavailable' → FAIL OPEN (auth stays up when HIBP is down). One ops signal; the password is never logged.
+    if (verdict === 'unavailable') console.warn('[pwned-passwords] HIBP unreachable — allowing password (fail-open)');
+  });
+
   return betterAuth({
     secret: config.authSecret,
     baseURL: opts.baseURL ?? config.publicBaseUrl,
@@ -163,6 +204,7 @@ export function buildAuth(opts: BuildAuthOptions = {}) {
       : {}),
     database: { dialect: authDialect(), type: 'postgres' },
     emailAndPassword: { enabled: true },
+    ...(pwnedEnabled ? { hooks: { before: pwnedBefore } } : {}),
     session: { expiresIn: 604800, updateAge: 86400 }, // 7d expiry / 1d refresh; NO cookieCache (see above)
     // be-09f — the ADMIN plugin is enabled for LIFECYCLE ONLY (ban/unban/remove/revoke-sessions via
     // `auth.api.*`). It is used STRICTLY to satisfy better-auth's OWN lifecycle-endpoint authz; it is NEVER
