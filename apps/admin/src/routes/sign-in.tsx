@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Loader2, ShieldCheck, ShieldAlert, ArrowRight, Mail, Lock, AlertCircle, Eye, Check, Users, Shield } from 'lucide-react';
 import { useSession, useNeedsSetup } from '@/lib/session';
 import { signIn, signUpFirstAdmin, AuthError, SESSION_KEY, NEEDS_SETUP_KEY } from '@/lib/auth';
-import { pwnedCount } from '@/lib/pwned';
+import { pwnedBreachCount, pwnedVerdict } from '@/lib/pwned';
 import { cn } from '@/lib/utils';
 
 export const Route = createFileRoute('/sign-in')({
@@ -44,8 +44,18 @@ function SignInPage() {
     setPwned({ status: 'checking', count: 0 });
     let cancelled = false;
     const t = setTimeout(() => {
-      pwnedCount(password)
-        .then((count) => !cancelled && setPwned({ status: count > 0 ? 'breached' : 'safe', count }))
+      pwnedBreachCount(password)
+        .then((count) => {
+          if (cancelled) return;
+          const v = pwnedVerdict(count);
+          setPwned(
+            v === 'compromised'
+              ? { status: 'breached', count: count ?? 0 }
+              : v === 'unavailable'
+                ? { status: 'error', count: 0 }
+                : { status: 'safe', count: 0 },
+          );
+        })
         .catch(() => !cancelled && setPwned({ status: 'error', count: 0 }));
     }, 450);
     return () => {

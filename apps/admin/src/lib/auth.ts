@@ -64,15 +64,24 @@ export async function signIn(email: string, password: string): Promise<void> {
   if (!res.ok) throw new AuthError('Invalid email or password.');
 }
 
-/** Create the FIRST admin (only succeeds while the instance has no super-admin — the server enforces it). */
+/** Create the FIRST admin. The server enforces the password policy + the HIBP breach check (hooks.before),
+ *  so we surface ITS message (e.g. "This password has appeared in a known data breach…"); not an enumeration
+ *  surface here — this is the operator creating their own account. */
 export async function signUpFirstAdmin(email: string, password: string, name: string): Promise<void> {
   const res = await postJson('/auth/sign-up/email', { email, password, name });
   if (!res.ok) {
-    throw new AuthError(
-      res.status === 403
-        ? 'Registration is closed — an administrator already exists.'
-        : 'Could not create the account. Use a valid email and a password of at least 8 characters.',
-    );
+    const serverMessage = await errorMessageOf(res);
+    throw new AuthError(serverMessage ?? 'Could not create the account. Use a valid email and a password of at least 8 characters.');
+  }
+}
+
+/** Pull better-auth's `message` off an error response (its APIError serializes `{ message, code }`). */
+async function errorMessageOf(res: Response): Promise<string | undefined> {
+  try {
+    const data = (await res.json()) as { message?: unknown };
+    return typeof data.message === 'string' && data.message.length > 0 ? data.message : undefined;
+  } catch {
+    return undefined;
   }
 }
 
