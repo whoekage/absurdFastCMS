@@ -246,7 +246,7 @@ const enumerationHandler: FieldTypeHandler = {
     const current = typeof props.value === 'string' ? props.value : '';
     return (
       <Select
-        {...(current === '' ? {} : { value: current })}
+        value={current}
         onValueChange={(v) => {
           props.onChange(v);
           props.onBlur();

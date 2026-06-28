@@ -1,9 +1,10 @@
 import { Link } from '@tanstack/react-router';
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { Boxes, FileStack, Image, LayoutDashboard, Search, Sparkles } from 'lucide-react';
+import { Boxes, FileStack, Image, LayoutDashboard, LogOut, Search, Sparkles } from 'lucide-react';
 import { api } from '@/lib/api';
 import { moduleKeys, errorMessage } from '@/lib/modules';
 import { formatCount } from '@/lib/dashboard';
+import { useSession, useSignOut } from '@/lib/session';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
@@ -133,20 +134,37 @@ export function Sidebar() {
         </Link>
       </nav>
 
-      {/* User footer */}
-      <div className="flex items-center gap-2.5 border-t px-4 py-3">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 font-display text-sm font-semibold text-primary">
-          A
-        </span>
-        <div className="min-w-0 leading-tight">
-          <p className="truncate text-sm font-medium">Admin</p>
-          <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-            <span className="h-1.5 w-1.5 rounded-full bg-success" aria-hidden />
-            live
-          </p>
-        </div>
-      </div>
+      <UserFooter />
     </aside>
+  );
+}
+
+/** The signed-in user + a sign-out button — the real session (name/email), no longer hardcoded. */
+function UserFooter() {
+  const session = useSession();
+  const signOut = useSignOut();
+  const user = session.data;
+  const label = user?.name || user?.email || 'Admin';
+  const initial = (user?.name || user?.email || 'A').trim().charAt(0).toUpperCase();
+  return (
+    <div className="flex items-center gap-2.5 border-t px-4 py-3">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 font-display text-sm font-semibold text-primary">
+        {initial}
+      </span>
+      <div className="min-w-0 flex-1 leading-tight">
+        <p className="truncate text-sm font-medium">{label}</p>
+        {user?.email && <p className="truncate text-[11px] text-muted-foreground">{user.email}</p>}
+      </div>
+      <button
+        type="button"
+        onClick={() => void signOut()}
+        title="Sign out"
+        aria-label="Sign out"
+        className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >
+        <LogOut className="h-4 w-4" />
+      </button>
+    </div>
   );
 }
 

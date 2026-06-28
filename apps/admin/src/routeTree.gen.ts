@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ModulesIndexRouteImport } from './routes/modules.index'
 import { Route as MediaIndexRouteImport } from './routes/media.index'
@@ -24,6 +25,11 @@ import { Route as ContentApiIdIdRouteImport } from './routes/content.$apiId.$id'
 import { Route as ArticlesIdEditRouteImport } from './routes/articles.$id.edit'
 import { Route as ContentApiIdIdEditRouteImport } from './routes/content.$apiId.$id.edit'
 
+const SignInRoute = SignInRouteImport.update({
+  id: '/sign-in',
+  path: '/sign-in',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -97,6 +103,7 @@ const ContentApiIdIdEditRoute = ContentApiIdIdEditRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/sign-in': typeof SignInRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
   '/modules/$apiId': typeof ModulesApiIdRoute
@@ -113,6 +120,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/sign-in': typeof SignInRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
   '/modules/$apiId': typeof ModulesApiIdRoute
@@ -130,6 +138,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/sign-in': typeof SignInRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
   '/modules/$apiId': typeof ModulesApiIdRoute
@@ -148,6 +157,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/sign-in'
     | '/articles/$id'
     | '/articles/new'
     | '/modules/$apiId'
@@ -164,6 +174,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/sign-in'
     | '/articles/$id'
     | '/articles/new'
     | '/modules/$apiId'
@@ -180,6 +191,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/sign-in'
     | '/articles/$id'
     | '/articles/new'
     | '/modules/$apiId'
@@ -197,6 +209,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  SignInRoute: typeof SignInRoute
   ArticlesIdRoute: typeof ArticlesIdRouteWithChildren
   ArticlesNewRoute: typeof ArticlesNewRoute
   ModulesApiIdRoute: typeof ModulesApiIdRoute
@@ -212,6 +225,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/sign-in': {
+      id: '/sign-in'
+      path: '/sign-in'
+      fullPath: '/sign-in'
+      preLoaderRoute: typeof SignInRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -339,6 +359,7 @@ const ContentApiIdIdRouteWithChildren = ContentApiIdIdRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  SignInRoute: SignInRoute,
   ArticlesIdRoute: ArticlesIdRouteWithChildren,
   ArticlesNewRoute: ArticlesNewRoute,
   ModulesApiIdRoute: ModulesApiIdRoute,

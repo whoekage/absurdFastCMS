@@ -7,10 +7,11 @@ import { createFileDatabase, dropFileDatabase } from './db-per-file.ts';
 import { startTestServer, ARTICLE_SCHEMA, closeAuth } from './helpers.ts';
 
 /**
- * FIRST-ADMIN BOOTSTRAP + closed registration over a REAL server (no mocks). `/_setup` reports whether the
- * instance still needs its first admin; the FIRST sign-up becomes the super-admin (advisory-lock serialized)
- * and CLOSES public registration — every later sign-up is 403. The OSS-ideal default (Directus/Payload ship
- * registration off-by-default; an open sign-up is a spam/enumeration surface).
+ * FIRST-ADMIN BOOTSTRAP signal over a REAL server (no mocks). `/_setup` reports whether the instance still
+ * needs its first admin; the FIRST sign-up becomes the super-admin (advisory-lock serialized) which flips
+ * the signal. Registration STAYS OPEN by design — a second sign-up succeeds but is AUTHORITY-FREE (RBAC, not
+ * the sign-up endpoint, is conti's access gate; new accounts have zero CMS power). The admin UI simply shows
+ * the create-first-admin form only while `needsFirstAdmin`, the sign-in form thereafter.
  */
 
 let sql: Sql;
@@ -60,8 +61,8 @@ test('the FIRST sign-up succeeds (becomes the admin) and closes setup', async ()
   assert.equal(await needsFirstAdmin(), false, 'setup closes once a super-admin exists');
 });
 
-test('a SECOND sign-up is rejected 403 — registration is first-admin-only', async () => {
-  const r = await signUp('intruder@example.com');
-  assert.equal(r.status, 403);
-  assert.equal(await needsFirstAdmin(), false);
+test('a SECOND sign-up still succeeds (open registration; the account is authority-free)', async () => {
+  const r = await signUp('member@example.com');
+  assert.equal(r.status, 200); // registration stays open by design — RBAC gates power, not the endpoint
+  assert.equal(await needsFirstAdmin(), false); // but the instance is past first-admin bootstrap
 });
