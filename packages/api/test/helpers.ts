@@ -123,7 +123,11 @@ export async function assembleAuth(
     sql,
     rbacInvalidate: () => rbac.rebuild(),
     teamViewReload: () => teamView.rebuild(),
-    ...(authOpts ?? {}),
+    // The HIBP guard is OFF for the harness by default (committed, NOT reliant on a gitignored .env.test) so
+    // the per-file admin bootstrap makes no network call; pwned-passwords.test.ts opts IN explicitly.
+    pwnedPasswords: authOpts?.pwnedPasswords ?? false,
+    ...(authOpts?.pwnedEndpoint !== undefined ? { pwnedEndpoint: authOpts.pwnedEndpoint } : {}),
+    ...(authOpts?.pwnedTimeoutMs !== undefined ? { pwnedTimeoutMs: authOpts.pwnedTimeoutMs } : {}),
   });
   await rbac.rebuild();
   await teamView.rebuild();
