@@ -1,4 +1,5 @@
 import { betterAuth } from 'better-auth';
+import { APIError } from 'better-auth/api';
 import { apiKey } from '@better-auth/api-key';
 import { admin } from 'better-auth/plugins';
 import { createAccessControl } from 'better-auth/plugins/access';
@@ -143,6 +144,12 @@ async function promoteFirstAdmin(sql: Sql, newUserId: string): Promise<boolean> 
   return inserted > 0;
 }
 
+/** Whether a super-admin grant already exists — i.e. the instance is past first-admin bootstrap. */
+async function superAdminExists(sql: Sql): Promise<boolean> {
+  const rows = await sql`SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE r.name = 'super-admin' LIMIT 1`;
+  return rows.length > 0;
+}
+
 /** Build the better-auth provider, wiring the secret, the dedicated DB dialect, and the evict hook. */
 export function buildAuth(opts: BuildAuthOptions = {}) {
   // Cross-origin mode (the admin on another origin): trust those origins for better-auth's CSRF Origin-check
@@ -201,6 +208,16 @@ export function buildAuth(opts: BuildAuthOptions = {}) {
       // (CLI generate / read-only server) so those paths skip the bootstrap entirely.
       user: {
         create: {
+          // Registration is FIRST-ADMIN-ONLY: once a super-admin exists, public sign-up is CLOSED (the
+          // unanimous OSS-ideal default — Directus/Payload ship registration off-by-default; an open sign-up
+          // is a spam/enumeration surface). The very first sign-up has no super-admin yet → allowed → the
+          // `after` hook promotes it (race-serialized by an advisory lock). Absent sql (CLI/read-only) → no
+          // enforcement. NOTE: when an admin-invite flow lands, route those through a path that bypasses this.
+          before: async () => {
+            if (opts.sql && (await superAdminExists(opts.sql))) {
+              throw new APIError('FORBIDDEN', { message: 'Registration is closed: an administrator already exists.' });
+            }
+          },
           after: async (user: { id: string }) => {
             if (opts.sql === undefined || opts.rbacInvalidate === undefined) return;
             const promoted = await promoteFirstAdmin(opts.sql, user.id);

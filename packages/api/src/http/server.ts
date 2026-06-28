@@ -823,6 +823,27 @@ export function createServer(deps: ServerDeps): Server {
   route.del('/auth/:p', onAuth);
   route.any('/auth/*', onAuth);
 
+  // PUBLIC setup status: does the instance still need its FIRST admin (no super-admin grant exists yet)? The
+  // sign-in screen reads this BEFORE any session exists to choose "Create first admin" vs "Sign in". No auth,
+  // no-store. Reveals only setup-state (standard — Strapi/Directus expose the same `hasAdmin` to the login UI).
+  route.get('/_setup', (res) => {
+    let aborted = false;
+    res.onAborted(() => {
+      aborted = true;
+    });
+    void (async () => {
+      try {
+        const [row] = await store.sql<{ needs: boolean }[]>`
+          SELECT NOT EXISTS (
+            SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE r.name = 'super-admin'
+          ) AS needs`;
+        if (!aborted) corkSendNoStore(res, () => aborted, 200, { needsFirstAdmin: row?.needs ?? true });
+      } catch {
+        if (!aborted) corkSend(res, () => aborted, errorResponse(500, 'internal error'));
+      }
+    })();
+  });
+
   // LIST: /:type  — read everything off `req` synchronously, then delegate to the core.
   route.get('/:type', (res, req) => {
     const method = req.getMethod();
