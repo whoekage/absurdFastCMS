@@ -97,6 +97,22 @@ function decodeRemoteIp(res: uWS.HttpResponse): string {
 }
 
 /**
+ * Anti-enumeration LOGIN STALL: pad the `/sign-in/email` response to a constant floor (config.loginStallMs)
+ * so the total time is identical whether the email exists ("wrong password" → slow hash) or not ("no such
+ * user" → fast) — a timing side-channel that would otherwise leak which accounts exist. Other paths pass
+ * through untouched; 0 (test env) disables it.
+ */
+async function stalledHandle(path: string, run: () => Promise<Response>): Promise<Response> {
+  const floor = config.loginStallMs;
+  if (floor <= 0 || !path.endsWith('/sign-in/email')) return run();
+  const start = Date.now();
+  const response = await run();
+  const remaining = floor - (Date.now() - start);
+  if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+  return response;
+}
+
+/**
  * The `/auth/*` catch-all handler. Reads the uWS request synchronously, buffers any body, calls
  * `auth.handler`, and writes the Fetch `Response` back (splitting Set-Cookie). Mounted in
  * `createServer` BEFORE the `app.any('/*')` fallthrough.
@@ -131,7 +147,7 @@ export function handleAuthRoute(
     void (async () => {
       try {
         const request = toRequest(method, path, query, headers, body);
-        const response = await auth.handler(request);
+        const response = await stalledHandle(path, () => auth.handler(request));
         if (!aborted) await writeFetchResponse(res, response, () => aborted, corkHook);
       } catch {
         if (!aborted) {

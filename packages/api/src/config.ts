@@ -239,6 +239,17 @@ function getTrustProxy(): boolean {
 }
 
 /**
+ * Anti-enumeration LOGIN STALL (CONTI_LOGIN_STALL_MS, default 500ms; 0 = off). The sign-in response is padded
+ * to this constant floor so an attacker can't tell "no such email" (fast) from "wrong password" (slow hash)
+ * by timing. Mirrors Directus's LOGIN_STALL_TIME. The test env sets 0 so the suite's many sign-ins aren't
+ * slowed.
+ */
+function getLoginStallMs(): number {
+  const v = Number(process.env.CONTI_LOGIN_STALL_MS);
+  return Number.isFinite(v) && v >= 0 ? v : 500;
+}
+
+/**
  * be-04 MEDIA — the max upload size in bytes (UPLOAD_MAX_BYTES). Separate from the 1 MiB JSON-body cap;
  * defaults to 25 MiB. The multipart parser enforces it natively and rejects an oversized file with 413.
  */
@@ -370,6 +381,10 @@ export const config = {
 
   get trustProxy(): boolean {
     return getTrustProxy();
+  },
+
+  get loginStallMs(): number {
+    return getLoginStallMs();
   },
 
   get uploadMaxBytes(): number {

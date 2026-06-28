@@ -38,6 +38,7 @@ test('corsHeaders: trusted origin → exact ACAO echo + credentials + Vary', () 
   assert.deepEqual(corsHeaders(policy, ADMIN), {
     'Access-Control-Allow-Origin': ADMIN,
     'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Expose-Headers': 'X-Retry-After',
     Vary: 'Origin',
   });
 });
