@@ -46,10 +46,10 @@ function localeDotClass(locale: string): string {
  * starts with the shared values and empty localized fields (edit them on the variant's edit page).
  */
 export function LocaleSwitcher({
-  apiId,
+  name,
   row,
 }: {
-  apiId: string;
+  name: string;
   row: Entry;
 }) {
   const navigate = useNavigate();
@@ -62,22 +62,22 @@ export function LocaleSwitcher({
 
   // Every variant of this document (locale=* removes the locale predicate; filter by document_id).
   const variantsQuery = useQuery({
-    queryKey: ['content', apiId, 'variants', documentId],
+    queryKey: ['content', name, 'variants', documentId],
     queryFn: ({ signal }) =>
-      api.list(apiId, { locale: '*', filters: { document_id: { $eq: documentId as number } } }, signal),
+      api.list(name, { locale: '*', filters: { document_id: { $eq: documentId as number } } }, signal),
     enabled: documentId != null,
   });
 
   const variants = variantsQuery.data?.data ?? [];
 
   const createMutation = useMutation({
-    mutationFn: (locale: string) => api.createVariant(apiId, row['id'] as number, locale, {}),
+    mutationFn: (locale: string) => api.createVariant(name, row['id'] as number, locale, {}),
     onSuccess: async (res) => {
-      await queryClient.invalidateQueries({ queryKey: contentKeys.all(apiId) });
+      await queryClient.invalidateQueries({ queryKey: contentKeys.all(name) });
       setOpen(false);
       setNewLocale('');
       toast.success(`Variant "${res.data.locale}" created`);
-      void navigate({ to: '/content/$apiId/$id/edit', params: { apiId, id: String(res.data.id) } });
+      void navigate({ to: '/content/$name/$id/edit', params: { name, id: String(res.data.id) } });
     },
     onError: (err) => toast.error(errorMessage(err)),
   });
@@ -104,7 +104,7 @@ export function LocaleSwitcher({
               onClick={() =>
                 active
                   ? undefined
-                  : void navigate({ to: '/content/$apiId/$id', params: { apiId, id: String(v['id']) } })
+                  : void navigate({ to: '/content/$name/$id', params: { name, id: String(v['id']) } })
               }
             >
               <span className={cn('h-1.5 w-1.5 rounded-full', localeDotClass(loc))} aria-hidden />

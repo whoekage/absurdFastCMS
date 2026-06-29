@@ -32,8 +32,8 @@ interface ModuleFormProps {
   initial: ModuleFormState;
   /** Current catalog version (ETag) for the optimistic-concurrency If-Match. */
   version: string;
-  /** Every existing module apiId (relation targets + apiId-uniqueness check). */
-  allModuleApiIds: string[];
+  /** Every existing module name (relation targets + name-uniqueness check). */
+  allModuleNames: string[];
   /** Called after a successful apply with the save result (route navigates / refreshes). */
   onSaved: (result: SaveResult) => void;
 }
@@ -44,7 +44,7 @@ interface ModuleFormProps {
  *   migrate + live-swap). Destructive changes are gated behind an explicit ack; FORBIDDEN ones can't apply.
  * Optimistic concurrency rides the catalog `version` (If-Match); a 412 means someone else edited.
  */
-export function ModuleForm({ mode, initial, version, allModuleApiIds, onSaved }: ModuleFormProps) {
+export function ModuleForm({ mode, initial, version, allModuleNames, onSaved }: ModuleFormProps) {
   const queryClient = useQueryClient();
   const [state, setState] = useState<ModuleFormState>(initial);
   const [phase, setPhase] = useState<'editing' | 'reviewing'>('editing');
@@ -54,8 +54,8 @@ export function ModuleForm({ mode, initial, version, allModuleApiIds, onSaved }:
   const [busy, setBusy] = useState(false);
 
   const isEdit = mode === 'edit';
-  // Relation targets: every module plus this one (self-ref); on create the apiId isn't saved yet.
-  const targets = [...new Set([state.apiId.trim(), ...allModuleApiIds])].filter((t) => t !== '');
+  // Relation targets: every module plus this one (self-ref); on create the name isn't saved yet.
+  const targets = [...new Set([state.name.trim(), ...allModuleNames])].filter((t) => t !== '');
 
   const patch = (p: Partial<ModuleFormState>) => setState((s) => ({ ...s, ...p }));
   const setFieldAt = (key: string, next: FieldDraft) =>
@@ -66,14 +66,14 @@ export function ModuleForm({ mode, initial, version, allModuleApiIds, onSaved }:
 
   async function review(): Promise<void> {
     setError(null);
-    const validationError = validateModuleForm(state, allModuleApiIds);
+    const validationError = validateModuleForm(state, allModuleNames);
     if (validationError) {
       setError(validationError);
       return;
     }
     setBusy(true);
     try {
-      const result = await previewModule(state.apiId.trim(), formToModuleDraft(state), false);
+      const result = await previewModule(state.name.trim(), formToModuleDraft(state), false);
       setPreview(result);
       setAllowDestructive(false);
       setPhase('reviewing');
@@ -89,13 +89,13 @@ export function ModuleForm({ mode, initial, version, allModuleApiIds, onSaved }:
     setError(null);
     setBusy(true);
     try {
-      const result = await saveModule(state.apiId.trim(), formToModuleDraft(state), version, {
+      const result = await saveModule(state.name.trim(), formToModuleDraft(state), version, {
         allowDestructive,
         idempotencyKey: crypto.randomUUID(),
       });
       await queryClient.invalidateQueries({ queryKey: moduleKeys.all });
       await queryClient.invalidateQueries({ queryKey: builderKeys.all });
-      toast.success(isEdit ? `Module "${state.apiId}" updated` : `Module "${state.apiId}" created`);
+      toast.success(isEdit ? `Module "${state.label || state.name}" updated` : `Module "${state.label || state.name}" created`);
       onSaved(result);
     } catch (err) {
       if (err instanceof BuilderError && err.isStale) {
@@ -126,7 +126,7 @@ export function ModuleForm({ mode, initial, version, allModuleApiIds, onSaved }:
         </Button>
         <DiffPreview
           preview={preview}
-          apiId={state.apiId.trim()}
+          name={state.name.trim()}
           allowDestructive={allowDestructive}
           onAllowDestructiveChange={setAllowDestructive}
         />
@@ -152,15 +152,30 @@ export function ModuleForm({ mode, initial, version, allModuleApiIds, onSaved }:
       }}
     >
       <div className="max-w-sm space-y-1.5">
-        <Label htmlFor="apiId">API ID</Label>
+        <Label htmlFor="name">Name</Label>
         <Input
-          id="apiId"
-          value={state.apiId}
+          id="name"
+          value={state.name}
           placeholder="e.g. product"
           disabled={isEdit}
-          onChange={(e) => patch({ apiId: e.target.value })}
+          onChange={(e) => patch({ name: e.target.value })}
         />
-        {isEdit && <p className="text-xs text-muted-foreground">Renaming a module's apiId isn't supported here yet.</p>}
+        <p className="text-xs text-muted-foreground">
+          {isEdit
+            ? "The canonical name — used in URLs, code, and the table. Can't be changed here yet."
+            : 'Lowercase identifier used in URLs, code, and the table. Immutable after creation.'}
+        </p>
+      </div>
+
+      <div className="max-w-sm space-y-1.5">
+        <Label htmlFor="label">Label</Label>
+        <Input
+          id="label"
+          value={state.label}
+          placeholder={state.name.trim() || 'e.g. Products'}
+          onChange={(e) => patch({ label: e.target.value })}
+        />
+        <p className="text-xs text-muted-foreground">How this module is shown in the admin. Defaults to the name.</p>
       </div>
 
       <div className="flex items-center justify-between rounded-md border p-3">

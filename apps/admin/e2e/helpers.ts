@@ -5,11 +5,11 @@ import { expect, type Page } from '@playwright/test';
 // exercise the same paths an operator would. The only constraints baked in here come from the real
 // components: Radix <Select> renders a trigger with role="combobox" and options with role="option";
 // builder field rows have ids `#<draftKey>-name` / `#<draftKey>-type`; the type api_id input is
-// `#apiId`; entry-form inputs are `#field-<name>`; success toasts render with role="status".
+// `#name`; entry-form inputs are `#field-<name>`; success toasts render with role="status".
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A collision-resistant api_id for a throwaway content type (valid Postgres identifier). */
-export function uniqueApiId(prefix: string): string {
+export function uniqueName(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 8);
   return `e2e_${prefix}_${Date.now().toString(36)}_${rand}`;
 }
@@ -43,11 +43,11 @@ export async function expectToast(page: Page, text: string | RegExp): Promise<vo
  */
 export async function createContentType(
   page: Page,
-  apiId: string,
+  name: string,
   fields: FieldDraftInput[],
 ): Promise<void> {
   await page.goto('/content-types/new');
-  await page.locator('#apiId').fill(apiId);
+  await page.locator('#name').fill(name);
 
   for (let i = 0; i < fields.length; i++) {
     if (i > 0) await page.getByRole('button', { name: 'Add field' }).click();
@@ -57,8 +57,8 @@ export async function createContentType(
   await page.getByRole('button', { name: 'Create content type' }).click();
 
   // On success the builder navigates to the type's detail page and shows a toast.
-  await expect(page).toHaveURL(new RegExp(`/content-types/${apiId}$`));
-  await expect(page.getByRole('heading', { name: apiId })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/content-types/${name}$`));
+  await expect(page.getByRole('heading', { name: name })).toBeVisible();
 }
 
 /**
@@ -93,36 +93,36 @@ export async function fillBuilderFieldRow(page: Page, index: number, field: Fiel
  * Drop a content type via the builder (type-to-confirm dialog). Idempotent-ish cleanup: navigates to
  * the detail page and runs the drop flow. Safe to call in afterEach/afterAll.
  */
-export async function dropContentType(page: Page, apiId: string): Promise<void> {
-  await page.goto(`/content-types/${apiId}`);
+export async function dropContentType(page: Page, name: string): Promise<void> {
+  await page.goto(`/content-types/${name}`);
   // If the type is already gone the detail page shows an error and there's no "Drop type" button.
   const dropBtn = page.getByRole('button', { name: 'Drop type' });
   if (!(await dropBtn.isVisible().catch(() => false))) return;
   await dropBtn.click();
   // The confirm dialog requires typing the exact api_id.
-  await page.locator('#confirm-drop').fill(apiId);
+  await page.locator('#confirm-drop').fill(name);
   await page.getByRole('dialog').getByRole('button', { name: 'Drop type' }).click();
   await expect(page).toHaveURL(/\/content-types$/);
 }
 
 /**
- * Create an entry for `apiId` via the UI form. `values` maps editable field name → string value
+ * Create an entry for `name` via the UI form. `values` maps editable field name → string value
  * typed into its `#field-<name>` input. `selects` maps an enumeration field name → option label
  * chosen in its Radix select. Waits for the post-create redirect back to the list.
  */
 export async function createEntry(
   page: Page,
-  apiId: string,
+  name: string,
   values: Record<string, string>,
   selects: Record<string, string> = {},
 ): Promise<void> {
-  await page.goto(`/content/${apiId}/new`);
+  await page.goto(`/content/${name}/new`);
   for (const [name, value] of Object.entries(values)) {
     await page.locator(`#field-${name}`).fill(value);
   }
   for (const [name, option] of Object.entries(selects)) {
     await selectOption(page, page.locator(`#field-${name}`), option);
   }
-  await page.getByRole('button', { name: `Create ${apiId}` }).click();
-  await expect(page).toHaveURL(new RegExp(`/content/${apiId}(\\?.*)?$`));
+  await page.getByRole('button', { name: `Create ${name}` }).click();
+  await expect(page).toHaveURL(new RegExp(`/content/${name}(\\?.*)?$`));
 }

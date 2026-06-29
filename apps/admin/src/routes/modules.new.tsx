@@ -39,10 +39,10 @@ function NewModulePage() {
               mode="create"
               initial={emptyModuleForm()}
               version={query.data.version}
-              allModuleApiIds={query.data.schemas.map((s) => s.apiId)}
+              allModuleNames={query.data.schemas.map((s) => s.name)}
               onSaved={(result) => {
-                const apiId = result.schema?.apiId;
-                if (apiId) void navigate({ to: '/modules/$apiId', params: { apiId } });
+                const name = result.schema?.name;
+                if (name) void navigate({ to: '/modules/$name', params: { name } });
                 else void navigate({ to: '/modules' });
               }}
             />

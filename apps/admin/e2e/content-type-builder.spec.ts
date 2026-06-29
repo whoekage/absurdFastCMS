@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createContentType, dropContentType, expectToast, selectOption, uniqueApiId } from './helpers';
+import { createContentType, dropContentType, expectToast, selectOption, uniqueName } from './helpers';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // (2) Content-Type Builder against the real stack: create a temp type with a couple of fields, see
@@ -8,22 +8,22 @@ import { createContentType, dropContentType, expectToast, selectOption, uniqueAp
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 
 test.describe('content-type builder', () => {
-  const apiId = uniqueApiId('builder');
+  const name = uniqueName('builder');
 
   // Best-effort cleanup if an assertion fails before the in-test drop runs.
   test.afterAll(async ({ browser }) => {
     const page = await browser.newPage();
-    await dropContentType(page, apiId);
+    await dropContentType(page, name);
     await page.close();
   });
 
   test('create type → appears in sidebar + list → add field → drop type', async ({ page }) => {
     // CREATE a type with two fields.
-    await createContentType(page, apiId, [
+    await createContentType(page, name, [
       { name: 'name', cmsType: 'string' },
       { name: 'qty', cmsType: 'integer' },
     ]);
-    await expectToast(page, new RegExp(`"${apiId}" created`));
+    await expectToast(page, new RegExp(`"${name}" created`));
 
     // Two fields show on the detail page.
     await expect(page.getByRole('cell', { name: 'name', exact: true })).toBeVisible();
@@ -31,16 +31,16 @@ test.describe('content-type builder', () => {
 
     // APPEARS IN THE SIDEBAR (the Content section links one entry per type).
     const sidebar = page.getByRole('complementary');
-    await expect(sidebar.getByRole('link', { name: apiId })).toBeVisible();
+    await expect(sidebar.getByRole('link', { name: name })).toBeVisible();
 
     // APPEARS IN THE CONTENT-TYPES LIST.
     await page.goto('/content-types');
     await expect(
-      page.getByRole('row', { name: new RegExp(escapeRegExp(apiId)) }),
+      page.getByRole('row', { name: new RegExp(escapeRegExp(name)) }),
     ).toBeVisible();
 
     // ADD A FIELD on the detail page via the Add-field dialog.
-    await page.goto(`/content-types/${apiId}`);
+    await page.goto(`/content-types/${name}`);
     await page.getByRole('button', { name: 'Add field' }).click();
     const dialog = page.getByRole('dialog');
     await dialog.locator('input[id$="-name"]').fill('description');
@@ -51,14 +51,14 @@ test.describe('content-type builder', () => {
 
     // DROP THE TYPE (type-to-confirm) — cleanup, leaving the catalog as it was.
     await page.getByRole('button', { name: 'Drop type' }).click();
-    await page.locator('#confirm-drop').fill(apiId);
+    await page.locator('#confirm-drop').fill(name);
     await page.getByRole('dialog').getByRole('button', { name: 'Drop type' }).click();
-    await expectToast(page, new RegExp(`"${apiId}" dropped`));
+    await expectToast(page, new RegExp(`"${name}" dropped`));
     await expect(page).toHaveURL(/\/content-types$/);
 
     // GONE from the list.
     await expect(
-      page.getByRole('row', { name: new RegExp(escapeRegExp(apiId)) }),
+      page.getByRole('row', { name: new RegExp(escapeRegExp(name)) }),
     ).toHaveCount(0);
   });
 });

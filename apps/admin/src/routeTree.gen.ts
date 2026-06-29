@@ -17,14 +17,14 @@ import { Route as MediaIndexRouteImport } from './routes/media.index'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
 import { Route as ArticlesIndexRouteImport } from './routes/articles.index'
 import { Route as ModulesNewRouteImport } from './routes/modules.new'
-import { Route as ModulesApiIdRouteImport } from './routes/modules.$apiId'
+import { Route as ModulesNameRouteImport } from './routes/modules.$name'
 import { Route as ArticlesNewRouteImport } from './routes/articles.new'
 import { Route as ArticlesIdRouteImport } from './routes/articles.$id'
-import { Route as ContentApiIdIndexRouteImport } from './routes/content.$apiId.index'
-import { Route as ContentApiIdNewRouteImport } from './routes/content.$apiId.new'
-import { Route as ContentApiIdIdRouteImport } from './routes/content.$apiId.$id'
+import { Route as ContentNameIndexRouteImport } from './routes/content.$name.index'
+import { Route as ContentNameNewRouteImport } from './routes/content.$name.new'
+import { Route as ContentNameIdRouteImport } from './routes/content.$name.$id'
 import { Route as ArticlesIdEditRouteImport } from './routes/articles.$id.edit'
-import { Route as ContentApiIdIdEditRouteImport } from './routes/content.$apiId.$id.edit'
+import { Route as ContentNameIdEditRouteImport } from './routes/content.$name.$id.edit'
 
 const SignInRoute = SignInRouteImport.update({
   id: '/sign-in',
@@ -66,9 +66,9 @@ const ModulesNewRoute = ModulesNewRouteImport.update({
   path: '/modules/new',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ModulesApiIdRoute = ModulesApiIdRouteImport.update({
-  id: '/modules/$apiId',
-  path: '/modules/$apiId',
+const ModulesNameRoute = ModulesNameRouteImport.update({
+  id: '/modules/$name',
+  path: '/modules/$name',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ArticlesNewRoute = ArticlesNewRouteImport.update({
@@ -81,19 +81,19 @@ const ArticlesIdRoute = ArticlesIdRouteImport.update({
   path: '/articles/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ContentApiIdIndexRoute = ContentApiIdIndexRouteImport.update({
-  id: '/content/$apiId/',
-  path: '/content/$apiId/',
+const ContentNameIndexRoute = ContentNameIndexRouteImport.update({
+  id: '/content/$name/',
+  path: '/content/$name/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ContentApiIdNewRoute = ContentApiIdNewRouteImport.update({
-  id: '/content/$apiId/new',
-  path: '/content/$apiId/new',
+const ContentNameNewRoute = ContentNameNewRouteImport.update({
+  id: '/content/$name/new',
+  path: '/content/$name/new',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ContentApiIdIdRoute = ContentApiIdIdRouteImport.update({
-  id: '/content/$apiId/$id',
-  path: '/content/$apiId/$id',
+const ContentNameIdRoute = ContentNameIdRouteImport.update({
+  id: '/content/$name/$id',
+  path: '/content/$name/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ArticlesIdEditRoute = ArticlesIdEditRouteImport.update({
@@ -101,10 +101,10 @@ const ArticlesIdEditRoute = ArticlesIdEditRouteImport.update({
   path: '/edit',
   getParentRoute: () => ArticlesIdRoute,
 } as any)
-const ContentApiIdIdEditRoute = ContentApiIdIdEditRouteImport.update({
+const ContentNameIdEditRoute = ContentNameIdEditRouteImport.update({
   id: '/edit',
   path: '/edit',
-  getParentRoute: () => ContentApiIdIdRoute,
+  getParentRoute: () => ContentNameIdRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -113,17 +113,17 @@ export interface FileRoutesByFullPath {
   '/sign-in': typeof SignInRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
-  '/modules/$apiId': typeof ModulesApiIdRoute
+  '/modules/$name': typeof ModulesNameRoute
   '/modules/new': typeof ModulesNewRoute
   '/articles/': typeof ArticlesIndexRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/media/': typeof MediaIndexRoute
   '/modules/': typeof ModulesIndexRoute
   '/articles/$id/edit': typeof ArticlesIdEditRoute
-  '/content/$apiId/$id': typeof ContentApiIdIdRouteWithChildren
-  '/content/$apiId/new': typeof ContentApiIdNewRoute
-  '/content/$apiId/': typeof ContentApiIdIndexRoute
-  '/content/$apiId/$id/edit': typeof ContentApiIdIdEditRoute
+  '/content/$name/$id': typeof ContentNameIdRouteWithChildren
+  '/content/$name/new': typeof ContentNameNewRoute
+  '/content/$name/': typeof ContentNameIndexRoute
+  '/content/$name/$id/edit': typeof ContentNameIdEditRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -131,17 +131,17 @@ export interface FileRoutesByTo {
   '/sign-in': typeof SignInRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
-  '/modules/$apiId': typeof ModulesApiIdRoute
+  '/modules/$name': typeof ModulesNameRoute
   '/modules/new': typeof ModulesNewRoute
   '/articles': typeof ArticlesIndexRoute
   '/dashboard': typeof DashboardIndexRoute
   '/media': typeof MediaIndexRoute
   '/modules': typeof ModulesIndexRoute
   '/articles/$id/edit': typeof ArticlesIdEditRoute
-  '/content/$apiId/$id': typeof ContentApiIdIdRouteWithChildren
-  '/content/$apiId/new': typeof ContentApiIdNewRoute
-  '/content/$apiId': typeof ContentApiIdIndexRoute
-  '/content/$apiId/$id/edit': typeof ContentApiIdIdEditRoute
+  '/content/$name/$id': typeof ContentNameIdRouteWithChildren
+  '/content/$name/new': typeof ContentNameNewRoute
+  '/content/$name': typeof ContentNameIndexRoute
+  '/content/$name/$id/edit': typeof ContentNameIdEditRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -150,17 +150,17 @@ export interface FileRoutesById {
   '/sign-in': typeof SignInRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
-  '/modules/$apiId': typeof ModulesApiIdRoute
+  '/modules/$name': typeof ModulesNameRoute
   '/modules/new': typeof ModulesNewRoute
   '/articles/': typeof ArticlesIndexRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/media/': typeof MediaIndexRoute
   '/modules/': typeof ModulesIndexRoute
   '/articles/$id/edit': typeof ArticlesIdEditRoute
-  '/content/$apiId/$id': typeof ContentApiIdIdRouteWithChildren
-  '/content/$apiId/new': typeof ContentApiIdNewRoute
-  '/content/$apiId/': typeof ContentApiIdIndexRoute
-  '/content/$apiId/$id/edit': typeof ContentApiIdIdEditRoute
+  '/content/$name/$id': typeof ContentNameIdRouteWithChildren
+  '/content/$name/new': typeof ContentNameNewRoute
+  '/content/$name/': typeof ContentNameIndexRoute
+  '/content/$name/$id/edit': typeof ContentNameIdEditRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -170,17 +170,17 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/articles/$id'
     | '/articles/new'
-    | '/modules/$apiId'
+    | '/modules/$name'
     | '/modules/new'
     | '/articles/'
     | '/dashboard/'
     | '/media/'
     | '/modules/'
     | '/articles/$id/edit'
-    | '/content/$apiId/$id'
-    | '/content/$apiId/new'
-    | '/content/$apiId/'
-    | '/content/$apiId/$id/edit'
+    | '/content/$name/$id'
+    | '/content/$name/new'
+    | '/content/$name/'
+    | '/content/$name/$id/edit'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -188,17 +188,17 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/articles/$id'
     | '/articles/new'
-    | '/modules/$apiId'
+    | '/modules/$name'
     | '/modules/new'
     | '/articles'
     | '/dashboard'
     | '/media'
     | '/modules'
     | '/articles/$id/edit'
-    | '/content/$apiId/$id'
-    | '/content/$apiId/new'
-    | '/content/$apiId'
-    | '/content/$apiId/$id/edit'
+    | '/content/$name/$id'
+    | '/content/$name/new'
+    | '/content/$name'
+    | '/content/$name/$id/edit'
   id:
     | '__root__'
     | '/'
@@ -206,17 +206,17 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/articles/$id'
     | '/articles/new'
-    | '/modules/$apiId'
+    | '/modules/$name'
     | '/modules/new'
     | '/articles/'
     | '/dashboard/'
     | '/media/'
     | '/modules/'
     | '/articles/$id/edit'
-    | '/content/$apiId/$id'
-    | '/content/$apiId/new'
-    | '/content/$apiId/'
-    | '/content/$apiId/$id/edit'
+    | '/content/$name/$id'
+    | '/content/$name/new'
+    | '/content/$name/'
+    | '/content/$name/$id/edit'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -225,15 +225,15 @@ export interface RootRouteChildren {
   SignInRoute: typeof SignInRoute
   ArticlesIdRoute: typeof ArticlesIdRouteWithChildren
   ArticlesNewRoute: typeof ArticlesNewRoute
-  ModulesApiIdRoute: typeof ModulesApiIdRoute
+  ModulesNameRoute: typeof ModulesNameRoute
   ModulesNewRoute: typeof ModulesNewRoute
   ArticlesIndexRoute: typeof ArticlesIndexRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
   MediaIndexRoute: typeof MediaIndexRoute
   ModulesIndexRoute: typeof ModulesIndexRoute
-  ContentApiIdIdRoute: typeof ContentApiIdIdRouteWithChildren
-  ContentApiIdNewRoute: typeof ContentApiIdNewRoute
-  ContentApiIdIndexRoute: typeof ContentApiIdIndexRoute
+  ContentNameIdRoute: typeof ContentNameIdRouteWithChildren
+  ContentNameNewRoute: typeof ContentNameNewRoute
+  ContentNameIndexRoute: typeof ContentNameIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -294,11 +294,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ModulesNewRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/modules/$apiId': {
-      id: '/modules/$apiId'
-      path: '/modules/$apiId'
-      fullPath: '/modules/$apiId'
-      preLoaderRoute: typeof ModulesApiIdRouteImport
+    '/modules/$name': {
+      id: '/modules/$name'
+      path: '/modules/$name'
+      fullPath: '/modules/$name'
+      preLoaderRoute: typeof ModulesNameRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/articles/new': {
@@ -315,25 +315,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ArticlesIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/content/$apiId/': {
-      id: '/content/$apiId/'
-      path: '/content/$apiId'
-      fullPath: '/content/$apiId/'
-      preLoaderRoute: typeof ContentApiIdIndexRouteImport
+    '/content/$name/': {
+      id: '/content/$name/'
+      path: '/content/$name'
+      fullPath: '/content/$name/'
+      preLoaderRoute: typeof ContentNameIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/content/$apiId/new': {
-      id: '/content/$apiId/new'
-      path: '/content/$apiId/new'
-      fullPath: '/content/$apiId/new'
-      preLoaderRoute: typeof ContentApiIdNewRouteImport
+    '/content/$name/new': {
+      id: '/content/$name/new'
+      path: '/content/$name/new'
+      fullPath: '/content/$name/new'
+      preLoaderRoute: typeof ContentNameNewRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/content/$apiId/$id': {
-      id: '/content/$apiId/$id'
-      path: '/content/$apiId/$id'
-      fullPath: '/content/$apiId/$id'
-      preLoaderRoute: typeof ContentApiIdIdRouteImport
+    '/content/$name/$id': {
+      id: '/content/$name/$id'
+      path: '/content/$name/$id'
+      fullPath: '/content/$name/$id'
+      preLoaderRoute: typeof ContentNameIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/articles/$id/edit': {
@@ -343,12 +343,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ArticlesIdEditRouteImport
       parentRoute: typeof ArticlesIdRoute
     }
-    '/content/$apiId/$id/edit': {
-      id: '/content/$apiId/$id/edit'
+    '/content/$name/$id/edit': {
+      id: '/content/$name/$id/edit'
       path: '/edit'
-      fullPath: '/content/$apiId/$id/edit'
-      preLoaderRoute: typeof ContentApiIdIdEditRouteImport
-      parentRoute: typeof ContentApiIdIdRoute
+      fullPath: '/content/$name/$id/edit'
+      preLoaderRoute: typeof ContentNameIdEditRouteImport
+      parentRoute: typeof ContentNameIdRoute
     }
   }
 }
@@ -365,16 +365,16 @@ const ArticlesIdRouteWithChildren = ArticlesIdRoute._addFileChildren(
   ArticlesIdRouteChildren,
 )
 
-interface ContentApiIdIdRouteChildren {
-  ContentApiIdIdEditRoute: typeof ContentApiIdIdEditRoute
+interface ContentNameIdRouteChildren {
+  ContentNameIdEditRoute: typeof ContentNameIdEditRoute
 }
 
-const ContentApiIdIdRouteChildren: ContentApiIdIdRouteChildren = {
-  ContentApiIdIdEditRoute: ContentApiIdIdEditRoute,
+const ContentNameIdRouteChildren: ContentNameIdRouteChildren = {
+  ContentNameIdEditRoute: ContentNameIdEditRoute,
 }
 
-const ContentApiIdIdRouteWithChildren = ContentApiIdIdRoute._addFileChildren(
-  ContentApiIdIdRouteChildren,
+const ContentNameIdRouteWithChildren = ContentNameIdRoute._addFileChildren(
+  ContentNameIdRouteChildren,
 )
 
 const rootRouteChildren: RootRouteChildren = {
@@ -383,15 +383,15 @@ const rootRouteChildren: RootRouteChildren = {
   SignInRoute: SignInRoute,
   ArticlesIdRoute: ArticlesIdRouteWithChildren,
   ArticlesNewRoute: ArticlesNewRoute,
-  ModulesApiIdRoute: ModulesApiIdRoute,
+  ModulesNameRoute: ModulesNameRoute,
   ModulesNewRoute: ModulesNewRoute,
   ArticlesIndexRoute: ArticlesIndexRoute,
   DashboardIndexRoute: DashboardIndexRoute,
   MediaIndexRoute: MediaIndexRoute,
   ModulesIndexRoute: ModulesIndexRoute,
-  ContentApiIdIdRoute: ContentApiIdIdRouteWithChildren,
-  ContentApiIdNewRoute: ContentApiIdNewRoute,
-  ContentApiIdIndexRoute: ContentApiIdIndexRoute,
+  ContentNameIdRoute: ContentNameIdRouteWithChildren,
+  ContentNameNewRoute: ContentNameNewRoute,
+  ContentNameIndexRoute: ContentNameIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

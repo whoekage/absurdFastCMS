@@ -12,9 +12,9 @@ export const dashboardKeys = {
   /** The module catalog the dashboard aggregates over. */
   types: () => ['dashboard', 'types'] as const,
   /** The live row count for one type (drives a stat card). */
-  count: (apiId: string) => ['dashboard', 'count', apiId] as const,
+  count: (name: string) => ['dashboard', 'count', name] as const,
   /** The few newest entries of one type (fed into the "pick up where you left off" merge). */
-  recent: (apiId: string) => ['dashboard', 'recent', apiId] as const,
+  recent: (name: string) => ['dashboard', 'recent', name] as const,
 };
 
 /**
@@ -25,9 +25,9 @@ export const dashboardKeys = {
 const PREFERRED_TYPES = ['article', 'product', 'author'] as const;
 
 export function statCardTypes(defs: readonly ModuleDefinition[], cap = 3): string[] {
-  const present = new Set(defs.map((d) => d.apiId));
+  const present = new Set(defs.map((d) => d.name));
   const preferred = PREFERRED_TYPES.filter((t) => present.has(t));
-  const rest = defs.map((d) => d.apiId).filter((id) => !preferred.includes(id as never));
+  const rest = defs.map((d) => d.name).filter((id) => !preferred.includes(id as never));
   return [...preferred, ...rest].slice(0, cap);
 }
 
@@ -36,15 +36,15 @@ export function statCardTypes(defs: readonly ModuleDefinition[], cap = 3): strin
  * stat cards but a touch wider so the merge has enough candidates to surface the 3 globally-newest.
  */
 export function resumeSourceTypes(defs: readonly ModuleDefinition[], cap = 5): string[] {
-  const present = new Set(defs.map((d) => d.apiId));
+  const present = new Set(defs.map((d) => d.name));
   const preferred = PREFERRED_TYPES.filter((t) => present.has(t));
-  const rest = defs.map((d) => d.apiId).filter((id) => !preferred.includes(id as never));
+  const rest = defs.map((d) => d.name).filter((id) => !preferred.includes(id as never));
   return [...preferred, ...rest].slice(0, cap);
 }
 
 /** A recent entry, flattened for the resume strip (carries its source type so the card can link + label). */
 export interface RecentEntry {
-  apiId: string;
+  name: string;
   id: string;
   title: string;
   /** ISO `updated_at`, or null when the type has no timestamp / it is absent on the row. */
@@ -87,7 +87,7 @@ export function toRecentEntry(entry: Entry, def: ModuleDefinition): RecentEntry 
       : 'draft'
     : null;
   return {
-    apiId: def.apiId,
+    name: def.name,
     id: String(entry.id ?? ''),
     title: entryTitle(entry, def),
     updatedAt: typeof updated === 'string' ? updated : null,

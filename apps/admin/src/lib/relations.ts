@@ -13,8 +13,8 @@ import type {
 // The admin DISCOVERS relations straight from `def.relations` — the SDK projects them from the files-first
 // catalog (`client.modules`, which ports the api's old `projectDef`: owner relations PLUS the two-way
 // inverse side folded onto each target module). The admin no longer DECLARES relations over HTTP: the
-// runtime-DDL Builder routes (`POST /content-types/:apiId/relations`) were removed — a relation is declared
-// in the module's `schema/<apiId>.json` file (files-first).
+// runtime-DDL Builder routes (`POST /content-types/:name/relations`) were removed — a relation is declared
+// in the module's `schema/<name>.json` file (files-first).
 //
 // REMOVED: the old localStorage relation-config path AND the in-app relation Builder (the deleted
 // `RelationConfigEditor`). Every consumer derives relations from `def.relations` via

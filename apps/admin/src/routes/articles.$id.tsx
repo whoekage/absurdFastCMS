@@ -8,8 +8,8 @@ export const Route = createFileRoute('/articles/$id')({
     const isLeaf = matches[matches.length - 1]?.routeId === '/articles/$id';
     if (isLeaf) {
       throw redirect({
-        to: '/content/$apiId/$id',
-        params: { apiId: 'article', id: params.id },
+        to: '/content/$name/$id',
+        params: { name: 'article', id: params.id },
       });
     }
   },

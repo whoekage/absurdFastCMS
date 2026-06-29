@@ -6,23 +6,23 @@ export { errorMessage } from '@/lib/errors';
 /**
  * TanStack Query keys for the generic content manager, NAMESPACED PER module api_id.
  *
- * Every key is rooted at `['content', apiId, ...]` so a mutation on one type can invalidate only that
- * type's queries (`contentKeys.all(apiId)`) without disturbing any other type's cache. The schema
+ * Every key is rooted at `['content', name, ...]` so a mutation on one type can invalidate only that
+ * type's queries (`contentKeys.all(name)`) without disturbing any other type's cache. The schema
  * (`definition`) and the row data (`list` / `detail`) are sibling sub-trees under that root.
  */
 export const contentKeys = {
   /** Root for one type — invalidate this after any create/update/delete to refetch lists + details. */
-  all: (apiId: string) => ['content', apiId] as const,
+  all: (name: string) => ['content', name] as const,
   /** The module definition (schema) used to render columns + the form. */
-  definition: (apiId: string) => ['content', apiId, 'definition'] as const,
+  definition: (name: string) => ['content', name, 'definition'] as const,
   /**
    * A page of rows, keyed by the SERIALIZED list query (filters / sort / pagination) so each distinct
    * URL state caches independently. `params` is the SDK {@link QueryParams}-shaped object the route
    * derives from its typed search params; passing it whole keeps the key in lockstep with the request.
    */
-  list: (apiId: string, params: unknown) => ['content', apiId, 'list', params] as const,
+  list: (name: string, params: unknown) => ['content', name, 'list', params] as const,
   /** A single row by its public id. */
-  detail: (apiId: string, id: string) => ['content', apiId, 'detail', id] as const,
+  detail: (name: string, id: string) => ['content', name, 'detail', id] as const,
 };
 
 /** System columns are loaded + materialized but never writable — they lead the projected field list. */
@@ -50,6 +50,6 @@ export function fieldMap(def: ModuleDefinition): Map<string, FieldDefinition> {
 }
 
 /** A human-ish singular noun for a type's entries (used in headings / buttons / dialogs). */
-export function typeLabel(apiId: string): string {
-  return apiId;
+export function typeLabel(name: string): string {
+  return name;
 }

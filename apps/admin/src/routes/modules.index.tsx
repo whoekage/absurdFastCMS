@@ -49,12 +49,15 @@ function ModulesIndexPage() {
 
       <div className="grid gap-3 sm:grid-cols-2">
         {schemas.map((schema) => (
-          <Link key={schema.apiId} to="/modules/$apiId" params={{ apiId: schema.apiId }} className="block">
+          <Link key={schema.name} to="/modules/$name" params={{ name: schema.name }} className="block">
             <Card className="transition-colors hover:border-primary/50">
               <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
                 <CardTitle className="flex items-center gap-2 text-base">
                   <Boxes className="h-4 w-4 text-muted-foreground" />
-                  {schema.apiId}
+                  {schema.label || schema.name}
+                  {schema.label && schema.label !== schema.name && (
+                    <span className="font-mono text-xs font-normal text-muted-foreground">{schema.name}</span>
+                  )}
                 </CardTitle>
                 <div className="flex gap-1">
                   {schema.options?.draftAndPublish && <Badge variant="secondary">D&amp;P</Badge>}

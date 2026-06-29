@@ -79,9 +79,9 @@ function StatCards() {
   const cardTypes = statCardTypes(defs);
 
   const counts = useQueries({
-    queries: cardTypes.map((apiId) => ({
-      queryKey: dashboardKeys.count(apiId),
-      queryFn: ({ signal }: { signal: AbortSignal }) => api.count(apiId, undefined, signal),
+    queries: cardTypes.map((name) => ({
+      queryKey: dashboardKeys.count(name),
+      queryFn: ({ signal }: { signal: AbortSignal }) => api.count(name, undefined, signal),
     })),
   });
 
@@ -105,13 +105,13 @@ function StatCards() {
 
   if (defs.length === 0) {
     // The "New module" CTA was removed — schema is files-first now (no runtime-DDL Builder UI).
-    // A module appears here once its schema/<apiId>.json is committed and applied.
+    // A module appears here once its schema/<name>.json is committed and applied.
     return (
       <Card className="shadow-card flex items-center justify-between p-5">
         <div>
           <p className="font-display text-lg font-semibold">No modules yet</p>
           <p className="text-sm text-muted-foreground">
-            Define a module in <code className="font-mono">schema/&lt;apiId&gt;.json</code> to start seeing live counts here.
+            Define a module in <code className="font-mono">schema/&lt;name&gt;.json</code> to start seeing live counts here.
           </p>
         </div>
       </Card>
@@ -127,13 +127,13 @@ function StatCards() {
         label="Modules"
         caption="Defined in the builder"
       />
-      {cardTypes.map((apiId, i) => {
+      {cardTypes.map((name, i) => {
         const q = counts[i];
         return (
           <StatCard
-            key={apiId}
+            key={name}
             icon={FileStack}
-            to={apiId}
+            to={name}
             value={
               q?.isLoading
                 ? null
@@ -144,7 +144,7 @@ function StatCards() {
             errored={q?.isError ?? false}
             errorTitle={q?.isError ? errorMessage(q.error) : undefined}
             unit="entries"
-            label={apiId}
+            label={defs.find((d) => d.name === name)?.label || name}
             caption="Total entries"
           />
         );
@@ -197,7 +197,7 @@ function StatCard({ icon: Icon, value, unit, label, caption, to, errored, errorT
   );
 
   return to ? (
-    <Link to="/content/$apiId" params={{ apiId: to }} className="block">
+    <Link to="/content/$name" params={{ name: to }} className="block">
       {body}
     </Link>
   ) : (
@@ -233,13 +233,13 @@ function ResumeStrip() {
 
   const defs = typesQuery.data ?? [];
   const sourceTypes = resumeSourceTypes(defs);
-  const defByApiId = new Map<string, ModuleDefinition>(defs.map((d) => [d.apiId, d]));
+  const defByName = new Map<string, ModuleDefinition>(defs.map((d) => [d.name, d]));
 
   const recentQueries = useQueries({
-    queries: sourceTypes.map((apiId) => ({
-      queryKey: dashboardKeys.recent(apiId),
+    queries: sourceTypes.map((name) => ({
+      queryKey: dashboardKeys.recent(name),
       queryFn: ({ signal }: { signal: AbortSignal }) =>
-        api.list(apiId, { sort: ['updated_at:desc'], pagination: { pageSize: 3 } }, signal),
+        api.list(name, { sort: ['updated_at:desc'], pagination: { pageSize: 3 } }, signal),
     })),
   });
 
@@ -262,8 +262,8 @@ function ResumeStrip() {
   }
 
   const groups: RecentEntry[][] = recentQueries.map((q, i) => {
-    const apiId = sourceTypes[i];
-    const def = apiId ? defByApiId.get(apiId) : undefined;
+    const name = sourceTypes[i];
+    const def = name ? defByName.get(name) : undefined;
     if (!def || !q.data) return [];
     return q.data.data.map((entry) => toRecentEntry(entry, def));
   });
@@ -285,7 +285,7 @@ function ResumeStrip() {
   return (
     <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
       {recent.map((entry) => (
-        <ResumeCard key={`${entry.apiId}:${entry.id}`} entry={entry} />
+        <ResumeCard key={`${entry.name}:${entry.id}`} entry={entry} />
       ))}
     </div>
   );
@@ -295,15 +295,15 @@ function ResumeCard({ entry }: { entry: RecentEntry }) {
   const edited = relativeTime(entry.updatedAt);
   return (
     <Link
-      to="/content/$apiId/$id/edit"
-      params={{ apiId: entry.apiId, id: entry.id }}
+      to="/content/$name/$id/edit"
+      params={{ name: entry.name, id: entry.id }}
       className="block"
     >
       <Card className="shadow-card flex h-full flex-col gap-3 p-5 transition-shadow hover:shadow-pop">
         <div className="flex items-center justify-between gap-2">
           <span className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
             <FileStack className="h-3.5 w-3.5" />
-            {entry.apiId}
+            {entry.name}
           </span>
           {entry.status !== null && <StatusPill status={entry.status} />}
         </div>

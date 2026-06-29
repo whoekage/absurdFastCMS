@@ -12,7 +12,7 @@ export interface Crumb {
 
 /**
  * Derive breadcrumbs from the current matched route + its params, e.g.:
- *   /content/$apiId/$id/edit  with { apiId: 'article', id: '3' }
+ *   /content/$name/$id/edit  with { name: 'article', id: '3' }
  *     -> Content / article / #3 / Edit
  *
  * We read the LEAF match (the most specific route) — its `routeId` selects a builder below and its
@@ -32,7 +32,7 @@ const CONTENT: Crumb = { label: 'Content', to: '/' };
 
 /** Map a leaf route id (from routeTree.gen) + its params to an ordered crumb list. */
 function crumbsForRoute(routeId: string, params: Record<string, string | undefined>): Crumb[] {
-  const apiId = params.apiId;
+  const name = params.name;
   const id = params.id;
 
   switch (routeId) {
@@ -41,14 +41,14 @@ function crumbsForRoute(routeId: string, params: Record<string, string | undefin
       return [{ label: 'Lua' }, { label: 'Dashboard', to: '/dashboard' }];
 
     // --- Generic content manager (schema-driven) ---
-    case '/content/$apiId/':
-      return [CONTENT, typeCrumb(apiId)];
-    case '/content/$apiId/new':
-      return [CONTENT, typeCrumb(apiId), { label: 'New' }];
-    case '/content/$apiId/$id':
-      return [CONTENT, typeCrumb(apiId), entryCrumb(apiId, id)];
-    case '/content/$apiId/$id/edit':
-      return [CONTENT, typeCrumb(apiId), entryCrumb(apiId, id), { label: 'Edit' }];
+    case '/content/$name/':
+      return [CONTENT, typeCrumb(name)];
+    case '/content/$name/new':
+      return [CONTENT, typeCrumb(name), { label: 'New' }];
+    case '/content/$name/$id':
+      return [CONTENT, typeCrumb(name), entryCrumb(name, id)];
+    case '/content/$name/$id/edit':
+      return [CONTENT, typeCrumb(name), entryCrumb(name, id), { label: 'Edit' }];
 
     // --- Legacy article routes ---
     case '/articles/':
@@ -72,14 +72,14 @@ function crumbsForRoute(routeId: string, params: Record<string, string | undefin
   }
 }
 
-function typeCrumb(apiId: string | undefined): Crumb {
-  if (!apiId) return { label: 'Content' };
-  return { label: apiId, to: '/content/$apiId', params: { apiId } };
+function typeCrumb(name: string | undefined): Crumb {
+  if (!name) return { label: 'Content' };
+  return { label: name, to: '/content/$name', params: { name } };
 }
 
-function entryCrumb(apiId: string | undefined, id: string | undefined): Crumb {
-  if (!apiId || !id) return { label: idLabel(id) };
-  return { label: idLabel(id), to: '/content/$apiId/$id', params: { apiId, id } };
+function entryCrumb(name: string | undefined, id: string | undefined): Crumb {
+  if (!name || !id) return { label: idLabel(id) };
+  return { label: idLabel(id), to: '/content/$name/$id', params: { name, id } };
 }
 
 function idLabel(id: string | undefined): string {

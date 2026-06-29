@@ -4,7 +4,7 @@ import {
   createEntry,
   dropContentType,
   expectToast,
-  uniqueApiId,
+  uniqueName,
 } from './helpers';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -14,12 +14,12 @@ import {
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 
 test.describe('content CRUD', () => {
-  const apiId = uniqueApiId('crud');
+  const name = uniqueName('crud');
 
   test.beforeAll(async ({ browser }) => {
     const page = await browser.newPage();
     // A string "title" (the search field) + a "body" text field.
-    await createContentType(page, apiId, [
+    await createContentType(page, name, [
       { name: 'title', cmsType: 'string' },
       { name: 'body', cmsType: 'text' },
     ]);
@@ -28,7 +28,7 @@ test.describe('content CRUD', () => {
 
   test.afterAll(async ({ browser }) => {
     const page = await browser.newPage();
-    await dropContentType(page, apiId);
+    await dropContentType(page, name);
     await page.close();
   });
 
@@ -37,32 +37,32 @@ test.describe('content CRUD', () => {
     const editedTitle = `${title} (edited)`;
 
     // CREATE via the UI form.
-    await createEntry(page, apiId, { title, body: 'first body' });
+    await createEntry(page, name, { title, body: 'first body' });
     await expectToast(page, 'Entry created');
 
     // SEE IT IN THE LIST.
-    await page.goto(`/content/${apiId}`);
+    await page.goto(`/content/${name}`);
     const row = page.getByRole('row', { name: new RegExp(escapeRegExp(title)) });
     await expect(row).toBeVisible();
 
     // OPEN IT (the view page) via the row's "View" action.
     await row.getByRole('link', { name: 'View' }).click();
-    await expect(page).toHaveURL(new RegExp(`/content/${apiId}/\\d+$`));
+    await expect(page).toHaveURL(new RegExp(`/content/${name}/\\d+$`));
     await expect(page.getByText(title)).toBeVisible();
 
     // EDIT a field.
     await page.getByRole('link', { name: 'Edit' }).click();
-    await expect(page).toHaveURL(new RegExp(`/content/${apiId}/\\d+/edit$`));
+    await expect(page).toHaveURL(new RegExp(`/content/${name}/\\d+/edit$`));
     await page.locator('#field-title').fill(editedTitle);
     await page.getByRole('button', { name: 'Save changes' }).click();
     await expectToast(page, 'Entry updated');
 
     // VERIFY THE CHANGE on the view page.
-    await expect(page).toHaveURL(new RegExp(`/content/${apiId}/\\d+$`));
+    await expect(page).toHaveURL(new RegExp(`/content/${name}/\\d+$`));
     await expect(page.getByText(editedTitle)).toBeVisible();
 
     // DELETE it from the list (per-row trash → confirm dialog).
-    await page.goto(`/content/${apiId}`);
+    await page.goto(`/content/${name}`);
     const editedRow = page.getByRole('row', { name: new RegExp(escapeRegExp(editedTitle)) });
     await expect(editedRow).toBeVisible();
     await editedRow.getByRole('button', { name: 'Delete' }).click();

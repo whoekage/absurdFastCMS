@@ -11,18 +11,18 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/toast';
 
-export const Route = createFileRoute('/content/$apiId/new')({
+export const Route = createFileRoute('/content/$name/new')({
   component: NewEntryPage,
 });
 
 function NewEntryPage() {
-  const { apiId } = Route.useParams();
+  const { name } = Route.useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const defQuery = useQuery({
-    queryKey: contentKeys.definition(apiId),
-    queryFn: ({ signal }) => api.modules.get(apiId, signal),
+    queryKey: contentKeys.definition(name),
+    queryFn: ({ signal }) => api.modules.get(name, signal),
     retry: (count, err) => !(err instanceof NotFoundError) && count < 3,
   });
 
@@ -30,33 +30,33 @@ function NewEntryPage() {
   const relationFields = relationFieldsFromDef(defQuery.data);
 
   const createMutation = useMutation({
-    mutationFn: (body: WriteBody) => api.create(apiId, body),
+    mutationFn: (body: WriteBody) => api.create(name, body),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: contentKeys.all(apiId) });
+      await queryClient.invalidateQueries({ queryKey: contentKeys.all(name) });
       toast.success('Entry created');
-      void navigate({ to: '/content/$apiId', params: { apiId } });
+      void navigate({ to: '/content/$name', params: { name } });
     },
     onError: (err) => toast.error(errorMessage(err)),
   });
 
   if (defQuery.error instanceof NotFoundError) {
-    return <UnknownType apiId={apiId} />;
+    return <UnknownType name={name} />;
   }
 
   return (
     <section className="mx-auto max-w-2xl space-y-6">
       <div>
         <Button asChild variant="ghost" size="sm" className="-ml-2">
-          <Link to="/content/$apiId" params={{ apiId }}>
+          <Link to="/content/$name" params={{ name }}>
             <ChevronLeft className="h-4 w-4" />
-            Back to {apiId}
+            Back to {name}
           </Link>
         </Button>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>New {apiId}</CardTitle>
+          <CardTitle>New {name}</CardTitle>
         </CardHeader>
         <CardContent>
           {defQuery.isLoading ? (
@@ -72,10 +72,10 @@ function NewEntryPage() {
               initialValues={buildInitialValues(defQuery.data)}
               relationFields={relationFields}
               initialRelations={buildInitialRelations(relationFields)}
-              submitLabel={`Create ${apiId}`}
+              submitLabel={`Create ${name}`}
               pending={createMutation.isPending}
               onSubmit={(body) => createMutation.mutate(body)}
-              onCancel={() => void navigate({ to: '/content/$apiId', params: { apiId } })}
+              onCancel={() => void navigate({ to: '/content/$name', params: { name } })}
             />
           )}
         </CardContent>

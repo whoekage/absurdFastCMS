@@ -4,8 +4,8 @@ import { createFileRoute, redirect } from '@tanstack/react-router';
 export const Route = createFileRoute('/articles/$id/edit')({
   beforeLoad: ({ params }) => {
     throw redirect({
-      to: '/content/$apiId/$id/edit',
-      params: { apiId: 'article', id: params.id },
+      to: '/content/$name/$id/edit',
+      params: { name: 'article', id: params.id },
     });
   },
 });

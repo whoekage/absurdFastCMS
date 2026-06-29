@@ -33,8 +33,8 @@ function ChangeRow({ change }: { change: Change }) {
 
 interface DiffPreviewProps {
   preview: PreviewResult;
-  /** Module apiId — used in the "commit this file" reminder. */
-  apiId: string;
+  /** Module name — used in the "commit this file" reminder. */
+  name: string;
   allowDestructive: boolean;
   onAllowDestructiveChange: (value: boolean) => void;
 }
@@ -44,7 +44,7 @@ interface DiffPreviewProps {
  * / data-dependent → gated behind an explicit "apply anyway" ack; FORBIDDEN → can never apply), the
  * generated `schema.ts` source, and a dev-time reminder to commit that file to git (the source of truth).
  */
-export function DiffPreview({ preview, apiId, allowDestructive, onAllowDestructiveChange }: DiffPreviewProps) {
+export function DiffPreview({ preview, name, allowDestructive, onAllowDestructiveChange }: DiffPreviewProps) {
   const blocked = preview.blocked;
   const forbidden = blocked.filter((c) => c.risk === 'forbidden');
   const ackable = blocked.filter((c) => c.risk !== 'forbidden');
@@ -119,7 +119,7 @@ export function DiffPreview({ preview, apiId, allowDestructive, onAllowDestructi
       <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
         <GitCommit className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
-          On apply, the server writes <code className="text-foreground">modules/{apiId}/schema.ts</code> and
+          On apply, the server writes <code className="text-foreground">modules/{name}/schema.ts</code> and
           migrates the database. Commit that file to git — it is the source of truth (a fresh deploy rebuilds
           from it).
         </span>

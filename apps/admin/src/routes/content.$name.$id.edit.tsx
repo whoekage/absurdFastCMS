@@ -22,18 +22,18 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/toast';
 
-export const Route = createFileRoute('/content/$apiId/$id/edit')({
+export const Route = createFileRoute('/content/$name/$id/edit')({
   component: EditEntryPage,
 });
 
 function EditEntryPage() {
-  const { apiId, id } = Route.useParams();
+  const { name, id } = Route.useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const defQuery = useQuery({
-    queryKey: contentKeys.definition(apiId),
-    queryFn: ({ signal }) => api.modules.get(apiId, signal),
+    queryKey: contentKeys.definition(name),
+    queryFn: ({ signal }) => api.modules.get(name, signal),
     retry: (count, err) => !(err instanceof NotFoundError) && count < 3,
   });
 
@@ -49,27 +49,27 @@ function EditEntryPage() {
   const detailQuery = useQuery({
     // Key includes the populate spec so the edit row (with related rows) caches separately from the
     // bare detail-view fetch.
-    queryKey: [...contentKeys.detail(apiId, id), { populate, i18n: isI18n }],
+    queryKey: [...contentKeys.detail(name, id), { populate, i18n: isI18n }],
     // i18n: address the variant by physical id without a locale predicate (locale='*'), else a
     // non-default-locale variant would 404 under the default-locale single-item gate.
     queryFn: ({ signal }) =>
-      api.findOne(apiId, id, { ...(populate ? { populate } : {}), ...(isI18n ? { locale: '*' as const } : {}) }, signal),
+      api.findOne(name, id, { ...(populate ? { populate } : {}), ...(isI18n ? { locale: '*' as const } : {}) }, signal),
     enabled: defQuery.isSuccess,
     retry: (count, err) => !(err instanceof NotFoundError) && count < 3,
   });
 
   const updateMutation = useMutation({
-    mutationFn: (body: WriteBody) => api.update(apiId, id, body),
+    mutationFn: (body: WriteBody) => api.update(name, id, body),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: contentKeys.all(apiId) });
+      await queryClient.invalidateQueries({ queryKey: contentKeys.all(name) });
       toast.success('Entry updated');
-      void navigate({ to: '/content/$apiId/$id', params: { apiId, id } });
+      void navigate({ to: '/content/$name/$id', params: { name, id } });
     },
     onError: (err) => toast.error(errorMessage(err)),
   });
 
   if (defQuery.error instanceof NotFoundError) {
-    return <UnknownType apiId={apiId} />;
+    return <UnknownType name={name} />;
   }
 
   const def = defQuery.data;
@@ -81,7 +81,7 @@ function EditEntryPage() {
     <section className="mx-auto max-w-2xl space-y-6">
       <div>
         <Button asChild variant="ghost" size="sm" className="-ml-2">
-          <Link to="/content/$apiId/$id" params={{ apiId, id }}>
+          <Link to="/content/$name/$id" params={{ name, id }}>
             <ChevronLeft className="h-4 w-4" />
             Back
           </Link>
@@ -91,7 +91,7 @@ function EditEntryPage() {
       <Card className="shadow-card">
         <CardHeader>
           <CardTitle className="font-display">
-            Edit {apiId} <span className="font-mono text-muted-foreground">#{id}</span>
+            Edit {name} <span className="font-mono text-muted-foreground">#{id}</span>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -117,7 +117,7 @@ function EditEntryPage() {
               pending={updateMutation.isPending}
               onSubmit={(body) => updateMutation.mutate(body)}
               onCancel={() =>
-                void navigate({ to: '/content/$apiId/$id', params: { apiId, id } })
+                void navigate({ to: '/content/$name/$id', params: { name, id } })
               }
             />
           )}

@@ -77,7 +77,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
-export const Route = createFileRoute('/content/$apiId/')({
+export const Route = createFileRoute('/content/$name/')({
   // All list state (search / filters / sort / page / pageSize) is held in TYPED SEARCH PARAMS so the
   // URL is shareable and back/forward navigates between states. View prefs (column visibility /
   // density) and ephemeral row selection are NOT in the URL — they live in localStorage / component
@@ -90,7 +90,7 @@ export const Route = createFileRoute('/content/$apiId/')({
 const SELECT_COLUMN_ID = '__select__';
 
 function EntryListPage() {
-  const { apiId } = Route.useParams();
+  const { name } = Route.useParams();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
@@ -101,10 +101,10 @@ function EntryListPage() {
   const [confirmBulk, setConfirmBulk] = useState(false);
   const [bulkPending, setBulkPending] = useState(false);
 
-  // View prefs persisted per type (localStorage keyed by apiId). Row selection is intentionally
+  // View prefs persisted per type (localStorage keyed by name). Row selection is intentionally
   // ephemeral (cleared on delete / page change / unmount).
-  const [columnVisibility, setColumnVisibility] = useColumnVisibility(apiId);
-  const [density, setDensity] = useDensity(apiId);
+  const [columnVisibility, setColumnVisibility] = useColumnVisibility(name);
+  const [density, setDensity] = useDensity(name);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   // Draft & Publish status filter (D&P types only). 'draft' is the admin default so newly-created
   // drafts are immediately visible to publish; 'published' switches to the live view.
@@ -114,12 +114,12 @@ function EntryListPage() {
   const [localeFilter, setLocaleFilter] = useState<string>('*');
 
   // Row selection is scoped to the exact result set: when ANYTHING that changes which rows are shown
-  // changes — the module (the route reuses this component instance, so apiId can change without
+  // changes — the module (the route reuses this component instance, so name can change without
   // a remount), the page, OR the query (q/filters/sort/pageSize, which can mutate the result set while
   // staying on page 1) — drop selection. Otherwise stale ids leak: getRowId uses the per-type public
   // id, so ids collide across types/filters and a row could render pre-selected against the wrong set.
   // Tracked via a ref so the effect only fires on an actual transition (not initial mount).
-  const selectionScope = `${apiId}|${JSON.stringify(search)}`;
+  const selectionScope = `${name}|${JSON.stringify(search)}`;
   const lastSelectionScope = useRef(selectionScope);
   useEffect(() => {
     if (lastSelectionScope.current !== selectionScope) {
@@ -136,8 +136,8 @@ function EntryListPage() {
   };
 
   const defQuery = useQuery({
-    queryKey: contentKeys.definition(apiId),
-    queryFn: ({ signal }) => api.modules.get(apiId, signal),
+    queryKey: contentKeys.definition(name),
+    queryFn: ({ signal }) => api.modules.get(name, signal),
     retry: (count, err) => !(err instanceof NotFoundError) && count < 3,
   });
 
@@ -165,16 +165,16 @@ function EntryListPage() {
     : null;
 
   const listQuery = useQuery({
-    queryKey: contentKeys.list(apiId, queryParams),
-    queryFn: ({ signal }) => api.list(apiId, queryParams ?? {}, signal),
+    queryKey: contentKeys.list(name, queryParams),
+    queryFn: ({ signal }) => api.list(name, queryParams ?? {}, signal),
     placeholderData: keepPreviousData,
     enabled: defQuery.isSuccess && queryParams !== null,
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number | string) => api.delete(apiId, id),
+    mutationFn: (id: number | string) => api.delete(name, id),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: contentKeys.all(apiId) });
+      await queryClient.invalidateQueries({ queryKey: contentKeys.all(name) });
       toast.success(`Entry deleted`);
       setDeleteTarget(null);
     },
@@ -279,12 +279,12 @@ function EntryListPage() {
         return (
           <div className="flex justify-end gap-1">
             <Button asChild variant="ghost" size="icon" title="View">
-              <Link to="/content/$apiId/$id" params={{ apiId, id }}>
+              <Link to="/content/$name/$id" params={{ name, id }}>
                 <Eye className="h-4 w-4" />
               </Link>
             </Button>
             <Button asChild variant="ghost" size="icon" title="Edit">
-              <Link to="/content/$apiId/$id/edit" params={{ apiId, id }}>
+              <Link to="/content/$name/$id/edit" params={{ name, id }}>
                 <Pencil className="h-4 w-4" />
               </Link>
             </Button>
@@ -304,7 +304,7 @@ function EntryListPage() {
     return [select, ...data, ...relationCols, ...statusCol, actions];
     // `search` drives header sort indicators; `byName`/`dataColumns` derive from the loaded def.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataColumns, byName, relationColumns, search, apiId, isDraftPublish]);
+  }, [dataColumns, byName, relationColumns, search, name, isDraftPublish]);
 
   const table = useReactTable({
     data: rows,
@@ -320,7 +320,7 @@ function EntryListPage() {
 
   // Unknown module → friendly 404-ish state.
   if (defQuery.error instanceof NotFoundError) {
-    return <UnknownType apiId={apiId} />;
+    return <UnknownType name={name} />;
   }
 
   if (defQuery.isLoading) {
@@ -359,12 +359,12 @@ function EntryListPage() {
   // while successfully-deleted rows are dropped from the selection.
   async function runBulkDelete() {
     setBulkPending(true);
-    const results = await Promise.allSettled(selectedIds.map((id) => api.delete(apiId, id)));
+    const results = await Promise.allSettled(selectedIds.map((id) => api.delete(name, id)));
     const failedIds = selectedIds.filter((_, i) => results[i]?.status === 'rejected');
     const failed = failedIds.length;
     const ok = results.length - failed;
 
-    await queryClient.invalidateQueries({ queryKey: contentKeys.all(apiId) });
+    await queryClient.invalidateQueries({ queryKey: contentKeys.all(name) });
     // Keep only the failed rows selected so the operator can immediately retry the exact set.
     setRowSelection(Object.fromEntries(failedIds.map((id) => [id, true])));
     setConfirmBulk(false);
@@ -387,19 +387,19 @@ function EntryListPage() {
     <section className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="font-display text-2xl font-semibold tracking-tight">{apiId}</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">{def?.label || name}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {total !== undefined ? (
               <>
                 <span className="font-mono">{total}</span> entr{total === 1 ? 'y' : 'ies'}
               </>
             ) : (
-              `Manage ${apiId} entries`
+              `Manage ${name} entries`
             )}
           </p>
         </div>
         <Button asChild>
-          <Link to="/content/$apiId/new" params={{ apiId }}>
+          <Link to="/content/$name/new" params={{ name }}>
             <Plus className="h-4 w-4" />
             New entry
           </Link>
@@ -655,7 +655,7 @@ function EntryListPage() {
           <DialogHeader>
             <DialogTitle>Delete entry</DialogTitle>
             <DialogDescription>
-              Delete {apiId} #{deleteTarget ? String(deleteTarget.id) : ''}? This cannot be undone.
+              Delete {name} #{deleteTarget ? String(deleteTarget.id) : ''}? This cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -685,7 +685,7 @@ function EntryListPage() {
           <DialogHeader>
             <DialogTitle>Delete {selectedCount} selected</DialogTitle>
             <DialogDescription>
-              Delete {selectedCount} {apiId} entr{selectedCount === 1 ? 'y' : 'ies'}? This cannot be
+              Delete {selectedCount} {name} entr{selectedCount === 1 ? 'y' : 'ies'}? This cannot be
               undone.
             </DialogDescription>
           </DialogHeader>

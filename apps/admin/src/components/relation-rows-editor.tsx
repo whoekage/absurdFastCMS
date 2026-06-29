@@ -23,7 +23,7 @@ const KIND_OPTIONS: { value: RelationKind; label: string }[] = [
 interface RelationRowsEditorProps {
   relations: RelationDraft[];
   onChange: (next: RelationDraft[]) => void;
-  /** Candidate target module apiIds (includes this module for self-refs). */
+  /** Candidate target module moduleNames (includes this module for self-refs). */
   targets: readonly string[];
 }
 

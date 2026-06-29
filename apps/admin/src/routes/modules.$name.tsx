@@ -10,19 +10,19 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/toast';
 
-export const Route = createFileRoute('/modules/$apiId')({
+export const Route = createFileRoute('/modules/$name')({
   component: EditModulePage,
 });
 
 function EditModulePage() {
-  const { apiId } = Route.useParams();
+  const { name } = Route.useParams();
   const navigate = useNavigate();
   const query = useQuery({
     queryKey: builderKeys.list(),
     queryFn: ({ signal }) => listModules(signal),
   });
 
-  const schema = query.data?.schemas.find((s) => s.apiId === apiId);
+  const schema = query.data?.schemas.find((s) => s.name === name);
 
   return (
     <section className="mx-auto max-w-3xl space-y-6">
@@ -36,34 +36,34 @@ function EditModulePage() {
       {query.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {query.isError && <p className="text-sm text-destructive">Failed to load the schema catalog.</p>}
       {query.data && !schema && (
-        <p className="text-sm text-destructive">Module &quot;{apiId}&quot; does not exist.</p>
+        <p className="text-sm text-destructive">Module &quot;{name}&quot; does not exist.</p>
       )}
 
       {query.data && schema && (
         <>
           <Card>
             <CardHeader>
-              <CardTitle>Edit module: {schema.apiId}</CardTitle>
+              <CardTitle>Edit module: {schema.label || schema.name}</CardTitle>
             </CardHeader>
             <CardContent>
               <ModuleForm
                 mode="edit"
                 initial={moduleToForm(schema)}
                 version={query.data.version}
-                allModuleApiIds={query.data.schemas.map((s) => s.apiId).filter((id) => id !== apiId)}
+                allModuleNames={query.data.schemas.map((s) => s.name).filter((id) => id !== name)}
                 onSaved={() => void navigate({ to: '/modules' })}
               />
             </CardContent>
           </Card>
 
-          <DeleteModuleCard apiId={apiId} version={query.data.version} />
+          <DeleteModuleCard name={name} version={query.data.version} />
         </>
       )}
     </section>
   );
 }
 
-function DeleteModuleCard({ apiId, version }: { apiId: string; version: string }) {
+function DeleteModuleCard({ name, version }: { name: string; version: string }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
@@ -74,10 +74,10 @@ function DeleteModuleCard({ apiId, version }: { apiId: string; version: string }
     setError(null);
     setBusy(true);
     try {
-      await deleteModule(apiId, version, { idempotencyKey: crypto.randomUUID() });
+      await deleteModule(name, version, { idempotencyKey: crypto.randomUUID() });
       await queryClient.invalidateQueries({ queryKey: moduleKeys.all });
       await queryClient.invalidateQueries({ queryKey: builderKeys.all });
-      toast.success(`Module "${apiId}" deleted`);
+      toast.success(`Module "${name}" deleted`);
       void navigate({ to: '/modules' });
     } catch (err) {
       // 409 with a relation message ("referenced by …; remove the relation(s) first"), 412 stale, etc.
@@ -110,7 +110,7 @@ function DeleteModuleCard({ apiId, version }: { apiId: string; version: string }
           <div className="flex items-center gap-2">
             <Button variant="destructive" onClick={() => void doDelete()} disabled={busy}>
               <Trash2 className="h-4 w-4" />
-              {busy ? 'Deleting…' : `Yes, delete "${apiId}"`}
+              {busy ? 'Deleting…' : `Yes, delete "${name}"`}
             </Button>
             <Button variant="outline" onClick={() => setConfirming(false)} disabled={busy}>
               Cancel

@@ -16,7 +16,7 @@ export { errorMessage } from '@/lib/errors';
 export const builderKeys = {
   all: ['builder'] as const,
   list: () => ['builder', 'list'] as const,
-  detail: (apiId: string) => ['builder', 'detail', apiId] as const,
+  detail: (name: string) => ['builder', 'detail', name] as const,
 };
 
 // Postgres identifier rule the API enforces: starts with a letter/underscore, then word/$ chars, ≤63 bytes.
@@ -24,7 +24,7 @@ export const builderKeys = {
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 const MAX_IDENTIFIER_LENGTH = 63;
 
-/** Validate an apiId / field name / relation field; returns an error message or null when valid. */
+/** Validate an name / field name / relation field; returns an error message or null when valid. */
 export function validateIdentifier(value: string, label = 'Name'): string | null {
   if (value.length === 0) return `${label} is required`;
   if (value.length > MAX_IDENTIFIER_LENGTH) return `${label} must be ≤ ${MAX_IDENTIFIER_LENGTH} characters`;
@@ -234,7 +234,7 @@ export function relationFromSchema(rel: RelationSchema): RelationDraft {
   };
 }
 
-/** Validate a relation draft against the available module apiIds; returns an error or null. */
+/** Validate a relation draft against the available module moduleNames; returns an error or null. */
 export function validateRelationDraft(draft: RelationDraft, targets: readonly string[]): string | null {
   const fieldError = validateIdentifier(draft.field, 'Relation field');
   if (fieldError) return fieldError;
@@ -266,7 +266,9 @@ export function draftToRelation(draft: RelationDraft): Omit<RelationSchema, 'id'
 export interface ModuleFormState {
   /** Backend stable id (absent on create). */
   id?: string;
-  apiId: string;
+  name: string;
+  /** Editable human display name; falls back to `name` in the UI when blank. */
+  label: string;
   draftAndPublish: boolean;
   i18n: boolean;
   fields: FieldDraft[];
@@ -275,14 +277,15 @@ export interface ModuleFormState {
 
 /** A blank create-form state. */
 export function emptyModuleForm(): ModuleFormState {
-  return { apiId: '', draftAndPublish: false, i18n: false, fields: [emptyFieldDraft()], relations: [] };
+  return { name: '', label: '', draftAndPublish: false, i18n: false, fields: [emptyFieldDraft()], relations: [] };
 }
 
 /** Seed an edit-form state from a loaded module schema (preserves ids; round-trips non-authorable fields). */
 export function moduleToForm(schema: ModuleSchema): ModuleFormState {
   return {
     id: schema.id,
-    apiId: schema.apiId,
+    name: schema.name,
+    label: schema.label ?? '',
     draftAndPublish: schema.options?.draftAndPublish ?? false,
     i18n: schema.options?.i18n ?? false,
     fields: schema.fields.map(draftFromField),
@@ -293,23 +296,25 @@ export function moduleToForm(schema: ModuleSchema): ModuleFormState {
 /** Lower a whole form state to the {@link ModuleDraft} PUT/preview payload. */
 export function formToModuleDraft(state: ModuleFormState): ModuleDraft {
   const draft: ModuleDraft = {
-    apiId: state.apiId.trim(),
+    name: state.name.trim(),
     options: { draftAndPublish: state.draftAndPublish, i18n: state.i18n },
     fields: state.fields.map(draftToField),
   };
+  const label = state.label.trim();
+  if (label.length > 0) draft.label = label;
   if (state.id !== undefined) draft.id = state.id;
   if (state.relations.length > 0) draft.relations = state.relations.map(draftToRelation);
   return draft;
 }
 
 /** Validate the whole form; returns the first error message or null. */
-export function validateModuleForm(state: ModuleFormState, allModuleApiIds: readonly string[]): string | null {
-  const apiIdError = validateIdentifier(state.apiId, 'API ID');
-  if (apiIdError) return apiIdError;
-  // On CREATE (no stable id yet), the apiId must be free — PUT is an upsert, so a taken apiId would
+export function validateModuleForm(state: ModuleFormState, allModuleNames: readonly string[]): string | null {
+  const nameError = validateIdentifier(state.name, 'Name');
+  if (nameError) return nameError;
+  // On CREATE (no stable id yet), the name must be free — PUT is an upsert, so a taken name would
   // silently edit the existing module instead of creating a new one.
-  if (state.id === undefined && allModuleApiIds.includes(state.apiId.trim())) {
-    return `A module with API ID "${state.apiId.trim()}" already exists`;
+  if (state.id === undefined && allModuleNames.includes(state.name.trim())) {
+    return `A module named "${state.name.trim()}" already exists`;
   }
 
   const authorable = state.fields.filter((f) => !f.raw);
@@ -326,7 +331,7 @@ export function validateModuleForm(state: ModuleFormState, allModuleApiIds: read
     }
   }
   // Relations may target this module (self-ref) plus any existing module.
-  const targets = [...new Set([state.apiId.trim(), ...allModuleApiIds])].filter((t) => t !== '');
+  const targets = [...new Set([state.name.trim(), ...allModuleNames])].filter((t) => t !== '');
   for (const r of state.relations) {
     const err = validateRelationDraft(r, targets);
     if (err) return err;

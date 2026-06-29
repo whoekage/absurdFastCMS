@@ -4,7 +4,7 @@ import {
   createEntry,
   dropContentType,
   selectOption,
-  uniqueApiId,
+  uniqueName,
 } from './helpers';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -24,28 +24,28 @@ import {
 const STATUSES = ['draft', 'published'] as const;
 
 test.describe('list filtering + search', () => {
-  const apiId = uniqueApiId('filter');
+  const name = uniqueName('filter');
 
   test.beforeAll(async ({ browser }) => {
     const page = await browser.newPage();
-    await createContentType(page, apiId, [
+    await createContentType(page, name, [
       { name: 'title', cmsType: 'string' },
       { name: 'status', cmsType: 'enumeration', enumValues: [...STATUSES] },
     ]);
-    await createEntry(page, apiId, { title: 'Apple pie' }, { status: 'published' });
-    await createEntry(page, apiId, { title: 'Apple cake' }, { status: 'draft' });
-    await createEntry(page, apiId, { title: 'Banana bread' }, { status: 'published' });
+    await createEntry(page, name, { title: 'Apple pie' }, { status: 'published' });
+    await createEntry(page, name, { title: 'Apple cake' }, { status: 'draft' });
+    await createEntry(page, name, { title: 'Banana bread' }, { status: 'published' });
     await page.close();
   });
 
   test.afterAll(async ({ browser }) => {
     const page = await browser.newPage();
-    await dropContentType(page, apiId);
+    await dropContentType(page, name);
     await page.close();
   });
 
   test('search ($containsi) + status filter narrows to the expected row', async ({ page }) => {
-    await page.goto(`/content/${apiId}`);
+    await page.goto(`/content/${name}`);
 
     // All three rows seeded.
     await expect(page.getByRole('row', { name: /Apple pie/ })).toBeVisible();

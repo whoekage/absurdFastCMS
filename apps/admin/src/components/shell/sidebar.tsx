@@ -37,8 +37,8 @@ export function Sidebar() {
   // dashboard's count cache (no duplicate fetches when both are mounted).
   const counts = useQueries({
     queries: defs.map((def) => ({
-      queryKey: ['dashboard', 'count', def.apiId] as const,
-      queryFn: ({ signal }: { signal: AbortSignal }) => api.count(def.apiId, undefined, signal),
+      queryKey: ['dashboard', 'count', def.name] as const,
+      queryFn: ({ signal }: { signal: AbortSignal }) => api.count(def.name, undefined, signal),
       staleTime: 30_000,
     })),
   });
@@ -102,13 +102,13 @@ export function Sidebar() {
               const c = counts[i];
               return (
                 <Link
-                  key={def.apiId}
-                  to="/content/$apiId"
-                  params={{ apiId: def.apiId }}
+                  key={def.name}
+                  to="/content/$name"
+                  params={{ name: def.name }}
                   className={navItem}
                 >
                   <FileStack className="h-4 w-4 shrink-0" />
-                  <span className="truncate">{def.apiId}</span>
+                  <span className="truncate">{def.label || def.name}</span>
                   <CountChip
                     loading={c?.isLoading ?? true}
                     errored={c?.isError ?? false}
@@ -123,7 +123,7 @@ export function Sidebar() {
 
       <div className={groupLabel}>System</div>
       <nav className="space-y-0.5 px-3 pb-2">
-        {/* Files-first Module Builder: create/edit/delete types → writes modules/<apiId>/schema.ts + migrates. */}
+        {/* Files-first Module Builder: create/edit/delete types → writes modules/<name>/schema.ts + migrates. */}
         <Link to="/modules" className={navItem}>
           <Boxes className="h-4 w-4 shrink-0" />
           Modules

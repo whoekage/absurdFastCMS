@@ -6,7 +6,7 @@ import { resolveApiBase } from './runtime-config.ts';
  * (consumers read modules, only the admin authors them), so this thin fetch client — NOT the SDK — owns
  * the gated `/builder/modules` protocol: ETag/`version` optimistic concurrency (If-Match), the
  * preview → apply destructive-change flow, and `Idempotency-Key` retries. The server writes
- * `modules/<apiId>/schema.ts` (the dev-committed source of truth), migrates, and live-swaps the engine.
+ * `modules/<name>/schema.ts` (the dev-committed source of truth), migrates, and live-swaps the engine.
  *
  * Auth: every call rides the better-auth session cookie (`credentials: 'include'`); the routes are gated
  * on `builder.manage`. A 401 surfaces as a {@link BuilderError} the caller can route to sign-in.
@@ -37,7 +37,7 @@ export interface FieldOptions {
   target?: string;
 }
 
-/** A field as it lives in `modules/<apiId>/schema.ts` — `id` is stable identity, `name` is the renamable key. */
+/** A field as it lives in `modules/<name>/schema.ts` — `id` is stable identity, `name` is the renamable key. */
 export interface FieldSchema {
   id: string;
   name: string;
@@ -55,12 +55,13 @@ export interface RelationSchema {
   inverseField?: string;
 }
 
-/** A whole module declaration (one schema file), as returned by GET /builder/modules[/:apiId] (carries ids). */
+/** A whole module declaration (one schema file), as returned by GET /builder/modules[/:name] (carries ids). */
 export interface ModuleSchema {
   id: string;
-  apiId: string;
+  name: string;
+  /** Editable human display name; `label ?? name` is what the admin shows. */
+  label?: string;
   collectionName?: string;
-  info?: { singularName?: string; pluralName?: string; displayName?: string };
   options?: { draftAndPublish?: boolean; i18n?: boolean };
   fields: FieldSchema[];
   relations?: RelationSchema[];
@@ -72,7 +73,8 @@ export interface ModuleSchema {
  */
 export interface ModuleDraft {
   id?: string;
-  apiId: string;
+  name: string;
+  label?: string;
   options?: { draftAndPublish?: boolean; i18n?: boolean };
   fields: Array<Omit<FieldSchema, 'id'> & { id?: string }>;
   relations?: Array<Omit<RelationSchema, 'id'> & { id?: string }>;
@@ -85,13 +87,13 @@ export type ChangeRisk = 'safe' | 'data-dependent' | 'destructive' | 'forbidden'
 export interface Change {
   kind: string;
   typeId: string;
-  apiId: string;
+  name: string;
   risk: ChangeRisk;
   field?: string;
   detail?: string;
 }
 
-/** POST /builder/modules/:apiId/preview result — a dry run (no write, no migrate). */
+/** POST /builder/modules/:name/preview result — a dry run (no write, no migrate). */
 export interface PreviewResult {
   ok: boolean;
   applied: Change[];
@@ -226,7 +228,7 @@ function toBuilderError(status: number, body: unknown): BuilderError {
 
 // ── API ──────────────────────────────────────────────────────────────────────────────────────────
 
-const enc = (apiId: string): string => encodeURIComponent(apiId);
+const enc = (name: string): string => encodeURIComponent(name);
 
 /** GET /builder/modules — the full applied catalog (schemas carry ids) + the catalog version (ETag). */
 export async function listModules(signal?: AbortSignal): Promise<CatalogResult> {
@@ -238,41 +240,41 @@ export async function listModules(signal?: AbortSignal): Promise<CatalogResult> 
   return { schemas: r.schemas, version: r.version };
 }
 
-/** GET /builder/modules/:apiId — one module's raw schema (with ids) + version. Throws 404 when unknown. */
-export async function getModule(apiId: string, signal?: AbortSignal): Promise<{ schema: ModuleSchema; version: string }> {
+/** GET /builder/modules/:name — one module's raw schema (with ids) + version. Throws 404 when unknown. */
+export async function getModule(name: string, signal?: AbortSignal): Promise<{ schema: ModuleSchema; version: string }> {
   const r = await request<{ schema: ModuleSchema; version: string }>({
     method: 'GET',
-    path: `/builder/modules/${enc(apiId)}`,
+    path: `/builder/modules/${enc(name)}`,
     ...(signal ? { signal } : {}),
   });
   return { schema: r.schema, version: r.version };
 }
 
-/** POST /builder/modules/:apiId/preview — a dry run: which changes would apply / be blocked + generated source. */
+/** POST /builder/modules/:name/preview — a dry run: which changes would apply / be blocked + generated source. */
 export async function previewModule(
-  apiId: string,
+  name: string,
   draft: ModuleDraft,
   allowDestructive: boolean,
   signal?: AbortSignal,
 ): Promise<PreviewResult> {
   return request<PreviewResult>({
     method: 'POST',
-    path: `/builder/modules/${enc(apiId)}/preview`,
+    path: `/builder/modules/${enc(name)}/preview`,
     body: { ...draft, allowDestructive },
     ...(signal ? { signal } : {}),
   });
 }
 
-/** PUT /builder/modules/:apiId — create-or-update: write the schema file, migrate, live-swap. */
+/** PUT /builder/modules/:name — create-or-update: write the schema file, migrate, live-swap. */
 export async function saveModule(
-  apiId: string,
+  name: string,
   draft: ModuleDraft,
   version: string,
   opts: { allowDestructive?: boolean; idempotencyKey?: string; signal?: AbortSignal } = {},
 ): Promise<SaveResult> {
   return request<SaveResult>({
     method: 'PUT',
-    path: `/builder/modules/${enc(apiId)}`,
+    path: `/builder/modules/${enc(name)}`,
     body: { ...draft, allowDestructive: opts.allowDestructive ?? false, version },
     version,
     ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
@@ -280,15 +282,15 @@ export async function saveModule(
   });
 }
 
-/** DELETE /builder/modules/:apiId — drop the module (always destructive; 409 if other modules reference it). */
+/** DELETE /builder/modules/:name — drop the module (always destructive; 409 if other modules reference it). */
 export async function deleteModule(
-  apiId: string,
+  name: string,
   version: string,
   opts: { idempotencyKey?: string; signal?: AbortSignal } = {},
 ): Promise<SaveResult> {
   return request<SaveResult>({
     method: 'DELETE',
-    path: `/builder/modules/${enc(apiId)}`,
+    path: `/builder/modules/${enc(name)}`,
     body: { allowDestructive: true, version },
     version,
     ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
