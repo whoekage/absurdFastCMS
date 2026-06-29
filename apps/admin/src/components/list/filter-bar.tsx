@@ -19,7 +19,7 @@ import { FilterValueInput } from './filter-value-input';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // The FILTER BAR: add / remove filter rows of (field → operator → value). The available operators
-// are GATED by the chosen field's cmsType (operatorsForField). Rows are combined with `$and`
+// are GATED by the chosen field's type (operatorsForField). Rows are combined with `$and`
 // downstream (buildFilters). All edits flow up via `onChange` — the parent commits them to the URL
 // search params (the canonical store).
 // ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ export function FilterBar({ def, byName, rows, onChange }: FilterBarProps) {
               </Select>
             </div>
 
-            {/* Operator picker — GATED by the field's cmsType. */}
+            {/* Operator picker — GATED by the field's type. */}
             <div className="w-48">
               <Select
                 value={op}
@@ -120,7 +120,7 @@ export function FilterBar({ def, byName, rows, onChange }: FilterBarProps) {
               </Select>
             </div>
 
-            {/* Value input — per cmsType + operator arity. */}
+            {/* Value input — per type + operator arity. */}
             <FilterValueInput
               field={field}
               op={op}

@@ -49,7 +49,7 @@ export interface FieldDraft {
   /** Backend stable id (absent = new field). */
   id?: string;
   name: string;
-  cmsType: CmsType;
+  type: CmsType;
   nullable: boolean;
   /** raw `default` value as typed (empty = unset). */
   defaultValue: string;
@@ -76,7 +76,7 @@ export function emptyFieldDraft(): FieldDraft {
   return {
     key: nextKey('field'),
     name: '',
-    cmsType: 'string',
+    type: 'string',
     nullable: true,
     defaultValue: '',
     enumValues: [],
@@ -107,7 +107,7 @@ function draftFromField(field: FieldSchema): FieldDraft {
     key: nextKey('field'),
     id: field.id,
     name: field.name,
-    cmsType: (isAuthorableField(field.type) ? field.type : 'string') as CmsType,
+    type: (isAuthorableField(field.type) ? field.type : 'string') as CmsType,
     nullable: field.options?.nullable ?? true,
     defaultValue: defaultToString(field.options?.default),
     enumValues: field.options?.values ? [...field.options.values] : [],
@@ -127,7 +127,7 @@ function validateFieldDraft(draft: FieldDraft): string | null {
   const nameError = validateIdentifier(draft.name, 'Field name');
   if (nameError) return nameError;
 
-  const meta = optionMetaFor(draft.cmsType);
+  const meta = optionMetaFor(draft.type);
   if (meta.enumValues) {
     const values = draft.enumValues.map((v) => v.trim()).filter((v) => v.length > 0);
     if (values.length === 0) return 'Enumeration needs at least one value';
@@ -150,9 +150,9 @@ function validateFieldDraft(draft: FieldDraft): string | null {
   return null;
 }
 
-/** Build the {@link FieldOptions} object for a draft (only the keys its cmsType honours). */
+/** Build the {@link FieldOptions} object for a draft (only the keys its type honours). */
 function draftOptions(draft: FieldDraft): FieldOptions {
-  const meta = optionMetaFor(draft.cmsType);
+  const meta = optionMetaFor(draft.type);
   const options: FieldOptions = { nullable: draft.nullable };
   if (meta.enumValues) {
     options.values = draft.enumValues.map((v) => v.trim()).filter((v) => v.length > 0);
@@ -173,16 +173,16 @@ function draftToField(draft: FieldDraft): Omit<FieldSchema, 'id'> & { id?: strin
   return {
     ...(draft.id !== undefined ? { id: draft.id } : {}),
     name: draft.name.trim(),
-    type: draft.cmsType,
+    type: draft.type,
     options: draftOptions(draft),
     localized: draft.localized,
   };
 }
 
-/** Interpret the raw `default` string for a draft according to its cmsType. */
+/** Interpret the raw `default` string for a draft according to its type. */
 function parseDefault(draft: FieldDraft): unknown {
   const raw = draft.defaultValue.trim();
-  switch (draft.cmsType) {
+  switch (draft.type) {
     case 'boolean':
       return raw === 'true' || raw === '1';
     case 'integer':

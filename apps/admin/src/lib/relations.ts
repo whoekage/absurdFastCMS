@@ -172,7 +172,7 @@ export function targetLabelField(
   if (configured) return configured;
   if (def) {
     const stringy = def.fields.find(
-      (f) => !f.system && (f.cmsType === 'string' || f.cmsType === 'text' || f.cmsType === 'email'),
+      (f) => !f.system && (f.type === 'string' || f.type === 'text' || f.type === 'email'),
     );
     if (stringy) return stringy.name;
   }

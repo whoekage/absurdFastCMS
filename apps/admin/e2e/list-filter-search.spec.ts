@@ -29,8 +29,8 @@ test.describe('list filtering + search', () => {
   test.beforeAll(async ({ browser }) => {
     const page = await browser.newPage();
     await createContentType(page, name, [
-      { name: 'title', cmsType: 'string' },
-      { name: 'status', cmsType: 'enumeration', enumValues: [...STATUSES] },
+      { name: 'title', type: 'string' },
+      { name: 'status', type: 'enumeration', enumValues: [...STATUSES] },
     ]);
     await createEntry(page, name, { title: 'Apple pie' }, { status: 'published' });
     await createEntry(page, name, { title: 'Apple cake' }, { status: 'draft' });

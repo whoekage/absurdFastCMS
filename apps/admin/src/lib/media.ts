@@ -3,7 +3,7 @@ import type { ModuleDefinition, FieldDefinition, FileAsset, WriteBody } from '@c
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // be-04 MEDIA — media-field discovery (API-driven) + write-body helpers, mirroring lib/relations.ts.
 //
-// A media field is a `cmsType: 'media'` FieldDefinition projected by the API; `multiple` (a conditional
+// A media field is a `type: 'media'` FieldDefinition projected by the API; `multiple` (a conditional
 // wire key) is its cardinality. The entry form discovers these from `def.fields` and renders a dedicated
 // <MediaPicker> per field (NOT the scalar input handler), then merges the picked asset id(s) straight
 // into the flat write body (single -> a number or null; multiple -> a number[] or []). Un-populated reads
@@ -19,7 +19,7 @@ export interface MediaFieldConfig {
 
 /** Is this field a media reference? */
 export function isMediaField(field: FieldDefinition): boolean {
-  return field.cmsType === 'media';
+  return field.type === 'media';
 }
 
 /** Derive the media-field configs for a module straight from its projected `def.fields`. */

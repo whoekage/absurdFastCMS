@@ -13,7 +13,7 @@ import type {
 // List state: filtering / search / sort / pagination, all driven from the route's TYPED SEARCH
 // PARAMS. This module is the single source of truth for three concerns:
 //
-//   1. OPERATOR GATING — which FilterOperators are valid for a given field's cmsType.
+//   1. OPERATOR GATING — which FilterOperators are valid for a given field's type.
 //   2. The Zod SEARCH-PARAM SCHEMA (`listSearchSchema`) the route validates with `validateSearch`.
 //   3. STATE → SDK QUERY mapping — turn the validated search params into a `QueryParams` the SDK
 //      `api.list` / `buildQueryString` understands (filters / sort / pagination).
@@ -26,9 +26,9 @@ import type {
 /** A coarse "kind" grouping cmsTypes by how they filter — drives operator + value-input choice. */
 export type FilterKind = 'text' | 'numeric' | 'date' | 'enum' | 'boolean';
 
-/** Map a cmsType to its {@link FilterKind}. The closed CmsType set means this `switch` is exhaustive. */
-function filterKind(cmsType: CmsType): FilterKind {
-  switch (cmsType) {
+/** Map a type to its {@link FilterKind}. The closed CmsType set means this `switch` is exhaustive. */
+function filterKind(type: CmsType): FilterKind {
+  switch (type) {
     case 'string':
     case 'text':
     case 'email':
@@ -63,8 +63,8 @@ const COMPONENT_KINDS = new Set<string>(['component', 'component-repeatable', 'd
 
 /** Resolve the {@link FilterKind} for a field. A be-05 component field is non-filterable -> 'text' fallback. */
 export function fieldFilterKind(field: FieldDefinition): FilterKind {
-  if (COMPONENT_KINDS.has(field.cmsType)) return 'text';
-  return filterKind(field.cmsType as CmsType);
+  if (COMPONENT_KINDS.has(field.type)) return 'text';
+  return filterKind(field.type as CmsType);
 }
 
 /**
@@ -78,7 +78,7 @@ export function isFilterableField(field: FieldDefinition): boolean {
   // rejects operators on); filtering by raw file id is not a meaningful admin operation — exclude it.
   // be-05: a component / component-repeatable / dynamiczone field is a structured jsonb tree — not a
   // scalar to filter on; exclude it from the field picker + search fallback.
-  return field.cmsType !== 'json' && field.cmsType !== 'array' && field.cmsType !== 'media' && !COMPONENT_KINDS.has(field.cmsType);
+  return field.type !== 'json' && field.type !== 'array' && field.type !== 'media' && !COMPONENT_KINDS.has(field.type);
 }
 
 /**
@@ -112,7 +112,7 @@ const OPERATORS_BY_KIND: Record<FilterKind, readonly FilterOperator[]> = {
   boolean: ['$eq', '$null', '$notNull'],
 };
 
-/** The operators a given field may use, derived from its cmsType. */
+/** The operators a given field may use, derived from its type. */
 export function operatorsForField(field: FieldDefinition): readonly FilterOperator[] {
   return OPERATORS_BY_KIND[fieldFilterKind(field)];
 }
@@ -230,7 +230,7 @@ export const EMPTY_LIST_SEARCH: ListSearch = {
  */
 export function searchField(def: ModuleDefinition): FieldDefinition | undefined {
   const userFields = def.fields.filter((f) => !f.system && isFilterableField(f));
-  const stringy = userFields.find((f) => f.cmsType === 'string' || f.cmsType === 'text');
+  const stringy = userFields.find((f) => f.type === 'string' || f.type === 'text');
   if (stringy) return stringy;
   return userFields.find((f) => fieldFilterKind(f) === 'text');
 }
@@ -241,7 +241,7 @@ function coerceValue(raw: string, field: FieldDefinition): string | number | boo
   if (kind === 'boolean') return raw === 'true';
   if (kind === 'numeric') {
     // integer / float coerce to a JS number; biginteger / decimal MUST stay strings (precision).
-    if (field.cmsType === 'integer' || field.cmsType === 'float') {
+    if (field.type === 'integer' || field.type === 'float') {
       const n = Number(raw);
       return Number.isFinite(n) ? n : raw;
     }

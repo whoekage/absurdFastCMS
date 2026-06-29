@@ -50,7 +50,7 @@ export function buildInitialValues(
 ): EntryFormValues {
   const values: EntryFormValues = {};
   for (const field of editableFields(def)) {
-    const handler = getFieldHandler(field.cmsType);
+    const handler = getFieldHandler(field.type);
     if (row) {
       // Edit: seed from the existing row value.
       values[field.name] = handler.toForm(row[field.name]);
@@ -113,7 +113,7 @@ export function buildInitialRelationRows(
 function toWriteBody(def: ModuleDefinition, values: EntryFormValues): WriteBody {
   const body: WriteBody = {};
   for (const field of editableFields(def)) {
-    const handler = getFieldHandler(field.cmsType);
+    const handler = getFieldHandler(field.type);
     const raw = values[field.name];
     const wire = handler.fromForm(raw ?? handler.emptyForm(), field);
     if (wire === undefined) continue; // skip unset optional fields
@@ -220,7 +220,7 @@ export function EntryForm({
       className="space-y-5"
     >
       {fields.map((field) => {
-        const handler = getFieldHandler(field.cmsType);
+        const handler = getFieldHandler(field.type);
         return (
           <form.Field
             key={field.name}
@@ -244,7 +244,7 @@ export function EntryForm({
                     {field.name}
                     {!field.nullable && <span className="ml-0.5 text-destructive">*</span>}
                     <span className="ml-2 text-xs font-normal text-muted-foreground">
-                      {field.cmsType}
+                      {field.type}
                     </span>
                     {/* i18n: a shared field's value is synced across every locale variant (editing it on
                         ANY variant updates all). Localized fields are per-variant. */}
@@ -300,7 +300,7 @@ export function EntryForm({
         );
       })}
 
-      {/* be-04 MEDIA fields — discovered from def.fields (cmsType: 'media'). Each renders a MediaPicker
+      {/* be-04 MEDIA fields — discovered from def.fields (type: 'media'). Each renders a MediaPicker
           (browse the library / upload) whose selected asset id(s) are merged into the write body on
           submit (single -> id|null; multiple -> id[]). */}
       {mediaFields.map((m) => {

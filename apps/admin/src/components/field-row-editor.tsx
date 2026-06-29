@@ -25,13 +25,13 @@ interface FieldRowEditorProps {
 }
 
 /**
- * One editable field row: name + cmsType + conditional options (enum values / length /
+ * One editable field row: name + type + conditional options (enum values / length /
  * precision+scale / media multiple) + a nullable checkbox + an optional default. Shared by the create
  * form, the add-field dialog, and the edit-field dialog. Files-first: the draft carries a stable backend
  * `id` (preserved by the form so a rename stays a rename) but the id is not surfaced here.
  */
 export function FieldRowEditor({ draft, onChange, onRemove, disabled, i18n }: FieldRowEditorProps) {
-  const meta = optionMetaFor(draft.cmsType);
+  const meta = optionMetaFor(draft.type);
   const set = (patch: Partial<FieldDraft>) => onChange({ ...draft, ...patch });
 
   return (
@@ -50,8 +50,8 @@ export function FieldRowEditor({ draft, onChange, onRemove, disabled, i18n }: Fi
         <div className="w-44 space-y-1.5">
           <Label htmlFor={`${draft.key}-type`}>Type</Label>
           <Select
-            value={draft.cmsType}
-            onValueChange={(v) => set({ cmsType: v as CmsType })}
+            value={draft.type}
+            onValueChange={(v) => set({ type: v as CmsType })}
             {...(disabled === true ? { disabled: true } : {})}
           >
             <SelectTrigger id={`${draft.key}-type`}>

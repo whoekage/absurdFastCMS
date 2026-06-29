@@ -17,7 +17,7 @@ import {
 } from '@/lib/list-filters';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
-// The value editor for ONE filter row. Picks the right control from the field's cmsType (via its
+// The value editor for ONE filter row. Picks the right control from the field's type (via its
 // FilterKind) AND the operator's arity:
 //   • nullary ($null/$notNull) → no input
 //   • range ($between)         → two scalar inputs
@@ -35,9 +35,9 @@ interface ValueInputProps {
   disabled?: boolean;
 }
 
-/** The HTML <input type> best matching a numeric/date field's cmsType. */
+/** The HTML <input type> best matching a numeric/date field's type. */
 function htmlInputType(field: FieldDefinition): 'text' | 'number' | 'date' | 'datetime-local' | 'time' {
-  switch (field.cmsType) {
+  switch (field.type) {
     case 'integer':
     case 'float':
       return 'number';

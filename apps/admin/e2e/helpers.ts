@@ -14,11 +14,11 @@ export function uniqueName(prefix: string): string {
   return `e2e_${prefix}_${Date.now().toString(36)}_${rand}`;
 }
 
-/** A spec-local field draft for the builder. cmsType defaults to the builder's own default. */
+/** A spec-local field draft for the builder. type defaults to the builder's own default. */
 export interface FieldDraftInput {
   name: string;
-  cmsType?: 'string' | 'text' | 'integer' | 'boolean' | 'enumeration';
-  /** Enum members — required (and only used) when cmsType is 'enumeration'. */
+  type?: 'string' | 'text' | 'integer' | 'boolean' | 'enumeration';
+  /** Enum members — required (and only used) when type is 'enumeration'. */
   enumValues?: string[];
 }
 
@@ -63,7 +63,7 @@ export async function createContentType(
 
 /**
  * Fill the Nth builder field row (0-based). Field rows have generated draft keys, so the row is
- * located positionally by the bordered container that holds a "Name" label. cmsType is left at the
+ * located positionally by the bordered container that holds a "Name" label. type is left at the
  * default ('string') unless provided.
  */
 export async function fillBuilderFieldRow(page: Page, index: number, field: FieldDraftInput): Promise<void> {
@@ -73,12 +73,12 @@ export async function fillBuilderFieldRow(page: Page, index: number, field: Fiel
   const nameInput = nameInputs.nth(index);
   await nameInput.fill(field.name);
 
-  if (field.cmsType && field.cmsType !== 'string') {
+  if (field.type && field.type !== 'string') {
     const typeTrigger = page.locator('button[id$="-type"]').nth(index);
-    await selectOption(page, typeTrigger, field.cmsType);
+    await selectOption(page, typeTrigger, field.type);
   }
 
-  if (field.cmsType === 'enumeration') {
+  if (field.type === 'enumeration') {
     const values = field.enumValues ?? [];
     // The enum editor starts empty; add one "value N" input per member, then fill them in order.
     const addValueBtn = page.getByRole('button', { name: 'Add value' });

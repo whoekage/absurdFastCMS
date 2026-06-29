@@ -15,7 +15,7 @@ import { DatePickerInput } from '@/components/date-picker-input';
 import { JsonEditor } from '@/components/json-editor';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
-// cmsType → widget registry.
+// type → widget registry.
 //
 // One entry per CmsType maps the type to three concerns:
 //   • input   — a controlled form-input renderer (value/onChange/onBlur are wire-shaped).
@@ -497,12 +497,12 @@ const registry: Record<CmsType, FieldTypeHandler> = {
 };
 
 /**
- * Resolve the handler for a field's cmsType (falls back to a plain text/string handler). Accepts the
+ * Resolve the handler for a field's type (falls back to a plain text/string handler). Accepts the
  * wider {@link ComponentFieldKind} too: a be-05 component / dynamic-zone field has no scalar handler yet
  * (the nested editor is a later admin phase), so it falls through to the string handler for now.
  */
-export function getFieldHandler(cmsType: CmsType | ComponentFieldKind): FieldTypeHandler {
-  return (registry as Record<string, FieldTypeHandler | undefined>)[cmsType] ?? stringHandler;
+export function getFieldHandler(type: CmsType | ComponentFieldKind): FieldTypeHandler {
+  return (registry as Record<string, FieldTypeHandler | undefined>)[type] ?? stringHandler;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -528,7 +528,7 @@ export const BUILDER_CMS_TYPES: readonly CmsType[] = CMS_TYPES.filter(
   (t) => !UNSUPPORTED_BUILDER_TYPES.has(t),
 );
 
-/** The option keys a given cmsType actually honours, beyond the universal `nullable` / `default`. */
+/** The option keys a given type actually honours, beyond the universal `nullable` / `default`. */
 export interface CmsTypeOptionMeta {
   /** editable enum `values` list applies. */
   enumValues: boolean;
@@ -562,12 +562,12 @@ const optionMeta: Record<CmsType, CmsTypeOptionMeta> = {
   media: { ...NO_OPTIONS, multiple: true },
 };
 
-/** Which conditional option inputs a cmsType needs in the builder forms. */
-export function optionMetaFor(cmsType: CmsType): CmsTypeOptionMeta {
-  return optionMeta[cmsType] ?? NO_OPTIONS;
+/** Which conditional option inputs a type needs in the builder forms. */
+export function optionMetaFor(type: CmsType): CmsTypeOptionMeta {
+  return optionMeta[type] ?? NO_OPTIONS;
 }
 
 /** Format a wire value for display using the field's registered formatter. */
 export function formatValue(value: unknown, field: FieldDefinition): ReactNode {
-  return getFieldHandler(field.cmsType).format(value, field);
+  return getFieldHandler(field.type).format(value, field);
 }

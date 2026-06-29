@@ -531,7 +531,7 @@ function EntryListPage() {
         </div>
       </div>
 
-      {/* Filter bar — add/remove rows, operators gated per cmsType. */}
+      {/* Filter bar — add/remove rows, operators gated per type. */}
       <FilterBar
         def={def}
         byName={byName}
@@ -715,7 +715,7 @@ function ListCell({
   const value = row[column];
 
   // Enumeration columns render as badges for at-a-glance scanning.
-  if (field?.cmsType === 'enumeration' && typeof value === 'string') {
+  if (field?.type === 'enumeration' && typeof value === 'string') {
     return <Badge variant="secondary">{value}</Badge>;
   }
 

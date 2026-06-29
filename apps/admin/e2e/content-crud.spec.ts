@@ -20,8 +20,8 @@ test.describe('content CRUD', () => {
     const page = await browser.newPage();
     // A string "title" (the search field) + a "body" text field.
     await createContentType(page, name, [
-      { name: 'title', cmsType: 'string' },
-      { name: 'body', cmsType: 'text' },
+      { name: 'title', type: 'string' },
+      { name: 'body', type: 'text' },
     ]);
     await page.close();
   });

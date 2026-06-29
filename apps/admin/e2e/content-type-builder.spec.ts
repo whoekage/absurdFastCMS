@@ -20,8 +20,8 @@ test.describe('content-type builder', () => {
   test('create type → appears in sidebar + list → add field → drop type', async ({ page }) => {
     // CREATE a type with two fields.
     await createContentType(page, name, [
-      { name: 'name', cmsType: 'string' },
-      { name: 'qty', cmsType: 'integer' },
+      { name: 'name', type: 'string' },
+      { name: 'qty', type: 'integer' },
     ]);
     await expectToast(page, new RegExp(`"${name}" created`));
 
