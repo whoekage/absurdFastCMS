@@ -2,9 +2,9 @@
 //
 // The legacy-meta teardown removed the runtime-DDL Builder routes (POST /content-types …) and their
 // server-side def projection (`projectDef`). Schema is files-first now: a module lives in a committed
-// `schema/<apiId>.json` file (the Schema IR), and the server exposes it READ-ONLY at:
+// `schema/<name>.json` file (the Schema IR), and the server exposes it READ-ONLY at:
 //   • GET /builder/modules        → { ok, schemas: ModuleSchema[], version }
-//   • GET /builder/modules/:apiId → { ok, schema:  ModuleSchema,   version }
+//   • GET /builder/modules/:name → { ok, schema:  ModuleSchema,   version }
 // (mutation — PUT/DELETE/preview/reload — is files-first and out of scope for a data-access client.)
 //
 // The Schema IR is NON-REDUNDANT (records only `{ id, name, type, options }` per field; system fields and
@@ -23,7 +23,7 @@ import type {
   RelationDefinition,
 } from './types.ts';
 
-/** A field as it lives in a `schema/<apiId>.json` file (the wire Schema IR). Mirrors `@conti/api`'s `FieldSchema`. */
+/** A field as it lives in a `schema/<name>.json` file (the wire Schema IR). Mirrors `@conti/api`'s `FieldSchema`. */
 export interface SchemaField {
   /** Stable identity (never changes; survives a rename). */
   id: string;
@@ -47,9 +47,10 @@ export interface SchemaRelation {
 /** One module as it lives on disk (`GET /builder/modules` element). Mirrors `@conti/api`'s `Schema`. */
 export interface ModuleSchema {
   id: string;
-  apiId: string;
+  name: string;
+  /** Editable human display name; `label ?? name` is what the admin shows. */
+  label?: string;
   collectionName?: string;
-  info?: { singularName?: string; pluralName?: string; displayName?: string };
   options?: { draftAndPublish?: boolean; i18n?: boolean };
   fields: SchemaField[];
   relations?: SchemaRelation[];
@@ -62,7 +63,7 @@ export interface BuilderListResponse {
   version: string;
 }
 
-/** `GET /builder/modules/:apiId` 200 body. */
+/** `GET /builder/modules/:name` 200 body. */
 export interface BuilderGetResponse {
   ok: true;
   schema: ModuleSchema;
@@ -138,17 +139,18 @@ export function projectSchemas(schemas: ModuleSchema[]): ModuleDefinition[] {
     // Fold in the inverse side of every TWO-WAY relation any module declares against this one.
     for (const other of schemas) {
       for (const r of other.relations ?? []) {
-        if (r.target !== schema.apiId || r.inverseField === undefined) continue;
+        if (r.target !== schema.name || r.inverseField === undefined) continue;
         relations.push({
           field: r.inverseField,
           kind: invertKind(r.kind),
-          target: other.apiId,
+          target: other.name,
           owner: false,
           inverseField: r.field,
         });
       }
     }
-    const def: ModuleDefinition = { apiId: schema.apiId, fields: projectFields(schema), relations };
+    const def: ModuleDefinition = { name: schema.name, fields: projectFields(schema), relations };
+    if (schema.label !== undefined) def.label = schema.label;
     if (schema.options?.draftAndPublish === true) def.draftPublish = true;
     if (schema.options?.i18n === true) def.i18n = true;
     return def;

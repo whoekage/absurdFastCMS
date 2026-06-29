@@ -10,7 +10,7 @@ import { projectSchemas, type ModuleSchema } from '../src/modules.ts';
 test('system fields are synthesized + prepended in order; user-field metadata + defaults project', () => {
   const schemas: ModuleSchema[] = [
     {
-      id: 'ct_a', apiId: 'article',
+      id: 'ct_a', name: 'article',
       fields: [
         { id: 'f_1', name: 'title', type: 'string', options: { length: 255 } },
         { id: 'f_2', name: 'price', type: 'decimal', options: { precision: 10, scale: 2, nullable: false } },
@@ -20,7 +20,7 @@ test('system fields are synthesized + prepended in order; user-field metadata + 
     },
   ];
   const [def] = projectSchemas(schemas);
-  assert.equal(def!.apiId, 'article');
+  assert.equal(def!.name, 'article');
   assert.deepEqual(def!.fields.slice(0, 3).map((f) => f.name), ['id', 'created_at', 'updated_at']);
   assert.ok(def!.fields.slice(0, 3).every((f) => f.system));
   // non-i18n type omits the conditional `localized` key entirely
@@ -42,7 +42,7 @@ test('system fields are synthesized + prepended in order; user-field metadata + 
 test('i18n + Draft & Publish synthesize document_id/published_at/locale in order, with per-field localized', () => {
   const [def] = projectSchemas([
     {
-      id: 'ct_p', apiId: 'page',
+      id: 'ct_p', name: 'page',
       options: { i18n: true, draftAndPublish: true },
       fields: [
         { id: 'f_1', name: 'title', type: 'string', localized: true },
@@ -67,14 +67,14 @@ test('i18n + Draft & Publish synthesize document_id/published_at/locale in order
 test('a two-way relation folds the INVERSE side onto the target module (owner:false, inverted kind)', () => {
   const defs = projectSchemas([
     {
-      id: 'ct_a', apiId: 'article',
+      id: 'ct_a', name: 'article',
       fields: [],
       relations: [{ id: 'rel_1', field: 'author', kind: 'manyToOne', target: 'user', inverseField: 'articles' }],
     },
-    { id: 'ct_u', apiId: 'user', fields: [] },
+    { id: 'ct_u', name: 'user', fields: [] },
   ]);
-  const article = defs.find((d) => d.apiId === 'article')!;
-  const user = defs.find((d) => d.apiId === 'user')!;
+  const article = defs.find((d) => d.name === 'article')!;
+  const user = defs.find((d) => d.name === 'user')!;
 
   // Owner side keeps its declared relation.
   assert.deepEqual(article.relations, [{ field: 'author', kind: 'manyToOne', target: 'user', owner: true, inverseField: 'articles' }]);
@@ -84,9 +84,9 @@ test('a two-way relation folds the INVERSE side onto the target module (owner:fa
 
 test('a ONE-WAY relation (no inverseField) does NOT project onto the target', () => {
   const defs = projectSchemas([
-    { id: 'ct_a', apiId: 'article', fields: [], relations: [{ id: 'rel_1', field: 'author', kind: 'manyToOne', target: 'user' }] },
-    { id: 'ct_u', apiId: 'user', fields: [] },
+    { id: 'ct_a', name: 'article', fields: [], relations: [{ id: 'rel_1', field: 'author', kind: 'manyToOne', target: 'user' }] },
+    { id: 'ct_u', name: 'user', fields: [] },
   ]);
-  assert.equal(defs.find((d) => d.apiId === 'article')!.relations.length, 1);
-  assert.deepEqual(defs.find((d) => d.apiId === 'user')!.relations, []);
+  assert.equal(defs.find((d) => d.name === 'article')!.relations.length, 1);
+  assert.deepEqual(defs.find((d) => d.name === 'user')!.relations, []);
 });

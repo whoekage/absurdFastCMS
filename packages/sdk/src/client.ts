@@ -330,7 +330,7 @@ export class AssetsApi {
 
 // NOTE (legacy-meta teardown): the runtime-DDL Builder *write* clients (the old ModulesApi +
 // ComponentTypesApi: create/addField/updateField/dropField/drop/addRelation) were REMOVED. Their server
-// routes (POST /content-types, /content-types/:apiId/fields, /component-types…) were deleted — schema
+// routes (POST /content-types, /content-types/:name/fields, /component-types…) were deleted — schema
 // MUTATION is files-first now (entities edited as code; the visual Builder PUTs them via /builder/modules).
 // What survives is READ-ONLY introspection over the files-first catalog, below.
 
@@ -339,7 +339,7 @@ export class AssetsApi {
  * surviving `/builder/modules` GET routes and projects the wire Schema IR into the richer
  * {@link ModuleDefinition} (system fields synthesized + two-way inverse relations folded in — see
  * {@link projectSchemas}) that the admin consumes. There is NO write surface: schema mutation is
- * files-first (edit `schema/<apiId>.json`; the visual Builder PUTs it).
+ * files-first (edit `schema/<name>.json`; the visual Builder PUTs it).
  */
 export class ModulesApi {
   private readonly request: RequestFn;
@@ -358,13 +358,13 @@ export class ModulesApi {
 
   /**
    * GET one module's projected definition. Throws {@link NotFoundError} (404) when unknown. Projects from
-   * the FULL list (not the single `/builder/modules/:apiId` GET) so two-way INVERSE relations declared by
+   * the FULL list (not the single `/builder/modules/:name` GET) so two-way INVERSE relations declared by
    * other modules are folded in — exactly matching the old server-side `projectDef`.
    */
-  async get(apiId: string, signal?: AbortSignal): Promise<ModuleDefinition> {
+  async get(name: string, signal?: AbortSignal): Promise<ModuleDefinition> {
     const all = await this.list(signal);
-    const def = all.find((d) => d.apiId === apiId);
-    if (def === undefined) throw new NotFoundError(404, `module "${apiId}" does not exist`, undefined);
+    const def = all.find((d) => d.name === name);
+    if (def === undefined) throw new NotFoundError(404, `module "${name}" does not exist`, undefined);
     return def;
   }
 }

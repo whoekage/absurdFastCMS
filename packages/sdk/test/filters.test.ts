@@ -52,12 +52,12 @@ const userCtx: RelationParseContext = {
 
 const ctx: RelationParseContext = {
   fields: articleFields,
-  // `author` relation → target apiId 'user'; `tags` relation → target apiId 'user' (reuse for populate).
+  // `author` relation → target name 'user'; `tags` relation → target name 'user' (reuse for populate).
   relations: new Map([
     ['author', 'user'],
     ['tags', 'user'],
   ]),
-  resolveTarget: (apiId) => (apiId === 'user' ? userCtx : undefined),
+  resolveTarget: (name) => (name === 'user' ? userCtx : undefined),
 };
 
 /** parseQuery over the BUILT string — the whole point: builder output ⇒ real parser, no throw. */

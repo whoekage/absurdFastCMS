@@ -97,11 +97,11 @@ async function localServer(
 test('token option sends `Authorization: Bearer <token>` and the open api still answers 200', async () => {
   const server = await startTestServer('auth-token');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
       const rec = recordingFetch();
       const client = createClient({ baseUrl: server.baseUrl, fetch: rec.fetch, token: 'sekret' });
 
-      const res = await client.list(apiId); // a REAL list against the real server
+      const res = await client.list(name); // a REAL list against the real server
       assert.ok(Array.isArray(res.data), 'request succeeds against the open api (header ignored)');
 
       assert.equal(rec.headers.length, 1);
@@ -119,15 +119,15 @@ test('token option sends `Authorization: Bearer <token>` and the open api still 
 test('setToken() updates the Bearer header on subsequent real requests; undefined clears it', async () => {
   const server = await startTestServer('auth-settoken');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
       const rec = recordingFetch();
       const client = createClient({ baseUrl: server.baseUrl, fetch: rec.fetch });
 
-      await client.list(apiId); // no token yet
+      await client.list(name); // no token yet
       client.setToken('after-login');
-      await client.list(apiId); // token set
+      await client.list(name); // token set
       client.setToken(undefined);
-      await client.list(apiId); // token cleared
+      await client.list(name); // token cleared
 
       assert.equal(rec.headers[0]!['authorization'], undefined, 'no Authorization before a token is set');
       assert.equal(rec.headers[1]!['authorization'], 'Bearer after-login', 'token sent after setToken()');
@@ -141,7 +141,7 @@ test('setToken() updates the Bearer header on subsequent real requests; undefine
 test('getHeaders() is awaited, merged, and overrides the static token on `authorization`', async () => {
   const server = await startTestServer('auth-getheaders');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
       const rec = recordingFetch();
       const client = createClient({
         baseUrl: server.baseUrl,
@@ -151,7 +151,7 @@ test('getHeaders() is awaited, merged, and overrides the static token on `author
         getHeaders: async () => ({ authorization: 'Bearer dynamic', 'x-trace': 'on' }),
       });
 
-      const res = await client.list(apiId);
+      const res = await client.list(name);
       assert.ok(Array.isArray(res.data), 'real request still succeeds');
       assert.equal(rec.headers[0]!['authorization'], 'Bearer dynamic', 'async getHeaders() overrides token');
       assert.equal(rec.headers[0]!['x-trace'], 'on', 'extra headers from getHeaders() are sent too');
@@ -164,7 +164,7 @@ test('getHeaders() is awaited, merged, and overrides the static token on `author
 test('the token header rides on a real WRITE (create) too; the write succeeds when authed', async () => {
   const server = await startTestServer('auth-write');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
       const rec = recordingFetch();
       // The server now GATES writes, so authenticate via the super-admin cookie (getHeaders); the static
       // Bearer token still rides along on the POST (the api ignores it — it reads the session cookie / api key).
@@ -178,7 +178,7 @@ test('the token header rides on a real WRITE (create) too; the write succeeds wh
         active: true,
         publishedAt: new Date(Date.UTC(2026, 0, 1)).toISOString(),
       };
-      const created = await client.create(apiId, body);
+      const created = await client.create(name, body);
       assert.ok(created.data.id, 'create succeeds (authed via the cookie; the Bearer header rides along)');
       assert.equal(rec.headers[0]!['authorization'], 'Bearer admin', 'Bearer header sent on the POST');
       assert.equal(rec.headers[0]!['content-type'], 'application/json', 'content-type still set on a body');

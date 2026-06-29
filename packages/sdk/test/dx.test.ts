@@ -43,11 +43,11 @@ function articleBody(over: Record<string, unknown> = {}): Record<string, unknown
 test('collection<T>() binds the type across the full CRUD lifecycle', async () => {
   const server = await startTestServer('dx-collection');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
       const client = server.mkClient();
-      const articles = client.collection<Article>(apiId);
+      const articles = client.collection<Article>(name);
 
-      assert.equal(articles.type, apiId);
+      assert.equal(articles.type, name);
 
       const created = await articles.create(articleBody({ title: 'Bound', views: 7 }));
       const id = created.data.id;
@@ -88,7 +88,7 @@ test('collection<T>() binds the type across the full CRUD lifecycle', async () =
 test('onRequest / onResponse fire on real GET and POST with real status', async () => {
   const server = await startTestServer('dx-hooks');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
       const reqs: Array<{ method: string; attempt: number }> = [];
       const ress: Array<{ method: string; status: number }> = [];
       const client = createClient({
@@ -103,8 +103,8 @@ test('onRequest / onResponse fire on real GET and POST with real status', async 
         },
       });
 
-      const created = await client.create(apiId, articleBody());
-      await client.list(apiId);
+      const created = await client.create(name, articleBody());
+      await client.list(name);
 
       assert.deepEqual(reqs[0], { method: 'POST', attempt: 1 });
       assert.equal(ress[0]!.method, 'POST');

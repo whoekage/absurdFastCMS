@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   // 1) Define the content-type at runtime (idempotent for re-runs: ignore "already exists").
   try {
     const def = await client.contentTypes.create({
-      apiId: 'product',
+      name: 'product',
       fields: [
         { name: 'name', cmsType: 'string', options: { length: 200 } },
         { name: 'price', cmsType: 'decimal', options: { precision: 12, scale: 2 } },
@@ -37,7 +37,7 @@ async function main(): Promise<void> {
         { name: 'sku', cmsType: 'uid' },
       ],
     });
-    console.log('created type:', def.apiId, def.fields.map((f) => f.name).join(', '));
+    console.log('created type:', def.name, def.fields.map((f) => f.name).join(', '));
   } catch (e) {
     if (!(e instanceof ConflictError)) throw e;
     console.log('type "product" already exists — reusing it');

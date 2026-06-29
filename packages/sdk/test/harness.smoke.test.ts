@@ -18,8 +18,8 @@ import { ARTICLE_FIELDS } from './server.ts';
 test('harness boots a real server and serves the seeded article type', async () => {
   const server = await startTestServer('harness-smoke');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
-      const res = await fetch(`${server.baseUrl}/${apiId}`);
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
+      const res = await fetch(`${server.baseUrl}/${name}`);
       assert.equal(res.status, 200, 'GET /article should return HTTP 200');
 
       const ct = res.headers.get('content-type') ?? '';

@@ -163,7 +163,7 @@ export type TypeDef = SchemaSpec;
 
 /**
  * The canonical demo `article` field specs (the files-first replacement for the deleted
- * `ARTICLE_SEED_FIELDS` api export). Used by the SDK integration tests via `withType(server, { apiId:
+ * `ARTICLE_SEED_FIELDS` api export). Used by the SDK integration tests via `withType(server, { name:
  * 'article', fields: ARTICLE_FIELDS }, ...)`. Mirrors `ARTICLE_SCHEMA` in the api test helpers.
  */
 export const ARTICLE_FIELDS: FieldSpec[] = [
@@ -185,34 +185,34 @@ export const ARTICLE_FIELDS: FieldSpec[] = [
  * migrated each step).
  *
  * Usage:
- *   await withType(server, { apiId: 'widget', fields: [{ name: 'title', cmsType: 'string' }] }, async () => {
+ *   await withType(server, { name: 'widget', fields: [{ name: 'title', cmsType: 'string' }] }, async () => {
  *     // ... hit server.baseUrl/widget with the SDK ...
  *   });
  */
 export async function withType<T>(
   server: Pick<TestServer, 'sql' | 'engine' | 'registry'>,
   def: TypeDef,
-  body: (apiId: string) => Promise<T>,
+  body: (name: string) => Promise<T>,
 ): Promise<T> {
   const active = ACTIVE.get(server.sql) ?? new Map<string, Schema>();
   ACTIVE.set(server.sql, active);
   const s = buildSchema(def);
-  const apiId = s.apiId;
-  active.set(apiId, s);
+  const name = s.name;
+  active.set(name, s);
 
   // Materialize the ct_ table(s) from the union of active schemas, then make this type LIVE in RAM.
   await migrate(server.sql, [...active.values()], { allowDestructive: true });
-  const built = Registry.fromSchemas([...active.values()]).get(apiId)!;
+  const built = Registry.fromSchemas([...active.values()]).get(name)!;
   server.registry.install(built);
   await loadType(server.sql, server.engine, built);
   await loadAllRelations(server.sql, server.engine, server.registry); // derive edges if any active type relates
 
   try {
-    return await body(apiId);
+    return await body(name);
   } finally {
-    active.delete(apiId);
-    server.engine.dropType(apiId);
-    server.registry.removeType(apiId);
+    active.delete(name);
+    server.engine.dropType(name);
+    server.registry.removeType(name);
     await migrate(server.sql, [...active.values()], { allowDestructive: true }); // DROP TABLE + reduce snapshot
   }
 }

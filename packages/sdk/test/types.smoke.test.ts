@@ -30,7 +30,7 @@ test('ModuleDefinition constructs (cmsType + field options + projected fields)',
   const spec: FieldSpec = { name: 'status', cmsType, options };
 
   const def: ModuleDefinition = {
-    apiId: 'article',
+    name: 'article',
     fields: [
       { name: 'id', cmsType: 'integer', nullable: false, system: true },
       { name: 'createdAt', cmsType: 'datetime', nullable: false, system: true },
@@ -54,7 +54,7 @@ test('ModuleDefinition constructs (cmsType + field options + projected fields)',
   const blob: JsonValue = { any: ['shape', 1, true] };
 
   assert.equal(spec.name, 'status');
-  assert.equal(def.apiId, 'article');
+  assert.equal(def.name, 'article');
   assert.equal(def.fields.length, 4);
   const enumField = def.fields.find((f: FieldDefinition) => f.name === 'status');
   assert.deepEqual(enumField?.enumValues, ['draft', 'published']);

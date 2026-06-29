@@ -65,19 +65,19 @@ test('SINGLE media field: write an id, read raw, read populated to a FileAsset o
   const client = server.mkClient();
   await withType(
     server,
-    { apiId: 'product', fields: [
+    { name: 'product', fields: [
       { name: 'title', cmsType: 'string', options: { nullable: false } },
       { name: 'cover', cmsType: 'media' },
     ] },
-    async (apiId) => {
+    async (name) => {
       const asset = await client.upload(pngBytes(30, 20), 'cover.png');
-      const created = await client.create(apiId, { title: 'Widget', cover: asset.id });
+      const created = await client.create(name, { title: 'Widget', cover: asset.id });
       assert.equal(created.data.cover, asset.id); // raw id un-populated.
 
-      const raw = await client.findOne(apiId, created.data.id as number);
+      const raw = await client.findOne(name, created.data.id as number);
       assert.equal(raw.data.cover, asset.id);
 
-      const pop = await client.findOne(apiId, created.data.id as number, { populate: ['cover'] });
+      const pop = await client.findOne(name, created.data.id as number, { populate: ['cover'] });
       const cover = pop.data.cover as { id: number; mime: string; width: number };
       assert.equal(cover.id, asset.id);
       assert.equal(cover.mime, 'image/png');
@@ -90,22 +90,22 @@ test('MULTIPLE media field: write an id array, populate to an ordered FileAsset[
   const client = server.mkClient();
   await withType(
     server,
-    { apiId: 'gallery', fields: [
+    { name: 'gallery', fields: [
       { name: 'name', cmsType: 'string', options: { nullable: false } },
       { name: 'photos', cmsType: 'media', options: { multiple: true } },
     ] },
-    async (apiId) => {
+    async (name) => {
       const a = await client.upload(pngBytes(10, 10), 'a.png');
       const b = await client.upload(pngBytes(11, 11), 'b.png');
-      const created = await client.create(apiId, { name: 'trip', photos: [a.id, b.id] });
+      const created = await client.create(name, { name: 'trip', photos: [a.id, b.id] });
       assert.deepEqual(created.data.photos, [a.id, b.id]);
 
-      const pop = await client.findOne(apiId, created.data.id as number, { populate: ['photos'] });
+      const pop = await client.findOne(name, created.data.id as number, { populate: ['photos'] });
       const photos = pop.data.photos as { id: number }[];
       assert.deepEqual(photos.map((p) => p.id), [a.id, b.id]); // order preserved.
 
       // List populate works too.
-      const list = await client.list(apiId, { populate: ['photos'] });
+      const list = await client.list(name, { populate: ['photos'] });
       const row = list.data.find((r) => (r.id as number) === created.data.id)!;
       assert.equal((row.photos as { id: number }[]).length, 2);
     },
@@ -116,18 +116,18 @@ test('VALIDATION: a non-existent / non-positive media id is a 400', async () => 
   const client = server.mkClient();
   await withType(
     server,
-    { apiId: 'doc', fields: [
+    { name: 'doc', fields: [
       { name: 'title', cmsType: 'string', options: { nullable: false } },
       { name: 'cover', cmsType: 'media' },
     ] },
-    async (apiId) => {
-      await assert.rejects(() => client.create(apiId, { title: 'x', cover: 99999999 }), BadRequestError);
-      await assert.rejects(() => client.create(apiId, { title: 'x', cover: 0 }), BadRequestError);
-      await assert.rejects(() => client.create(apiId, { title: 'x', cover: -1 }), BadRequestError);
+    async (name) => {
+      await assert.rejects(() => client.create(name, { title: 'x', cover: 99999999 }), BadRequestError);
+      await assert.rejects(() => client.create(name, { title: 'x', cover: 0 }), BadRequestError);
+      await assert.rejects(() => client.create(name, { title: 'x', cover: -1 }), BadRequestError);
     },
   );
 });
 
 // NOTE (legacy-meta teardown): the test 'media field is projected with cmsType + multiple flag' was
-// dropped — it asserted the wire projection returned by the Builder route GET /modules/:apiId, which
+// dropped — it asserted the wire projection returned by the Builder route GET /modules/:name, which
 // was removed. Media write/read behaviour stays covered by the tests above (real wire, real Postgres).

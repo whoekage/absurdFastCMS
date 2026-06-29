@@ -33,9 +33,9 @@ class TestClient extends AbsurdClient {
 test('ctor strips a trailing slash from baseUrl (no double slash in the request URL)', async () => {
   const server = await startTestServer('client-baseurl');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
       const client = new TestClient({ baseUrl: `${server.baseUrl}/` });
-      const body = await client.call<{ data: unknown[]; meta: unknown }>('GET', `/${apiId}`);
+      const body = await client.call<{ data: unknown[]; meta: unknown }>('GET', `/${name}`);
       assert.ok(Array.isArray(body.data), 'list read returns a data array even with a trailing-slash baseUrl');
     });
   } finally {
@@ -147,10 +147,10 @@ test('GET /unknown-type throws NotFoundError with status 404 and the {error} mes
 test('non-GET on a known route throws MethodNotAllowedError (405)', async () => {
   const server = await startTestServer('client-405');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
       const client = new TestClient({ baseUrl: server.baseUrl });
       await assert.rejects(
-        () => client.call('PATCH', `/${apiId}`),
+        () => client.call('PATCH', `/${name}`),
         (err: unknown) => {
           assert.ok(err instanceof MethodNotAllowedError, 'a 405 maps to MethodNotAllowedError');
           assert.equal((err as ApiError).status, 405);
@@ -179,11 +179,11 @@ test('errorFromResponse maps each status to its typed subclass', () => {
 test('createClient returns a working AbsurdClient', async () => {
   const server = await startTestServer('client-factory');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
       const client = server.mkClient();
       assert.ok(client instanceof AbsurdClient);
       // The factory client has no public read method yet (Slice 4) — prove it reaches the server via fetch.
-      const res = await fetch(`${server.baseUrl}/${apiId}`);
+      const res = await fetch(`${server.baseUrl}/${name}`);
       assert.equal(res.status, 200);
     });
   } finally {

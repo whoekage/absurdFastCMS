@@ -182,7 +182,7 @@ export interface RelationDefinition {
   /** The relation field / API key on THIS side. */
   field: string;
   kind: RelationKind;
-  /** The target module api_id (may equal `apiId` for a self-referential relation). */
+  /** The target module name (may equal `name` for a self-referential relation). */
   target: string;
   /** true => this side owns the link table (emitted its DDL); false => the inverse side. */
   owner: boolean;
@@ -191,13 +191,15 @@ export interface RelationDefinition {
 }
 
 /**
- * A module as projected by the builder: its api_id, ordered fields (system id/created_at/
- * updated_at first, then user fields), and declared relations (in `sort` order). `relations` is ALWAYS
- * present — a scalar-only type returns `relations: []` (no shape drift). Returned by every 2xx builder
- * route.
+ * A module as projected by the builder: its `name`, optional human `label`, ordered fields (system
+ * id/created_at/updated_at first, then user fields), and declared relations (in `sort` order).
+ * `relations` is ALWAYS present — a scalar-only type returns `relations: []` (no shape drift). Returned by
+ * every 2xx builder route.
  */
 export interface ModuleDefinition {
-  apiId: string;
+  name: string;
+  /** Editable human display name; `label ?? name` is what the admin shows. */
+  label?: string;
   fields: FieldDefinition[];
   relations: RelationDefinition[];
   /**

@@ -14,10 +14,10 @@ import { createClient, isKeysetPagination, type Entry } from '../src/index.ts';
 /** Seed one article over the real write path; returns the created row (with its server-assigned id). */
 async function seedArticle(
   server: TestServer,
-  apiId: string,
+  name: string,
   data: Record<string, unknown>,
 ): Promise<Entry> {
-  const res = await server.fetch(`/${apiId}`, {
+  const res = await server.fetch(`/${name}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(data),
@@ -29,9 +29,9 @@ async function seedArticle(
 }
 
 /** Seed `n` articles `title=row-0..n-1`, ascending `views`, all published/active. */
-async function seedN(server: TestServer, apiId: string, n: number): Promise<void> {
+async function seedN(server: TestServer, name: string, n: number): Promise<void> {
   for (let i = 0; i < n; i++) {
-    await seedArticle(server, apiId, {
+    await seedArticle(server, name, {
       title: `row-${i}`,
       body: `body ${i}`,
       status: 'published',
@@ -46,11 +46,11 @@ async function seedN(server: TestServer, apiId: string, n: number): Promise<void
 test('list() returns the data array + offset pagination meta with total', async () => {
   const server = await startTestServer('read-list');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
-      await seedN(server, apiId, 5);
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
+      await seedN(server, name, 5);
       const client = server.mkClient();
 
-      const res = await client.list(apiId);
+      const res = await client.list(name);
       assert.ok(Array.isArray(res.data));
       assert.equal(res.data.length, 5);
       assert.ok(!isKeysetPagination(res.meta.pagination), 'default is offset meta');
@@ -64,11 +64,11 @@ test('list() returns the data array + offset pagination meta with total', async 
 test('list() honors filters + sort + pagination', async () => {
   const server = await startTestServer('read-list-params');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
-      await seedN(server, apiId, 10);
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
+      await seedN(server, name, 10);
       const client = server.mkClient();
 
-      const res = await client.list(apiId, {
+      const res = await client.list(name, {
         filters: { views: { $gte: 5 } },
         sort: 'views:desc',
         pagination: { start: 0, limit: 2 },
@@ -85,13 +85,13 @@ test('list() honors filters + sort + pagination', async () => {
 test('list() $contains + sort:desc + pagination[pageSize] over ~30 rows returns the expected subset/order', async () => {
   const server = await startTestServer('read-contains');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
       // 30 rows: title=row-0..row-29. "row-1" is a substring of row-1 and every row-1X (10..19),
       // i.e. 11 matches: views 1, 10,11,12,13,14,15,16,17,18,19. sort views:desc, page of 5 → top 5.
-      await seedN(server, apiId, 30);
+      await seedN(server, name, 30);
       const client = server.mkClient();
 
-      const res = await client.list(apiId, {
+      const res = await client.list(name, {
         filters: { title: { $contains: 'row-1' } },
         sort: 'views:desc',
         pagination: { page: 1, pageSize: 5 },
@@ -108,8 +108,8 @@ test('list() $contains + sort:desc + pagination[pageSize] over ~30 rows returns 
 test('findOne() resolves by public id; findOneOrNull() returns null on 404', async () => {
   const server = await startTestServer('read-findone');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
-      const created = await seedArticle(server, apiId, {
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
+      const created = await seedArticle(server, name, {
         title: 'hello',
         body: 'b',
         status: 'published',
@@ -121,15 +121,15 @@ test('findOne() resolves by public id; findOneOrNull() returns null on 404', asy
       const id = created['id'] as number;
       const client = server.mkClient();
 
-      const one = await client.findOne(apiId, id);
+      const one = await client.findOne(name, id);
       assert.equal(one.data['id'], id);
       assert.equal(one.data['title'], 'hello');
       assert.deepEqual(one.meta, {}, 'single route has empty meta');
 
-      const missing = await client.findOneOrNull(apiId, 999999);
+      const missing = await client.findOneOrNull(name, 999999);
       assert.equal(missing, null, '404 → null');
 
-      await assert.rejects(() => client.findOne(apiId, 999999), /not found/i, 'findOne throws on 404');
+      await assert.rejects(() => client.findOne(name, 999999), /not found/i, 'findOne throws on 404');
     });
   } finally {
     await server.close();
@@ -139,8 +139,8 @@ test('findOne() resolves by public id; findOneOrNull() returns null on 404', asy
 test('fields: list AND findOne project to id + the requested scalar columns (Strapi v5)', async () => {
   const server = await startTestServer('read-fields');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
-      const created = await seedArticle(server, apiId, {
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
+      const created = await seedArticle(server, name, {
         title: 'sparse', body: 'long body', status: 'published', views: 7, rating: 2.5, active: true,
         publishedAt: new Date(Date.UTC(2026, 0, 1)).toISOString(),
       });
@@ -148,12 +148,12 @@ test('fields: list AND findOne project to id + the requested scalar columns (Str
       const client = server.mkClient();
 
       // LIST: only id + the two requested columns; body/views/etc. dropped.
-      const listRes = await client.list(apiId, { fields: ['title', 'rating'] });
+      const listRes = await client.list(name, { fields: ['title', 'rating'] });
       assert.deepEqual(Object.keys(listRes.data[0]!).sort(), ['id', 'rating', 'title']);
       assert.equal(listRes.data[0]!['title'], 'sparse');
 
       // FINDONE now threads fields too (it was previously ignored on the single route).
-      const oneRes = await client.findOne(apiId, id, { fields: ['title'] });
+      const oneRes = await client.findOne(name, id, { fields: ['title'] });
       assert.deepEqual(Object.keys(oneRes.data).sort(), ['id', 'title']);
       assert.equal(oneRes.data['title'], 'sparse');
       assert.equal(oneRes.data['id'], id);
@@ -166,12 +166,12 @@ test('fields: list AND findOne project to id + the requested scalar columns (Str
 test('count() returns the filtered total without fetching rows', async () => {
   const server = await startTestServer('read-count');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
-      await seedN(server, apiId, 8);
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
+      await seedN(server, name, 8);
       const client = server.mkClient();
 
-      assert.equal(await client.count(apiId), 8, 'unfiltered count');
-      assert.equal(await client.count(apiId, { views: { $gte: 5 } }), 3, 'filtered count');
+      assert.equal(await client.count(name), 8, 'unfiltered count');
+      assert.equal(await client.count(name, { views: { $gte: 5 } }), 3, 'filtered count');
     });
   } finally {
     await server.close();
@@ -181,12 +181,12 @@ test('count() returns the filtered total without fetching rows', async () => {
 test('listAll() iterates every row page-by-page in offset mode', async () => {
   const server = await startTestServer('read-listall');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
-      await seedN(server, apiId, 30);
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
+      await seedN(server, name, 30);
       const client = server.mkClient();
 
       const seen: unknown[] = [];
-      for await (const row of client.listAll(apiId, {
+      for await (const row of client.listAll(name, {
         sort: 'views:asc',
         pagination: { limit: 7 },
       })) {
@@ -204,12 +204,12 @@ test('listAll() iterates every row page-by-page in offset mode', async () => {
 test('listAll() stops cleanly on an exact-multiple total (empty trailing page)', async () => {
   const server = await startTestServer('read-listall-exact');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
-      await seedN(server, apiId, 6);
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
+      await seedN(server, name, 6);
       const client = server.mkClient();
 
       const seen: unknown[] = [];
-      for await (const row of client.listAll(apiId, { sort: 'views:asc', pagination: { limit: 2 } })) {
+      for await (const row of client.listAll(name, { sort: 'views:asc', pagination: { limit: 2 } })) {
         seen.push(row['views']);
       }
       assert.deepEqual(seen, [0, 1, 2, 3, 4, 5]);
@@ -222,12 +222,12 @@ test('listAll() stops cleanly on an exact-multiple total (empty trailing page)',
 test('listAllKeyset() follows nextCursor until hasNextPage=false', async () => {
   const server = await startTestServer('read-listall-keyset');
   try {
-    await withType(server, { apiId: 'article', fields: ARTICLE_FIELDS }, async (apiId) => {
-      await seedN(server, apiId, 30);
+    await withType(server, { name: 'article', fields: ARTICLE_FIELDS }, async (name) => {
+      await seedN(server, name, 30);
       const client = server.mkClient();
 
       const seen: unknown[] = [];
-      for await (const row of client.listAllKeyset(apiId, { pagination: { pageSize: 7 } })) {
+      for await (const row of client.listAllKeyset(name, { pagination: { pageSize: 7 } })) {
         seen.push(row['views']);
       }
       assert.equal(seen.length, 30, 'every row yielded');

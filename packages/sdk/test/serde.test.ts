@@ -37,13 +37,13 @@ const BIG = '9007199254740993'; // 2^53 + 1 — the canonical IEEE-754 collision
 const HUGE = '92233720368547758'; // far beyond 2^53.
 const PRICE = '1234567890.55';
 
-// NOTE (legacy-meta teardown): the Builder route GET /modules/:apiId (which returned the projected
+// NOTE (legacy-meta teardown): the Builder route GET /modules/:name (which returned the projected
 // def) was removed — the SDK no longer fetches defs over the wire. decodeEntry only needs each field's
 // { name, cmsType }, so we build the decode def locally from WIRE_FIELDS (system fields prepended).
-function wireDef(apiId: string): ModuleDefinition {
+function wireDef(name: string): ModuleDefinition {
   const sys = (name: string, cmsType: FieldDefinition['cmsType']): FieldDefinition => ({ name, cmsType, nullable: name !== 'id', system: true });
   return {
-    apiId,
+    name,
     relations: [],
     fields: [
       sys('id', 'integer'), sys('created_at', 'datetime'), sys('updated_at', 'datetime'),
@@ -61,11 +61,11 @@ function wireDef(apiId: string): ModuleDefinition {
 test('biginteger > 2^53 round-trips lossless as a string; BigInt opt-in is exact', async () => {
   const server = await startTestServer('serde-bigint');
   try {
-    await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'wire', fields: WIRE_FIELDS }, async (name) => {
       const client = server.mkClient();
-      const def = wireDef(apiId);
+      const def = wireDef(name);
 
-      const created = await client.create(apiId, {
+      const created = await client.create(name, {
         big: HUGE,
         price: PRICE,
         payload: { a: 1, nested: { b: [true, null, 'x'] } },
@@ -76,7 +76,7 @@ test('biginteger > 2^53 round-trips lossless as a string; BigInt opt-in is exact
       const id = created.data.id as number;
 
       // Wire fact: biginteger/decimal arrive as QUOTED STRINGS.
-      const raw = (await client.findOne(apiId, id)).data;
+      const raw = (await client.findOne(name, id)).data;
       assert.equal(typeof raw['big'], 'string');
       assert.equal(raw['big'], HUGE);
       assert.equal(typeof raw['price'], 'string');
@@ -104,11 +104,11 @@ test('biginteger > 2^53 round-trips lossless as a string; BigInt opt-in is exact
 test('decimal keeps its fixed scale as a string and is never widened', async () => {
   const server = await startTestServer('serde-decimal');
   try {
-    await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'wire', fields: WIRE_FIELDS }, async (name) => {
       const client = server.mkClient();
-      const def = wireDef(apiId);
+      const def = wireDef(name);
 
-      const created = await client.create(apiId, {
+      const created = await client.create(name, {
         big: '1',
         price: '10.50', // trailing zero is significant at scale 2.
         payload: {},
@@ -116,7 +116,7 @@ test('decimal keeps its fixed scale as a string and is never widened', async () 
         at: new Date().toISOString(),
         count: 0,
       });
-      const raw = (await client.findOne(apiId, created.data.id as number)).data;
+      const raw = (await client.findOne(name, created.data.id as number)).data;
 
       assert.equal(typeof raw['price'], 'string');
       assert.equal(raw['price'], '10.50'); // scale preserved on the wire.
@@ -135,12 +135,12 @@ test('decimal keeps its fixed scale as a string and is never widened', async () 
 test('json round-trips byte-exact (nested values)', async () => {
   const server = await startTestServer('serde-json');
   try {
-    await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'wire', fields: WIRE_FIELDS }, async (name) => {
       const client = server.mkClient();
-      const def = wireDef(apiId);
+      const def = wireDef(name);
 
       const payload = { s: 'héllo', n: 3.14, arr: [1, 2, { deep: true }], nul: null, o: { x: { y: 'z' } } };
-      const created = await client.create(apiId, {
+      const created = await client.create(name, {
         big: '0',
         price: '0.00',
         payload,
@@ -148,7 +148,7 @@ test('json round-trips byte-exact (nested values)', async () => {
         at: new Date().toISOString(),
         count: 0,
       });
-      const raw = (await client.findOne(apiId, created.data.id as number)).data;
+      const raw = (await client.findOne(name, created.data.id as number)).data;
 
       assert.deepEqual(raw['payload'], payload);
       const dec = decodeEntry(def, raw);
@@ -162,12 +162,12 @@ test('json round-trips byte-exact (nested values)', async () => {
 test('date/datetime arrive as ISO strings; { dates: true } yields a Date', async () => {
   const server = await startTestServer('serde-dates');
   try {
-    await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'wire', fields: WIRE_FIELDS }, async (name) => {
       const client = server.mkClient();
-      const def = wireDef(apiId);
+      const def = wireDef(name);
 
       const at = new Date(Date.UTC(2026, 5, 18, 9, 30, 0));
-      const created = await client.create(apiId, {
+      const created = await client.create(name, {
         big: '0',
         price: '0.00',
         payload: {},
@@ -175,7 +175,7 @@ test('date/datetime arrive as ISO strings; { dates: true } yields a Date', async
         at: at.toISOString(),
         count: 0,
       });
-      const raw = (await client.findOne(apiId, created.data.id as number)).data;
+      const raw = (await client.findOne(name, created.data.id as number)).data;
 
       assert.equal(typeof raw['at'], 'string'); // ISO string on the wire.
       const def0 = decodeEntry(def, raw);
@@ -194,9 +194,9 @@ test('date/datetime arrive as ISO strings; { dates: true } yields a Date', async
 test('encodeEntry lowers Date -> ISO and bigint -> string; the api accepts the body', async () => {
   const server = await startTestServer('serde-encode');
   try {
-    await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'wire', fields: WIRE_FIELDS }, async (name) => {
       const client = server.mkClient();
-      const def = wireDef(apiId);
+      const def = wireDef(name);
 
       const at = new Date(Date.UTC(2026, 5, 18, 0, 0, 0));
       const body = encodeEntry(def, {
@@ -210,8 +210,8 @@ test('encodeEntry lowers Date -> ISO and bigint -> string; the api accepts the b
       assert.equal(body['big'], HUGE);
       assert.equal(body['at'], at.toISOString());
 
-      const created = await client.create(apiId, body);
-      const raw = (await client.findOne(apiId, created.data.id as number)).data;
+      const created = await client.create(name, body);
+      const raw = (await client.findOne(name, created.data.id as number)).data;
       assert.equal(raw['big'], HUGE);
       assert.equal(typeof raw['big'], 'string');
 
@@ -226,11 +226,11 @@ test('encodeEntry lowers Date -> ISO and bigint -> string; the api accepts the b
 test('listDecoded / findOneDecoded apply decodeEntry with a supplied def', async () => {
   const server = await startTestServer('serde-client-convenience');
   try {
-    await withType(server, { apiId: 'wire', fields: WIRE_FIELDS }, async (apiId) => {
+    await withType(server, { name: 'wire', fields: WIRE_FIELDS }, async (name) => {
       const client = server.mkClient();
-      const def: ModuleDefinition = wireDef(apiId);
+      const def: ModuleDefinition = wireDef(name);
 
-      const created = await client.create(apiId, {
+      const created = await client.create(name, {
         big: HUGE,
         price: '3.50',
         payload: { k: 'v' },
@@ -240,12 +240,12 @@ test('listDecoded / findOneDecoded apply decodeEntry with a supplied def', async
       });
       const id = created.data.id as number;
 
-      const single = await client.findOneDecoded(apiId, id, def, { bigints: true, dates: true });
+      const single = await client.findOneDecoded(name, id, def, { bigints: true, dates: true });
       assert.equal(typeof single.data['big'], 'bigint');
       assert.ok(single.data['at'] instanceof Date);
       assert.equal(typeof single.data['price'], 'string');
 
-      const listed = await client.listDecoded(apiId, def, {}, { bigints: true });
+      const listed = await client.listDecoded(name, def, {}, { bigints: true });
       const row = listed.data.find((r) => r['id'] === id)!;
       assert.equal(typeof row['big'], 'bigint');
       assert.equal(row['big'], BigInt(HUGE));
