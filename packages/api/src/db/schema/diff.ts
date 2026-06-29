@@ -155,7 +155,7 @@ function canon(v: unknown): string {
 
 /** Resolved-type equality (the physical column shape) — NULLABILITY is NOT part of it (handled separately). */
 function resolvedEqual(a: ResolvedType, b: ResolvedType): boolean {
-  return a.cmsType === b.cmsType && a.pgType === b.pgType && a.engineType === b.engineType && canon(a.params) === canon(b.params);
+  return a.type === b.type && a.pgType === b.pgType && a.engineType === b.engineType && canon(a.params) === canon(b.params);
 }
 
 const typeOptionRisk = (to: boolean): ChangeRisk => (to ? 'safe' : 'destructive');

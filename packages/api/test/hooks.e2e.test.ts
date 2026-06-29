@@ -25,8 +25,8 @@ before(async () => {
   const widget = schema({
     name: 'widget',
     fields: [
-      { name: 'title', cmsType: 'string', options: { nullable: true } },
-      { name: 'slug', cmsType: 'string', options: { nullable: true } },
+      { name: 'title', type: 'string', options: { nullable: true } },
+      { name: 'slug', type: 'string', options: { nullable: true } },
     ],
   });
 

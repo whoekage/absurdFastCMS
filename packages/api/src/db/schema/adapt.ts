@@ -11,7 +11,7 @@ import { AppError } from '../../errors/app-error.ts';
  * `Registry.fromSchemas` reuse the battle-tested `buildDef` verbatim: schema → rows → buildDef.
  *
  * The forward direction reuses the EXACT `resolveFields` the meta writer (`createContentType`) uses, so a
- * field resolves to the SAME `{ cms_type, pg_type, engine_type, params, default_value }` whether it came
+ * field resolves to the SAME `{ type, pg_type, engine_type, params, default_value }` whether it came
  * from a file or from the `content_type_fields` table — that equivalence is the S1 oracle.
  *
  * SYNTHETIC IDS: `buildDef`/`buildUserField` never read a row's numeric `id`/`content_type_id` (they key
@@ -42,7 +42,7 @@ const SYNTHETIC_ID = 0;
  * the file-driven seed (table materialization). Relations are not fields and are not projected here.
  */
 export function fieldSchemaToSpec(f: FieldSchema): FieldSpec {
-  const spec: FieldSpec = { name: f.name, cmsType: f.type };
+  const spec: FieldSpec = { name: f.name, type: f.type };
   if (f.options !== undefined) spec.options = f.options;
   if (f.localized !== undefined) spec.localized = f.localized;
   return spec;
@@ -83,7 +83,7 @@ export function schemaToRows(schema: Schema): { ct: ModuleRow; fieldRows: FieldR
     id: i,
     content_type_id: SYNTHETIC_ID,
     name: rf.name,
-    cms_type: rf.resolved.cmsType,
+    type: rf.resolved.type,
     pg_type: rf.resolved.pgType,
     engine_type: rf.resolved.engineType,
     nullable: rf.nullable,
@@ -151,7 +151,7 @@ export function componentSchemaToRows(schema: ComponentSchema): { cmp: Component
     id: i,
     component_type_id: SYNTHETIC_ID,
     name: rf.name,
-    cms_type: rf.cmsType,
+    type: rf.type,
     params: rf.params,
     nullable: rf.nullable,
     sort: i,

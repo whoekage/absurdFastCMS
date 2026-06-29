@@ -35,16 +35,16 @@ test('build: system fields prepended in order, engine types 1:1, decimal scale/p
     schema({
       name: 'kitchen',
       fields: [
-        { name: 'name', cmsType: 'string', options: { length: 50, nullable: false } },
-        { name: 'big', cmsType: 'biginteger', options: { nullable: true } },
-        { name: 'price', cmsType: 'decimal', options: { precision: 10, scale: 2, nullable: true } },
-        { name: 'qty', cmsType: 'decimal', options: { precision: 8, scale: 0, nullable: true } },
-        { name: 'meta', cmsType: 'json', options: { nullable: true } },
-        { name: 'kind', cmsType: 'enumeration', options: { values: ['a', 'b', 'c'], nullable: false } },
-        { name: 'ref', cmsType: 'uuid', options: { nullable: true } },
-        { name: 'count', cmsType: 'integer', options: { nullable: true } },
-        { name: 'flag', cmsType: 'boolean', options: { nullable: false } },
-        { name: 'when', cmsType: 'datetime', options: { nullable: false } },
+        { name: 'name', type: 'string', options: { length: 50, nullable: false } },
+        { name: 'big', type: 'biginteger', options: { nullable: true } },
+        { name: 'price', type: 'decimal', options: { precision: 10, scale: 2, nullable: true } },
+        { name: 'qty', type: 'decimal', options: { precision: 8, scale: 0, nullable: true } },
+        { name: 'meta', type: 'json', options: { nullable: true } },
+        { name: 'kind', type: 'enumeration', options: { values: ['a', 'b', 'c'], nullable: false } },
+        { name: 'ref', type: 'uuid', options: { nullable: true } },
+        { name: 'count', type: 'integer', options: { nullable: true } },
+        { name: 'flag', type: 'boolean', options: { nullable: false } },
+        { name: 'when', type: 'datetime', options: { nullable: false } },
       ],
     }),
   ]);
@@ -53,16 +53,16 @@ test('build: system fields prepended in order, engine types 1:1, decimal scale/p
 
   // System fields first, in DDL order, then user fields by declaration order.
   assert.deepEqual(def.fields.slice(0, 3).map((f) => f.name), ['id', 'created_at', 'updated_at']);
-  assert.deepEqual(def.fields.slice(0, 3).map((f) => f.type), ['i32', 'date', 'date']);
+  assert.deepEqual(def.fields.slice(0, 3).map((f) => f.engineType), ['i32', 'date', 'date']);
   assert.deepEqual(def.fields.slice(3).map((f) => f.name), ['name', 'big', 'price', 'qty', 'meta', 'kind', 'ref', 'count', 'flag', 'when']);
 
   // engine types 1:1
   const byName = new Map(def.fields.map((f) => [f.name, f]));
-  assert.equal(byName.get('big')!.type, 'i64');
-  assert.equal(byName.get('price')!.type, 'decimal');
-  assert.equal(byName.get('meta')!.type, 'json');
-  assert.equal(byName.get('kind')!.type, 'string');
-  assert.equal(byName.get('ref')!.type, 'string');
+  assert.equal(byName.get('big')!.engineType, 'i64');
+  assert.equal(byName.get('price')!.engineType, 'decimal');
+  assert.equal(byName.get('meta')!.engineType, 'json');
+  assert.equal(byName.get('kind')!.engineType, 'string');
+  assert.equal(byName.get('ref')!.engineType, 'string');
 
   // decimal scale/precision threaded (incl. scale 0)
   assert.equal(byName.get('price')!.scale, 2);
@@ -94,7 +94,7 @@ test('build: system fields prepended in order, engine types 1:1, decimal scale/p
 
 test('build: a `time` field is rejected with RegistryError (engineType i32 but pg returns a string)', () => {
   assert.throws(
-    () => Registry.fromSchemas([schema({ name: 'sched', fields: [{ name: 'at', cmsType: 'time', options: { nullable: true } }] })]),
+    () => Registry.fromSchemas([schema({ name: 'sched', fields: [{ name: 'at', type: 'time', options: { nullable: true } }] })]),
     RegistryError,
   );
 });

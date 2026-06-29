@@ -76,8 +76,9 @@ export interface RegistryField {
   /** The physical Postgres column name (=== name; carried explicitly so no caller assumes equality). */
   column: string;
   /** Engine ColumnType (built directly from the validated engine_type). */
-  type: ColumnType;
-  cmsType: CmsType;
+  engineType: ColumnType;
+  /** The declared/logical field type (string/text/integer/media/…). */
+  type: CmsType;
   nullable: boolean;
   /** id/created_at/updated_at -> true: loaded + materialized, NEVER writable. */
   system: boolean;
@@ -93,14 +94,14 @@ export interface RegistryField {
   /** type === 'json' (drives the `::text` SELECT cast on both load and RETURNING). */
   json: boolean;
   /**
-   * be-04 MEDIA: present iff `cmsType === 'media'` — the field references the system `files` table by id.
+   * be-04 MEDIA: present iff `type === 'media'` — the field references the system `files` table by id.
    * `multiple:false` => SINGLE (an int4 column holding ONE positive files.id); `multiple:true` => MULTIPLE
    * (a jsonb array of ids). Absent for every non-media field. The body parser reads it (positive-int4 +
    * cardinality check), and the media-populate post-step reads it (resolve the id(s) against `files`).
    */
   media?: { multiple: boolean };
   /**
-   * be-05 COMPONENT: present iff `cmsType` is a component kind (component / component-repeatable /
+   * be-05 COMPONENT: present iff `type` is a component kind (component / component-repeatable /
    * dynamiczone). The field IS a plain `json` column in `fields`/`fieldDefs`/`writable` (the inline
    * component tree, emitted verbatim un-populated) — `field.json` is already true. This only records the
    * structural intent the recursive write validator + the read populate post-step (next phases) read:
@@ -109,7 +110,7 @@ export interface RegistryField {
    */
   component?: { kind: ComponentFieldKind; component?: string; components?: readonly string[] };
   /**
-   * be-05b RELATION-INSIDE-COMPONENT: present iff `cmsType === 'relation'` (a component field only) — an
+   * be-05b RELATION-INSIDE-COMPONENT: present iff `type === 'relation'` (a component field only) — an
    * INLINE id ref to a target module. The field IS a plain `json` column (`field.json===true`),
    * emitted verbatim un-populated. `target` is the referenced module name; `multiple` selects
    * single-id vs array-of-ids cardinality. The body parser reads it (positive-int4 + cardinality), the
@@ -248,12 +249,12 @@ function buildUserField(name: string, row: FieldRow): RegistryField {
   if (!KNOWN_COLUMN_TYPES.has(row.engine_type)) {
     throw new RegistryError(name, row.name, `unknown engine_type "${row.engine_type}"`);
   }
-  const type = row.engine_type as ColumnType;
-  const cmsType = row.cms_type as CmsType;
+  const engineType = row.engine_type as ColumnType;
+  const type = row.type as CmsType;
 
   // `time` resolves to engineType i32, but postgres.js returns a STRING for a `time` column — feeding
   // that string into an Int32Array would silently NaN. Fail LOUD: this load path does not support it.
-  if (cmsType === 'time') {
+  if (type === 'time') {
     throw new RegistryError(name, row.name, 'time is not supported on the load path');
   }
 
@@ -261,16 +262,16 @@ function buildUserField(name: string, row: FieldRow): RegistryField {
   const field: RegistryField = {
     name: row.name,
     column: row.name,
+    engineType,
     type,
-    cmsType,
     nullable: row.nullable,
     system: false,
     hasDefault: row.default_value !== null,
-    json: type === 'json',
+    json: engineType === 'json',
     localized: row.localized,
   };
 
-  if (type === 'decimal') {
+  if (engineType === 'decimal') {
     const scale = numberParam(params, 'scale');
     if (scale === undefined) throw new RegistryError(name, row.name, 'decimal field is missing scale');
     // Bound-check before it reaches the I64Column ctor (scale must be 0..18) so corrupt / forward-
@@ -300,20 +301,20 @@ function buildUserField(name: string, row: FieldRow): RegistryField {
   // params. The engine_type already drove `type` (i32 or json) above — this only adds the cardinality
   // flag the body parser + populate post-step read. A multiple-media field IS a json column, so
   // `field.json` is already true (RETURNING/SELECT ::text cast applies) — correct, no special-case.
-  if (cmsType === 'media') {
+  if (type === 'media') {
     field.media = { multiple: params['multiple'] === true };
   }
   // be-05b RELATION-INSIDE-COMPONENT: tag an inline relation ref from its catalog params. engine_type is
   // `json` (set above) so the column loads/serializes as RawJson verbatim — exactly like a media-multiple
   // / component field. Checked BEFORE the component arm because `relation` IS a ComponentFieldKind, but it
   // is NOT a structural component (no nested instance tree) so it must NOT populate `field.component`.
-  if (row.cms_type === 'relation') {
+  if (row.type === 'relation') {
     field.relationRef = { target: params['target'] as string, multiple: params['multiple'] === true };
-  } else if (isComponentFieldKind(row.cms_type)) {
+  } else if (isComponentFieldKind(row.type)) {
     // be-05 COMPONENT: tag the field with its structural intent from the catalog params. engine_type is
     // `json` (set above), so `type==='json'` + `field.json===true` already — the column loads/serializes as
     // RawJson verbatim with NO engine change. This only records kind + the referenced component name(s).
-    const kind = row.cms_type as ComponentFieldKind;
+    const kind = row.type as ComponentFieldKind;
     const c: { kind: ComponentFieldKind; component?: string; components?: readonly string[] } = { kind };
     if (typeof params['component'] === 'string') c.component = params['component'];
     if (Array.isArray(params['components'])) c.components = params['components'] as string[];
@@ -328,8 +329,8 @@ function systemField(def: FieldDef): RegistryField {
   return {
     name: def.name,
     column: def.name,
-    type: def.type,
-    cmsType: def.name === 'id' ? 'integer' : 'datetime',
+    engineType: def.type,
+    type: def.name === 'id' ? 'integer' : 'datetime',
     nullable: false,
     system: true,
     hasDefault: true,
@@ -348,8 +349,8 @@ function publishedAtField(): RegistryField {
   return {
     name: 'published_at',
     column: 'published_at',
-    type: 'date',
-    cmsType: 'datetime',
+    engineType: 'date',
+    type: 'datetime',
     nullable: true,
     system: true,
     hasDefault: true,
@@ -370,8 +371,8 @@ function documentIdField(): RegistryField {
   return {
     name: 'document_id',
     column: 'document_id',
-    type: 'i32',
-    cmsType: 'integer',
+    engineType: 'i32',
+    type: 'integer',
     nullable: false,
     system: true,
     hasDefault: true,
@@ -391,8 +392,8 @@ function localeField(): RegistryField {
   return {
     name: 'locale',
     column: 'locale',
+    engineType: 'string',
     type: 'string',
-    cmsType: 'string',
     nullable: false,
     system: true,
     hasDefault: false,
@@ -405,10 +406,10 @@ function localeField(): RegistryField {
 /** Build the positional {@link ColumnDescriptor} for a resolved field (lockstep with `fields`). */
 function descriptorFor(f: RegistryField): ColumnDescriptor {
   if (f.system && f.name === 'id') return { name: f.name, kind: 'id' };
-  if (f.type === 'i64') return { name: f.name, kind: 'i64' };
-  if (f.type === 'decimal') return { name: f.name, kind: 'decimal', scale: f.scale, precision: f.precision };
-  if (f.type === 'json') return { name: f.name, kind: 'json' };
-  if (f.type === 'date') return { name: f.name, kind: 'date' };
+  if (f.engineType === 'i64') return { name: f.name, kind: 'i64' };
+  if (f.engineType === 'decimal') return { name: f.name, kind: 'decimal', scale: f.scale, precision: f.precision };
+  if (f.engineType === 'json') return { name: f.name, kind: 'json' };
+  if (f.engineType === 'date') return { name: f.name, kind: 'date' };
   return { name: f.name, kind: 'passthrough' };
 }
 
@@ -445,12 +446,12 @@ function buildIndexPlan(fields: RegistryField[]): IndexPlan {
       eq.push(f.name);
       continue;
     }
-    if (f.type === 'json') continue;
-    if (f.type === 'bool' || (f.type === 'string' && f.enumValues !== undefined)) {
+    if (f.engineType === 'json') continue;
+    if (f.engineType === 'bool' || (f.engineType === 'string' && f.enumValues !== undefined)) {
       eq.push(f.name);
       continue;
     }
-    if (f.type === 'i32' || f.type === 'f64' || f.type === 'date' || f.type === 'i64' || f.type === 'decimal') {
+    if (f.engineType === 'i32' || f.engineType === 'f64' || f.engineType === 'date' || f.engineType === 'i64' || f.engineType === 'decimal') {
       sorted.push(f.name);
     }
   }
@@ -508,7 +509,7 @@ function buildDef(ct: ModuleRow, fieldRows: FieldRow[], relationRows: RelationRo
 
   const fieldDefs: FieldDef[] = fields.map((f) => ({
     name: f.name,
-    type: f.type,
+    type: f.engineType,
     ...(f.scale !== undefined ? { scale: f.scale } : {}),
     ...(f.precision !== undefined ? { precision: f.precision } : {}),
   }));
@@ -606,7 +607,7 @@ function componentRowToFieldRow(r: ComponentFieldRow): FieldRow {
     id: r.id,
     content_type_id: r.component_type_id,
     name: r.name,
-    cms_type: r.cms_type,
+    type: r.type,
     pg_type: 'jsonb',
     engine_type: engineType,
     nullable: r.nullable,
@@ -619,15 +620,15 @@ function componentRowToFieldRow(r: ComponentFieldRow): FieldRow {
 
 /** The engine_type for a component field (so buildUserField's KNOWN_COLUMN_TYPES gate passes). */
 function componentEngineType(r: ComponentFieldRow): string {
-  if (isComponentFieldKind(r.cms_type)) return 'json';
+  if (isComponentFieldKind(r.type)) return 'json';
   // media multiple -> json; media single -> i32 (mirrors the catalog).
-  if (r.cms_type === 'media') return (r.params?.['multiple'] === true ? 'json' : 'i32');
+  if (r.type === 'media') return (r.params?.['multiple'] === true ? 'json' : 'i32');
   const m: Record<string, string> = {
     string: 'string', email: 'string', uid: 'string', enumeration: 'string', uuid: 'string',
     text: 'text', integer: 'i32', biginteger: 'i64', float: 'f64', decimal: 'decimal',
     boolean: 'bool', date: 'date', datetime: 'date', time: 'i32', json: 'json', array: 'json',
   };
-  return m[r.cms_type] ?? 'json';
+  return m[r.type] ?? 'json';
 }
 
 /**

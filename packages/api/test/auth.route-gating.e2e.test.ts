@@ -107,8 +107,8 @@ before(async () => {
 
   // Pre-build dpgate (Draft & Publish) + crudt (plain) files-first: write the modules fixtures, then migrate
   // them so the ct_ tables + snapshot exist. The first HTTP sign-up below is therefore still genuinely first.
-  const dpgate = schema({ name: 'dpgate', draftPublish: true, fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }] });
-  const crudt = schema({ name: 'crudt', fields: [{ name: 'title', cmsType: 'string' }] });
+  const dpgate = schema({ name: 'dpgate', draftPublish: true, fields: [{ name: 'title', type: 'string', options: { nullable: false } }] });
+  const crudt = schema({ name: 'crudt', fields: [{ name: 'title', type: 'string' }] });
   await rm(genDir, { recursive: true, force: true });
   for (const schema of [dpgate, crudt]) {
     await mkdir(path.join(genDir, schema.name), { recursive: true });

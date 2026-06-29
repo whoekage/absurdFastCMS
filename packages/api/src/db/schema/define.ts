@@ -9,7 +9,7 @@ import type { Schema, FieldSchema, RelationSchema } from './model.ts';
  * regenerates `<name>.ts` wholesale (no AST surgery), and NEVER touches the dev-owned `.hooks.ts`. This is
  * the Payload/Drizzle shape: typed field builders, types inferred for free ({@link InferType}), no JSON.
  *
- * The DSL is a thin AUTHORING layer over the kept engine: a builder just records `{ id?, cmsType, options }`
+ * The DSL is a thin AUTHORING layer over the kept engine: a builder just records `{ id?, type, options }`
  * (+ a phantom TS type for inference). `defToSchema` introspects a def into the SAME internal
  * `Schema` IR the diff/migrate/registry already consume — so the whole engine is UNCHANGED; only
  * the source format moved. Runtime validation stays registry-driven (no redundant zod object is built here).
@@ -26,7 +26,7 @@ export interface FieldBuilder<T = unknown> {
   readonly __kind: 'field';
   readonly __type?: T;
   readonly id?: string;
-  readonly cmsType: CmsType | ComponentFieldKind;
+  readonly type: CmsType | ComponentFieldKind;
   readonly options: FieldOptions;
 }
 /** A relation field builder (link-table). `T` is the inferred id / id[] wire type. */
@@ -55,8 +55,8 @@ function clean(o: Record<string, unknown>): FieldOptions {
   for (const [k, v] of Object.entries(o)) if (v !== undefined) out[k] = v;
   return out as FieldOptions;
 }
-function field<T>(cmsType: CmsType | ComponentFieldKind, options: FieldOptions, id?: string): FieldBuilder<T> {
-  return id !== undefined ? { __kind: 'field', cmsType, options, id } : { __kind: 'field', cmsType, options };
+function field<T>(type: CmsType | ComponentFieldKind, options: FieldOptions, id?: string): FieldBuilder<T> {
+  return id !== undefined ? { __kind: 'field', type, options, id } : { __kind: 'field', type, options };
 }
 
 type StringOpts = BaseOpts & { max?: number; default?: string };
@@ -208,7 +208,7 @@ export function defToSchema(def: TypeDef, moduleName: string): Schema {
           : { id: b.id ?? name, field: name, kind: b.relKind, target: b.target },
       );
     } else {
-      fields.push({ id: b.id ?? name, name, type: b.cmsType, options: b.options });
+      fields.push({ id: b.id ?? name, name, type: b.type, options: b.options });
     }
   }
   const schema: Schema = { id: def.id ?? moduleName, name: moduleName, fields };

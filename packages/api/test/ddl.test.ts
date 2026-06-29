@@ -102,14 +102,14 @@ test('T9 duplicate field names within a type rejected case-insensitively', () =>
   // Exercise the PRODUCTION dedup (resolveFields), not a re-implemented loop: a regression that
   // removed the Set/lower() dedup in resolveFields would now fail this test.
   assert.throws(
-    () => resolveFields([{ name: 'Title', cmsType: 'string' }, { name: 'title', cmsType: 'string' }]),
+    () => resolveFields([{ name: 'Title', type: 'string' }, { name: 'title', type: 'string' }]),
     DuplicateFieldError,
   );
   // distinct names resolve cleanly (no false positive).
-  assert.doesNotThrow(() => resolveFields([{ name: 'title', cmsType: 'string' }, { name: 'body', cmsType: 'text' }]));
+  assert.doesNotThrow(() => resolveFields([{ name: 'title', type: 'string' }, { name: 'body', type: 'text' }]));
 });
 
-// T10 — resolveType exhaustive table: every cms_type -> exact pgType + engineType + params. [6,7,29,30,31,32,33,34,56,67]
+// T10 — resolveType exhaustive table: every type -> exact pgType + engineType + params. [6,7,29,30,31,32,33,34,56,67]
 test('T10 resolveType exhaustive catalog', () => {
   const table: Array<[CmsType, FieldOptionsLite, string, EngineTypeIntent]> = [
     ['string', {}, 'varchar(255)', 'string'],
@@ -149,9 +149,9 @@ test('T10 resolveType exhaustive catalog', () => {
   assert.equal(resolveType('enumeration', { values: ['a', 'b'] }).engineType, 'string');
 });
 
-// T11 — unknown cms_type -> UnknownCmsTypeError. [36]
-test('T11 unknown cms_type rejected', () => {
-  // NOTE: `media` is now a SUPPORTED scalar cms_type (be-04) and is intentionally NOT in this list.
+// T11 — unknown type -> UnknownCmsTypeError. [36]
+test('T11 unknown type rejected', () => {
+  // NOTE: `media` is now a SUPPORTED scalar type (be-04) and is intentionally NOT in this list.
   for (const bad of ['relation', 'component', 'dynamiczone', 'richtext']) {
     assert.throws(() => resolveType(bad as CmsType), UnknownCmsTypeError, bad);
   }
@@ -218,7 +218,7 @@ test('T15 classifyTypeChange rewrite vs metadata-only', () => {
   assert.equal(classifyTypeChange(resolveType('string', { length: 255 }), resolveType('string', { length: 100 })), 'rewrite'); // varchar shrink
   assert.equal(classifyTypeChange(resolveType('string', { length: 100 }), resolveType('string', { length: 255 })), 'metadata-only'); // varchar grow
   assert.equal(classifyTypeChange(resolveType('string', { length: 255 }), resolveType('text')), 'metadata-only'); // varchar->text
-  // Enum CHECK / cms_type semantics guard: an identical-pgType change that would leave the physical
+  // Enum CHECK / type semantics guard: an identical-pgType change that would leave the physical
   // CHECK stale is NOT metadata-only. (The plain ALTER COLUMN TYPE never touches the CHECK.)
   const enA = resolveType('enumeration', { values: ['a', 'b'] }); // varchar(1)
   const enX = resolveType('enumeration', { values: ['x', 'y'] }); // varchar(1) — SAME pgType, different members
@@ -229,9 +229,9 @@ test('T15 classifyTypeChange rewrite vs metadata-only', () => {
   assert.equal(classifyTypeChange(resolveType('string', { length: 2 }), resolveType('enumeration', { values: ['aa', 'bb'] })), 'rewrite');
   // enum(['aaa','bbb']) -> string(3) (both varchar(3)) must NOT be metadata-only (stale CHECK remains).
   assert.equal(classifyTypeChange(resolveType('enumeration', { values: ['aaa', 'bbb'] }), resolveType('string', { length: 3 })), 'rewrite');
-  // json -> array (both jsonb) flips cms_type with no physical change => not metadata-only.
+  // json -> array (both jsonb) flips type with no physical change => not metadata-only.
   assert.equal(classifyTypeChange(resolveType('json'), resolveType('array')), 'rewrite');
-  // string -> uid / string -> email (all varchar(255), engine 'string') flip cms_type => not metadata-only.
+  // string -> uid / string -> email (all varchar(255), engine 'string') flip type => not metadata-only.
   assert.equal(classifyTypeChange(resolveType('string'), resolveType('uid')), 'rewrite');
   // a categorically-impossible cast (jsonb <-> integer) is 'forbidden', not merely 'rewrite'.
   assert.equal(classifyTypeChange(resolveType('json'), resolveType('integer')), 'forbidden');

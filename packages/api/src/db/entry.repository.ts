@@ -64,7 +64,7 @@ function bindValue(field: RegistryField, value: unknown): unknown {
   // canonical jsonb, so JSON.parse round-trips it; >2^53 fidelity is already the loader's concern (the
   // wire JSON.parse upstream collapsed any such int), exactly as on the normal write path.
   if (value instanceof RawJson) return JSON.parse(value.raw);
-  switch (field.type) {
+  switch (field.engineType) {
     case 'i64':
       // The validator produced a canonical digit STRING; bind it so int8 round-trips exactly.
       return value;
@@ -346,7 +346,7 @@ export function serializeEntry(def: ModuleDef, row: Record<string, unknown>): st
       out += v instanceof RawJson ? v.raw : (v as string);
       continue;
     }
-    switch (f.type) {
+    switch (f.engineType) {
       case 'date':
         out += JSON.stringify(new Date(v as string | number | Date).toISOString());
         break;

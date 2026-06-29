@@ -59,10 +59,10 @@ before(async () => {
     name: 'page',
     i18n: true,
     fields: [
-      { name: 'title', cmsType: 'string', options: { nullable: false }, localized: true },
-      { name: 'gallery', cmsType: 'media', options: { multiple: true, nullable: true }, localized: false },
-      { name: 'hero', cmsType: 'media', options: { nullable: true }, localized: false },
-      { name: 'banner', cmsType: 'media', options: { nullable: true }, localized: true },
+      { name: 'title', type: 'string', options: { nullable: false }, localized: true },
+      { name: 'gallery', type: 'media', options: { multiple: true, nullable: true }, localized: false },
+      { name: 'hero', type: 'media', options: { nullable: true }, localized: false },
+      { name: 'banner', type: 'media', options: { nullable: true }, localized: true },
     ],
   });
   srv = await startTestServer(sql, [pageSchema]);

@@ -10,11 +10,11 @@ import { validateFieldName, validateDefault, DuplicateFieldError, type RelationK
  * {@link Registry} / adapter still consume.
  */
 
-/** A field the caller wants to define: the user name, its cms_type, and per-type options. */
+/** A field the caller wants to define: the user name, its type, and per-type options. */
 export interface FieldSpec {
   /** A scalar {@link CmsType} OR a be-05 {@link ComponentFieldKind} (component/component-repeatable/dynamiczone). */
   name: string;
-  cmsType: CmsType | ComponentFieldKind;
+  type: CmsType | ComponentFieldKind;
   options?: FieldOptions | undefined;
   /** i18n: true => the field is localized (per-variant); false => shared across locale variants. Defaults true. */
   localized?: boolean;
@@ -38,7 +38,7 @@ export interface FieldRow {
   id: number;
   content_type_id: number;
   name: string;
-  cms_type: string;
+  type: string;
   pg_type: string;
   engine_type: string;
   nullable: boolean;
@@ -77,13 +77,13 @@ export interface RelationRow {
  * dynamiczone it has NO top-level (module) form — a relation INSIDE a component is an inline id ref
  * stored in the component's json (set-by-value, existence-checked on write, populate-resolved on read). A
  * relation at the TOP LEVEL of a module goes through the be-01 LINK-TABLE path ({@link RelationSpec},
- * a real CSR with an inverse side), NOT this scalar-field path. So reject `cmsType === 'relation'` here:
+ * a real CSR with an inverse side), NOT this scalar-field path. So reject `type === 'relation'` here:
  * `resolveComponentField` is shared with the component-type path (the only legitimate caller). Without
  * this, a top-level relation field would resolve to a bare json column that is never existence-checked nor
  * populated — a silently-broken field (dangling/arbitrary-json on write, raw value on read).
  */
-function rejectTopLevelRelation(cmsType: CmsType | ComponentFieldKind): void {
-  if (cmsType === 'relation') {
+function rejectTopLevelRelation(type: CmsType | ComponentFieldKind): void {
+  if (type === 'relation') {
     throw new ComponentFieldError(
       "a `relation` field is only valid INSIDE a component type; declare a top-level relation via the relations[] (link-table) API",
     );
@@ -108,13 +108,13 @@ export function resolveFields(specs: FieldSpec[]): ResolvedField[] {
     // the module field path BEFORE resolving (otherwise it would resolve to a bare json column that
     // is never existence-checked on write nor populated on read). Top-level relations go through the be-01
     // link-table path (RelationSpec), NOT this scalar-field path.
-    rejectTopLevelRelation(spec.cmsType);
+    rejectTopLevelRelation(spec.type);
     // be-05: a component/component-repeatable/dynamiczone field resolves to a jsonb column via a SIBLING
     // helper (NOT the RESOLVERS record — so the `satisfies Record<CmsType,...>` guard stays exhaustive).
     // A component field never carries a constant default (it is a structured tree, not a scalar).
-    const resolved = isComponentFieldKind(spec.cmsType)
-      ? resolveComponentField(spec.cmsType, spec.options)
-      : resolveType(spec.cmsType, spec.options);
+    const resolved = isComponentFieldKind(spec.type)
+      ? resolveComponentField(spec.type, spec.options)
+      : resolveType(spec.type, spec.options);
     const nullable = spec.options?.nullable ?? true;
     let defaultValue: unknown;
     if (spec.options?.default !== undefined) defaultValue = validateDefault(resolved, spec.options.default).sqlLiteral;

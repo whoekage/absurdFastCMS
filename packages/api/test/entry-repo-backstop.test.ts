@@ -23,7 +23,7 @@ let gadgetSchema: Schema;
 before(async () => {
   db = await createFileDatabase('erb');
   sql = db.sql;
-  gadgetSchema = schema({ name: 'gadget', fields: [{ name: 'code', cmsType: 'string', options: { nullable: false } }] });
+  gadgetSchema = schema({ name: 'gadget', fields: [{ name: 'code', type: 'string', options: { nullable: false } }] });
   await migrate(sql, [gadgetSchema], { allowDestructive: true });
   // A real UNIQUE constraint on a user column so a duplicate insert raises 23505 through the repo.
   await sql`ALTER TABLE ct_gadget ADD CONSTRAINT ct_gadget_code_uniq UNIQUE (code)`;

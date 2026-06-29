@@ -71,9 +71,9 @@ test('LIST fields=: returns exactly id + requested columns (Strapi v5)', async (
     schema({
       name: 'article',
       fields: [
-        { name: 'title', cmsType: 'string' },
-        { name: 'body', cmsType: 'text' },
-        { name: 'views', cmsType: 'integer' },
+        { name: 'title', type: 'string' },
+        { name: 'body', type: 'text' },
+        { name: 'views', type: 'integer' },
       ],
     }),
   ];
@@ -94,8 +94,8 @@ test('SINGLE /:type/:id now threads fields (was previously ignored)', async () =
     schema({
       name: 'article',
       fields: [
-        { name: 'title', cmsType: 'string' },
-        { name: 'body', cmsType: 'text' },
+        { name: 'title', type: 'string' },
+        { name: 'body', type: 'text' },
       ],
     }),
   ];
@@ -112,7 +112,7 @@ test('SINGLE /:type/:id now threads fields (was previously ignored)', async () =
 });
 
 test('fields with an UNKNOWN field 400s (same gate as filters)', async () => {
-  const schemas = [schema({ name: 'article', fields: [{ name: 'title', cmsType: 'string' }] })];
+  const schemas = [schema({ name: 'article', fields: [{ name: 'title', type: 'string' }] })];
   await setup(schemas);
   const engine = await boot(schemas);
   assert.equal(get(engine, '/article', 'fields=nope').status, 400);
@@ -121,10 +121,10 @@ test('fields with an UNKNOWN field 400s (same gate as filters)', async () => {
 
 test('fields COMPOSES with populate: projected OWNER body + FULL related rows', async () => {
   const schemas = [
-    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }, { name: 'bio', cmsType: 'text' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', type: 'string' }, { name: 'bio', type: 'text' }] }),
     schema({
       name: 'book',
-      fields: [{ name: 'title', cmsType: 'string' }, { name: 'isbn', cmsType: 'string' }],
+      fields: [{ name: 'title', type: 'string' }, { name: 'isbn', type: 'string' }],
       relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }],
     }),
   ];
@@ -153,7 +153,7 @@ test('NO fields: the response is byte-identical to before (full-row path unchang
   const schemas = [
     schema({
       name: 'article',
-      fields: [{ name: 'title', cmsType: 'string' }, { name: 'views', cmsType: 'integer' }],
+      fields: [{ name: 'title', type: 'string' }, { name: 'views', type: 'integer' }],
     }),
   ];
   await setup(schemas);

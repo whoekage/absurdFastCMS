@@ -32,8 +32,8 @@ before(async () => {
   const post = schema({
     name: 'post',
     fields: [
-      { name: 'title', cmsType: 'string', options: { nullable: false } },
-      { name: 'publishedAt', cmsType: 'datetime', options: { nullable: true } }, // user field, distinct key
+      { name: 'title', type: 'string', options: { nullable: false } },
+      { name: 'publishedAt', type: 'datetime', options: { nullable: true } }, // user field, distinct key
     ],
     draftPublish: true,
   });

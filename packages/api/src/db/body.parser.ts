@@ -389,7 +389,7 @@ function coerce(field: RegistryField, v: unknown): unknown {
   // is a file-id reference with cardinality + positive-int4 rules — coerce it HERE before the generic
   // engine-type switch (which would accept any integer / any JSON for i32 / json).
   if (field.media !== undefined) return coerceMedia(field, field.media.multiple, v);
-  switch (field.type) {
+  switch (field.engineType) {
     case 'i32':
       if (typeof v !== 'number' || !Number.isInteger(v)) throw new BodyParseError(`field "${name}" must be an integer`);
       return v;

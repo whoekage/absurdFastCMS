@@ -45,18 +45,18 @@ before(async () => {
     schema({
       name: 'product',
       fields: [
-        { name: 'title', cmsType: 'string', options: { nullable: false } },
-        { name: 'cover', cmsType: 'media' },
+        { name: 'title', type: 'string', options: { nullable: false } },
+        { name: 'cover', type: 'media' },
       ],
     }),
     schema({
       name: 'gallery',
       fields: [
-        { name: 'name', cmsType: 'string', options: { nullable: false } },
-        { name: 'photos', cmsType: 'media', options: { multiple: true } },
+        { name: 'name', type: 'string', options: { nullable: false } },
+        { name: 'photos', type: 'media', options: { multiple: true } },
       ],
     }),
-    schema({ name: 'note', fields: [{ name: 'body', cmsType: 'text' }] }),
+    schema({ name: 'note', fields: [{ name: 'body', type: 'text' }] }),
   ];
   const srv = await startTestServer(sql, schemas);
   base = srv.base;

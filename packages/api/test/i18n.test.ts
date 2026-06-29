@@ -33,7 +33,7 @@ before(async () => {
   // A NON-i18n type (the seed article) to assert byte-identity is unaffected + an i18n-ENABLED `page`.
   const page = schema({
     name: 'page',
-    fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }],
+    fields: [{ name: 'title', type: 'string', options: { nullable: false } }],
     i18n: true,
   });
   baseSchemas = [ARTICLE_SCHEMA, page];
@@ -199,8 +199,8 @@ test('write-side: plain create -> variant create (same document_id, distinct id+
   const doc = schema({
     name: 'doc',
     fields: [
-      { name: 'title', cmsType: 'string', options: { nullable: false }, localized: true },
-      { name: 'summary', cmsType: 'string', options: { nullable: true }, localized: false },
+      { name: 'title', type: 'string', options: { nullable: false }, localized: true },
+      { name: 'summary', type: 'string', options: { nullable: true }, localized: false },
     ],
     i18n: true,
     draftPublish: true,

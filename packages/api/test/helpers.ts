@@ -189,14 +189,14 @@ export async function startTestServerFromFilesWithAuth(
 }
 
 /**
- * Convert the old `createContentType` spec shape (`{ name, fields:[{name, cmsType, options}], relations,
- * draftPublish, i18n }`) into a files-first {@link Schema} (stable ids minted, `cmsType`→`type`).
+ * Convert the old `createContentType` spec shape (`{ name, fields:[{name, type, options}], relations,
+ * draftPublish, i18n }`) into a files-first {@link Schema} (stable ids minted, `type`→`type`).
  * Lets a meta-path test migrate by wrapping its specs in `schema(...)` + `startTestServerFromSchemas` instead of
  * imperative `createContentType` + `addRelation` calls.
  */
 export interface SchemaSpec {
   name: string;
-  fields: { name: string; cmsType: FieldType; options?: FieldOptions; localized?: boolean }[];
+  fields: { name: string; type: FieldType; options?: FieldOptions; localized?: boolean }[];
   relations?: { field: string; kind: RelationKind; target: string; inverseField?: string }[];
   draftPublish?: boolean;
   i18n?: boolean;
@@ -208,7 +208,7 @@ export function schema(spec: SchemaSpec): Schema {
     fields: spec.fields.map((f) => ({
       id: mintId('f'),
       name: f.name,
-      type: f.cmsType,
+      type: f.type,
       ...(f.options !== undefined ? { options: f.options } : {}),
       ...(f.localized !== undefined ? { localized: f.localized } : {}),
     })),

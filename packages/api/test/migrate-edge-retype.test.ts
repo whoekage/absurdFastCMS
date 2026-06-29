@@ -204,7 +204,7 @@ test('UNCASTABLE string -> integer on NON-NUMERIC rows: gated, and on apply the 
   ]);
   await sql.unsafe(`INSERT INTO ct_thing (title, note) VALUES ('hello world', 'keep me')`);
 
-  // string -> integer: cms_type + pg_type + engine_type all change -> rewrite -> data-dependent -> gated.
+  // string -> integer: type + pg_type + engine_type all change -> rewrite -> data-dependent -> gated.
   const retyped = [
     schema('ct_a', 'thing', [
       f('f_t', 'title', 'integer', { nullable: true }),

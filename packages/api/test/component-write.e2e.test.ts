@@ -102,8 +102,8 @@ test('W1 single component value validates + stores + reads back with a stable in
   const page = schema({
     name: 'page',
     fields: [
-      { name: 'title', cmsType: 'string', options: { nullable: false } },
-      { name: 'seo', cmsType: 'component', options: { component: 'seo' } },
+      { name: 'title', type: 'string', options: { nullable: false } },
+      { name: 'seo', type: 'component', options: { component: 'seo' } },
     ],
   });
   await boot([page], [seo]);
@@ -124,7 +124,7 @@ test('W1 single component value validates + stores + reads back with a stable in
 // --- W2: repeatable component preserves order + assigns distinct ids ---------------------------
 test('W2 repeatable component preserves array order and assigns distinct instance ids', async () => {
   const item = component('item', [{ name: 'label', type: 'string', options: { nullable: false } }]);
-  const list = schema({ name: 'list', fields: [{ name: 'items', cmsType: 'component-repeatable', options: { component: 'item' } }] });
+  const list = schema({ name: 'list', fields: [{ name: 'items', type: 'component-repeatable', options: { component: 'item' } }] });
   await boot([list], [item]);
 
   const created = (await (await POST('/list', { items: [{ label: 'a' }, { label: 'b' }, { label: 'c' }] })).json()) as {
@@ -145,7 +145,7 @@ test('W3 dynamic zone validates __component, preserves order, rejects disallowed
   const hero = component('hero', [{ name: 'headline', type: 'string', options: { nullable: false } }]);
   const quote = component('quote', [{ name: 'text', type: 'string', options: { nullable: false } }]);
   const banner = component('banner', [{ name: 'src', type: 'string' }]);
-  const article = schema({ name: 'article', fields: [{ name: 'body', cmsType: 'dynamiczone', options: { components: ['hero', 'quote'] } }] });
+  const article = schema({ name: 'article', fields: [{ name: 'body', type: 'dynamiczone', options: { components: ['hero', 'quote'] } }] });
   await boot([article], [hero, quote, banner]);
 
   const created = (await (await POST('/article', {
@@ -175,7 +175,7 @@ test('W3 dynamic zone validates __component, preserves order, rejects disallowed
 // --- W4: unknown nested field rejected with a scoped path --------------------------------------
 test('W4 an unknown field inside a component is rejected with a scoped-path 400', async () => {
   const seo = component('seo', [{ name: 'metaTitle', type: 'string' }]);
-  const page = schema({ name: 'page', fields: [{ name: 'seo', cmsType: 'component', options: { component: 'seo' } }] });
+  const page = schema({ name: 'page', fields: [{ name: 'seo', type: 'component', options: { component: 'seo' } }] });
   await boot([page], [seo]);
   const r = await POST('/page', { seo: { metaTitle: 'ok', bogus: 'nope' } });
   const rText = await r.text();
@@ -186,7 +186,7 @@ test('W4 an unknown field inside a component is rejected with a scoped-path 400'
 // --- W5: missing required nested field rejected with a scoped path -----------------------------
 test('W5 a missing required field inside a component is rejected (scoped path)', async () => {
   const seo = component('seo', [{ name: 'metaTitle', type: 'string', options: { nullable: false } }]);
-  const page = schema({ name: 'page', fields: [{ name: 'seo', cmsType: 'component', options: { component: 'seo' } }] });
+  const page = schema({ name: 'page', fields: [{ name: 'seo', type: 'component', options: { component: 'seo' } }] });
   await boot([page], [seo]);
   const r = await POST('/page', { seo: { metaTitle: null } }); // explicit null on a non-nullable nested field.
   assert.equal(r.status, 400, await r.text());
@@ -200,7 +200,7 @@ test('W6 wire fidelity holds inside a component value', async () => {
     { name: 'at', type: 'datetime' },
     { name: 'blob', type: 'json' },
   ]);
-  const doc = schema({ name: 'doc', fields: [{ name: 'm', cmsType: 'component', options: { component: 'metrics' } }] });
+  const doc = schema({ name: 'doc', fields: [{ name: 'm', type: 'component', options: { component: 'metrics' } }] });
   await boot([doc], [metrics]);
 
   const bigVal = '9007199254740993'; // > 2^53, must survive as a STRING.
@@ -229,7 +229,7 @@ test('W7 too-deep component nesting is rejected (depth cap, scoped 400)', async 
     components.push(component(name, [{ name: 'child', type: 'component', options: { component: prev } }, { name: 'label', type: 'string' }]));
     prev = name;
   }
-  const tree = schema({ name: 'tree', fields: [{ name: 'root', cmsType: 'component', options: { component: prev } }] });
+  const tree = schema({ name: 'tree', fields: [{ name: 'root', type: 'component', options: { component: prev } }] });
   await boot([tree], components);
 
   // Build a value nested 12 deep (root -> child -> child ... -> node).
@@ -247,7 +247,7 @@ test('W8 an inline media ref inside a component is existence-checked + populated
     { name: 'title', type: 'string' },
     { name: 'image', type: 'media' },
   ]);
-  const gallery = schema({ name: 'gallery', fields: [{ name: 'card', cmsType: 'component', options: { component: 'card' } }] });
+  const gallery = schema({ name: 'gallery', fields: [{ name: 'card', type: 'component', options: { component: 'card' } }] });
   await boot([gallery], [card]);
 
   const asset = await uploadAsset(20, 30);
@@ -278,7 +278,7 @@ test('W8 an inline media ref inside a component is existence-checked + populated
 // --- W9: inline media inside a REPEATABLE + DYNAMIC ZONE populates across rows ------------------
 test('W9 inline media inside repeatable + dynamic-zone populates correctly', async () => {
   const slide = component('slide', [{ name: 'pic', type: 'media' }]);
-  const deck = schema({ name: 'deck', fields: [{ name: 'slides', cmsType: 'component-repeatable', options: { component: 'slide' } }] });
+  const deck = schema({ name: 'deck', fields: [{ name: 'slides', type: 'component-repeatable', options: { component: 'slide' } }] });
   await boot([deck], [slide]);
   const a1 = await uploadAsset(10, 10);
   const a2 = await uploadAsset(11, 11);
@@ -296,8 +296,8 @@ test('W10 a module with NO component field reads identically (no populate effect
   const plainType = schema({
     name: 'plain',
     fields: [
-      { name: 'title', cmsType: 'string', options: { nullable: false } },
-      { name: 'meta', cmsType: 'json' },
+      { name: 'title', type: 'string', options: { nullable: false } },
+      { name: 'meta', type: 'json' },
     ],
   });
   await boot([plainType]);
@@ -314,7 +314,7 @@ test('W10 a module with NO component field reads identically (no populate effect
 // --- W11: oversized component instance is rejected ---------------------------------------------
 test('W11 an oversized component instance is rejected (size cap, 400)', async () => {
   const blobby = component('blobby', [{ name: 'data', type: 'json' }]);
-  const big = schema({ name: 'big', fields: [{ name: 'b', cmsType: 'component', options: { component: 'blobby' } }] });
+  const big = schema({ name: 'big', fields: [{ name: 'b', type: 'component', options: { component: 'blobby' } }] });
   await boot([big], [blobby]);
   // The request body cap is 1 MiB; the per-instance cap is 256 KiB. A ~400 KiB instance trips the instance
   // cap with a clean 400 (under the body cap, so it reaches the validator).

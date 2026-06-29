@@ -46,7 +46,7 @@ let close: (t: unknown) => void;
 const PW = 'correct-horse-battery-staple';
 
 /** The single incidental write surface the API-key scope tests gate against (content.create/delete). */
-const NOTE_SCHEMA = schema({ name: 'note', fields: [{ name: 'title', cmsType: 'string' }] });
+const NOTE_SCHEMA = schema({ name: 'note', fields: [{ name: 'title', type: 'string' }] });
 
 /** Sign up a fresh user; returns its session Cookie header. */
 async function signUp(email: string): Promise<string> {

@@ -34,8 +34,8 @@ test('committed article.json parses, round-trips, and adapts to expected meta ro
   assert.deepEqual(fieldRows.map((r) => r.name), ['title', 'body', 'status', 'views', 'rating', 'active', 'publishedAt']);
   // sort is the array index (the byte-identical projection order).
   assert.deepEqual(fieldRows.map((r) => r.sort), [0, 1, 2, 3, 4, 5, 6]);
-  // cms_type is the declared `type` verbatim; engine_type is catalog-resolved.
-  assert.deepEqual(fieldRows.map((r) => r.cms_type), ['string', 'text', 'enumeration', 'integer', 'float', 'boolean', 'datetime']);
+  // type is the declared `type` verbatim; engine_type is catalog-resolved.
+  assert.deepEqual(fieldRows.map((r) => r.type), ['string', 'text', 'enumeration', 'integer', 'float', 'boolean', 'datetime']);
   assert.deepEqual(fieldRows.map((r) => r.engine_type), ['string', 'text', 'string', 'i32', 'f64', 'bool', 'date']);
   assert.deepEqual(fieldRows.map((r) => r.nullable), [true, false, false, true, true, false, false]);
   // enum members ride `params.values`; the read registry eq-indexes them.

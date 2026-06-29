@@ -20,9 +20,9 @@ before(async () => {
   server = await startTestServer(sql, [schema({
     name: 'metric',
     fields: [
-      { name: 'big', cmsType: 'biginteger', options: { nullable: false } },
-      { name: 'amount', cmsType: 'decimal', options: { precision: 18, scale: 2, nullable: false } },
-      { name: 'payload', cmsType: 'json', options: { nullable: false } },
+      { name: 'big', type: 'biginteger', options: { nullable: false } },
+      { name: 'amount', type: 'decimal', options: { precision: 18, scale: 2, nullable: false } },
+      { name: 'payload', type: 'json', options: { nullable: false } },
     ],
   })]);
 });

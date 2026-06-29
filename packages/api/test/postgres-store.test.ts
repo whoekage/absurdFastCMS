@@ -45,13 +45,13 @@ before(async () => {
   articleSchema = schema({
     name: 'article',
     fields: [
-      { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
-      { name: 'body', cmsType: 'text', options: { nullable: false } },
-      { name: 'status', cmsType: 'string', options: { nullable: false } },
-      { name: 'views', cmsType: 'integer', options: { nullable: true } },
-      { name: 'rating', cmsType: 'decimal', options: { precision: 10, scale: 2, nullable: true } },
-      { name: 'active', cmsType: 'boolean', options: { nullable: false } },
-      { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
+      { name: 'title', type: 'string', options: { length: 512, nullable: true } },
+      { name: 'body', type: 'text', options: { nullable: false } },
+      { name: 'status', type: 'string', options: { nullable: false } },
+      { name: 'views', type: 'integer', options: { nullable: true } },
+      { name: 'rating', type: 'decimal', options: { precision: 10, scale: 2, nullable: true } },
+      { name: 'active', type: 'boolean', options: { nullable: false } },
+      { name: 'publishedAt', type: 'datetime', options: { nullable: false } },
     ],
   });
   await migrate(sql, [articleSchema], { allowDestructive: true });

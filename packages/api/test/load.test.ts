@@ -30,11 +30,11 @@ after(async () => {
 test('multi-type load with i64/decimal/json byte-exact round-trip; warm once; empty type 0 rows', async () => {
   const schemas = [
     schema({ name: 'note', fields: [
-      { name: 'big', cmsType: 'biginteger', options: { nullable: true } },
-      { name: 'price', cmsType: 'decimal', options: { precision: 18, scale: 2, nullable: true } },
-      { name: 'meta', cmsType: 'json', options: { nullable: true } },
+      { name: 'big', type: 'biginteger', options: { nullable: true } },
+      { name: 'price', type: 'decimal', options: { precision: 18, scale: 2, nullable: true } },
+      { name: 'meta', type: 'json', options: { nullable: true } },
     ] }),
-    schema({ name: 'empty', fields: [{ name: 'x', cmsType: 'integer', options: { nullable: true } }] }),
+    schema({ name: 'empty', fields: [{ name: 'x', type: 'integer', options: { nullable: true } }] }),
   ];
   await migrate(sql, schemas, { allowDestructive: true });
 

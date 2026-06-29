@@ -23,7 +23,7 @@ export interface ComponentFieldRow {
   id: number;
   component_type_id: number;
   name: string;
-  cms_type: string;
+  type: string;
   params: Record<string, unknown>;
   nullable: boolean;
   sort: number;
@@ -32,14 +32,14 @@ export interface ComponentFieldRow {
 /** A field the caller wants on a component type: a scalar CmsType, media, or a nested component kind. */
 export interface ComponentFieldSpec {
   name: string;
-  cmsType: CmsType | ComponentFieldKind;
+  type: CmsType | ComponentFieldKind;
   options?: FieldOptions | undefined;
 }
 
-/** A resolved component field ready to consume: validated name + cms_type + params + nullable. */
+/** A resolved component field ready to consume: validated name + type + params + nullable. */
 export interface ResolvedComponentField {
   name: string;
-  cmsType: string;
+  type: string;
   params: Record<string, unknown>;
   nullable: boolean;
 }
@@ -57,10 +57,10 @@ export function resolveComponentFields(specs: ComponentFieldSpec[]): ResolvedCom
     const lower = name.toLowerCase();
     if (seen.has(lower)) throw new DuplicateFieldError(name);
     seen.add(lower);
-    const resolved: ResolvedType = isComponentFieldKind(spec.cmsType)
-      ? resolveComponentField(spec.cmsType, spec.options)
-      : resolveType(spec.cmsType, spec.options);
-    out.push({ name, cmsType: resolved.cmsType as string, params: resolved.params, nullable: spec.options?.nullable ?? true });
+    const resolved: ResolvedType = isComponentFieldKind(spec.type)
+      ? resolveComponentField(spec.type, spec.options)
+      : resolveType(spec.type, spec.options);
+    out.push({ name, type: resolved.type as string, params: resolved.params, nullable: spec.options?.nullable ?? true });
   }
   return out;
 }

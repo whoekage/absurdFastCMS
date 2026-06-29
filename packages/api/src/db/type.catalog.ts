@@ -2,7 +2,7 @@ import type { ColumnType } from '../store/column.ts';
 import { DECIMAL_MAX_SAFE_PRECISION } from '../store/decimal.const.ts';
 
 /**
- * The SINGLE source of the `cms_type -> { pgType, engineType, params }` mapping. Both the DDL
+ * The SINGLE source of the `type -> { pgType, engineType, params }` mapping. Both the DDL
  * generator (src/db/ddl.ts) and the meta writer (src/db/module.fields.ts) derive every per-type
  * decision from here, so the rendered Postgres column and the `content_type_fields` row can never
  * diverge. This module renders a pg TYPE LITERAL string (e.g. `numeric(10,2)`) that the Kysely
@@ -55,7 +55,7 @@ export type EngineTypeIntent = ColumnType | 'i64' | 'decimal' | 'json';
 /** The three intent-only engine strings that must NEVER reach the engine column factory. */
 export const INTENT_ONLY_ENGINE_TYPES: ReadonlySet<EngineTypeIntent> = new Set<EngineTypeIntent>(['i64', 'decimal', 'json']);
 
-/** Per-field options the caller may supply; each cms_type validates only the keys it cares about. */
+/** Per-field options the caller may supply; each type validates only the keys it cares about. */
 export interface FieldOptions {
   /** varchar length (char count) for string/email/uid/enumeration sizing. */
   length?: number;
@@ -85,21 +85,21 @@ export interface FieldOptions {
   target?: string;
 }
 
-/** A cms_type resolved against the catalog: the pg literal, the engine intent, and recorded params. */
+/** A type resolved against the catalog: the pg literal, the engine intent, and recorded params. */
 export interface ResolvedType {
-  cmsType: CmsType;
+  type: CmsType;
   pgType: string;
   engineType: EngineTypeIntent;
   params: Record<string, unknown>;
 }
 
-/** Thrown for any cms_type off the closed {@link CmsType} set (relation/media/component/dynamiczone). */
+/** Thrown for any type off the closed {@link CmsType} set (relation/media/component/dynamiczone). */
 export class UnknownCmsTypeError extends Error {
-  readonly cmsType: unknown;
-  constructor(cmsType: unknown) {
-    super(`unknown or unsupported module field type: ${String(cmsType)}`);
+  readonly type: unknown;
+  constructor(type: unknown) {
+    super(`unknown or unsupported module field type: ${String(type)}`);
     this.name = 'UnknownCmsTypeError';
-    this.cmsType = cmsType;
+    this.type = type;
   }
 }
 
@@ -206,16 +206,16 @@ const RESOLVERS = {
 } satisfies Record<CmsType, (o?: FieldOptions) => { pgType: string; engineType: EngineTypeIntent; params: Record<string, unknown> }>;
 
 /**
- * Resolve a cms_type (+ options) into the pg literal, engine intent, and recorded params. Throws
+ * Resolve a type (+ options) into the pg literal, engine intent, and recorded params. Throws
  * {@link UnknownCmsTypeError} for any value off the closed set, {@link TypeOptionError} for bad
  * varchar/numeric options, {@link EnumValueError} for a bad enum set. Renders NO SQL — `pgType` is a
  * plain literal the DDL builder drops into a `sql\`\`` escape hatch.
  */
-export function resolveType(cmsType: CmsType, options?: FieldOptions): ResolvedType {
-  const resolver = (RESOLVERS as Record<string, ((o?: FieldOptions) => { pgType: string; engineType: EngineTypeIntent; params: Record<string, unknown> }) | undefined>)[cmsType as string];
-  if (resolver === undefined) throw new UnknownCmsTypeError(cmsType);
+export function resolveType(type: CmsType, options?: FieldOptions): ResolvedType {
+  const resolver = (RESOLVERS as Record<string, ((o?: FieldOptions) => { pgType: string; engineType: EngineTypeIntent; params: Record<string, unknown> }) | undefined>)[type as string];
+  if (resolver === undefined) throw new UnknownCmsTypeError(type);
   const r = resolver(options);
-  return { cmsType, pgType: r.pgType, engineType: r.engineType, params: r.params };
+  return { type, pgType: r.pgType, engineType: r.engineType, params: r.params };
 }
 
 // --- be-05 COMPONENT field kinds (a CLOSED set; like RELATION_KINDS they are NOT scalar CmsTypes) -----
@@ -240,7 +240,7 @@ export function resolveType(cmsType: CmsType, options?: FieldOptions): ResolvedT
 export type ComponentFieldKind = 'component' | 'component-repeatable' | 'dynamiczone' | 'relation';
 const COMPONENT_FIELD_KINDS: ReadonlySet<string> = new Set<ComponentFieldKind>(['component', 'component-repeatable', 'dynamiczone', 'relation']);
 
-/** Closed-set test: is this cms_type one of the structured-content component kinds? */
+/** Closed-set test: is this type one of the structured-content component kinds? */
 export function isComponentFieldKind(value: unknown): value is ComponentFieldKind {
   return typeof value === 'string' && COMPONENT_FIELD_KINDS.has(value);
 }
@@ -277,7 +277,7 @@ export function resolveComponentField(kind: ComponentFieldKind, options?: FieldO
       throw new ComponentFieldError('relation requires a target module name');
     }
     if (target.includes(' ')) throw new ComponentFieldError(`relation target ${JSON.stringify(target)} is not a valid name`);
-    return { cmsType: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, target, multiple: options?.multiple === true } };
+    return { type: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, target, multiple: options?.multiple === true } };
   }
   if (kind === 'dynamiczone') {
     const components = options?.components;
@@ -290,14 +290,14 @@ export function resolveComponentField(kind: ComponentFieldKind, options?: FieldO
       if (seen.has(c.toLowerCase())) throw new ComponentFieldError(`duplicate dynamiczone component: ${c}`);
       seen.add(c.toLowerCase());
     }
-    return { cmsType: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, components: [...components] } };
+    return { type: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, components: [...components] } };
   }
   // component / component-repeatable: exactly one referenced component name.
   const component = options?.component;
   if (typeof component !== 'string' || component.length === 0) {
     throw new ComponentFieldError(`${kind} requires a component name`);
   }
-  return { cmsType: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, component } };
+  return { type: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, component } };
 }
 
 /**
@@ -309,11 +309,11 @@ export function resolveComponentField(kind: ComponentFieldKind, options?: FieldO
  */
 export function classifyTypeChange(from: ResolvedType, to: ResolvedType): 'metadata-only' | 'rewrite' | 'forbidden' {
   // CHECK / semantics guard (runs BEFORE the pgType-equality shortcut): an identical rendered pgType
-  // does NOT make a change metadata-only when the enum CHECK members or the cms_type semantics differ.
+  // does NOT make a change metadata-only when the enum CHECK members or the type semantics differ.
   // A plain ALTER COLUMN TYPE never touches the existing CHECK constraint, so any transition that
-  // would require adding/dropping/rebuilding the enum CHECK — or that flips the cms_type while sharing
+  // would require adding/dropping/rebuilding the enum CHECK — or that flips the type while sharing
   // a pgType (json<->array, string<->uid/email, string<->enumeration) — is a 'rewrite' in Step 2 and
-  // is rejected up front. Only a genuine binary-coercible widening of the SAME cms_type is metadata-only.
+  // is rejected up front. Only a genuine binary-coercible widening of the SAME type is metadata-only.
   const fromEnum = isEnum(from);
   const toEnum = isEnum(to);
   if (fromEnum || toEnum) {
@@ -324,7 +324,7 @@ export function classifyTypeChange(from: ResolvedType, to: ResolvedType): 'metad
     }
     return 'rewrite';
   }
-  if (from.cmsType !== to.cmsType && from.pgType === to.pgType) return 'rewrite';
+  if (from.type !== to.type && from.pgType === to.pgType) return 'rewrite';
 
   if (from.pgType === to.pgType) return 'metadata-only';
 
