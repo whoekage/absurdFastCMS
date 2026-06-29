@@ -40,8 +40,9 @@ export function mapPgError(e: unknown): never {
   switch (code) {
     case '23503': // foreign_key_violation — a relation op named a non-existent related id
       throw new EntryWriteError('write rejected: a related entry does not exist');
+    case '23505': // unique_violation — a value that must be distinct already exists
+      throw new EntryWriteError('write rejected: that value is already in use and must be distinct');
     case '23502': // not_null_violation
-    case '23505': // unique_violation
     case '22001': // string_data_right_truncation
     case '22003': // numeric_value_out_of_range
     case '22P02': // invalid_text_representation

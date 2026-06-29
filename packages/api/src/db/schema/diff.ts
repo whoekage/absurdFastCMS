@@ -142,6 +142,7 @@ function resolveField(f: FieldSchema): ResolvedType {
 }
 
 const nullableOf = (f: FieldSchema): boolean => f.options?.nullable ?? true;
+const uniqueOf = (f: FieldSchema): boolean => f.options?.unique ?? false;
 const hasDefault = (f: FieldSchema): boolean => f.options?.default !== undefined;
 
 /** Canonical JSON (object keys sorted) so a params compare is insensitive to key order. */
@@ -247,6 +248,11 @@ function diffMatchedType(typeId: string, p: Schema, n: Schema, alters: Change[],
     if (nullableOf(pf) !== nullableOf(nf)) {
       const to = nullableOf(nf);
       alters.push({ kind: 'setFieldNullable', typeId, name, risk: to ? 'safe' : 'data-dependent', fieldId: fid, fieldName: nf.name, from: nullableOf(pf), to });
+    }
+    // Toggling UNIQUE on an EXISTING field is deferred-loud (like a relation change): adding it can fail on
+    // dup rows, dropping it needs to find the constraint by name — both warrant a drop + re-add for now.
+    if (uniqueOf(pf) !== uniqueOf(nf)) {
+      throw new SchemaDiffError(`module "${n.name}" field "${nf.name}": changing a field's unique flag is deferred — drop and re-add the field`);
     }
   }
   // New fields (id only in next) → ADD COLUMN. NOT NULL with no default is data-dependent on existing rows.

@@ -50,6 +50,8 @@ interface BaseOpts {
   editorWidth?: 'full' | 'half';
   /** Admin conditional visibility ("show when …"). Metadata only. */
   condition?: FieldCondition;
+  /** Emit a single-column UNIQUE constraint. Rejected at resolve on text/boolean/json/array/media. */
+  unique?: boolean;
 }
 /** Add `| null` to the inferred type unless the options literal says `nullable: false`. */
 type Nullable<T, O> = O extends { nullable: false } ? T : T | null;
@@ -65,7 +67,7 @@ function field<T>(type: CmsType | ComponentFieldKind, options: FieldOptions, id?
 }
 /** The per-field metadata EVERY type carries (editor layout + conditional visibility); undefined-dropped by clean(). */
 function common(o?: BaseOpts): Record<string, unknown> {
-  return { editorWidth: o?.editorWidth, condition: o?.condition };
+  return { editorWidth: o?.editorWidth, condition: o?.condition, unique: o?.unique };
 }
 
 type StringOpts = BaseOpts & { max?: number; min?: number; default?: string };

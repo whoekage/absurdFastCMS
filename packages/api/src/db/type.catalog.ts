@@ -79,6 +79,8 @@ export interface FieldOptions {
   editorWidth?: 'full' | 'half';
   /** admin conditional visibility. Metadata only (see {@link FieldCondition}). */
   condition?: FieldCondition;
+  /** emit a single-column UNIQUE constraint. Applicability-gated in resolveFields (no text/boolean/json/array/media). */
+  unique?: boolean;
   /** numeric total digits (decimal). */
   precision?: number;
   /** numeric fractional digits (decimal). */

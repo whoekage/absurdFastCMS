@@ -65,6 +65,7 @@ const fieldOptionsSchema = z
       })
       .strict()
       .optional(),
+    unique: z.boolean().optional(),
   })
   .strict();
 

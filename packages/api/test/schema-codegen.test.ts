@@ -67,7 +67,7 @@ const withMeta: Schema = {
       id: 'f_title',
       name: 'title',
       type: 'string',
-      options: { length: 200, min: 3, nullable: false, editorWidth: 'half', condition: { field: 'active', op: 'eq', value: true, action: 'show' } },
+      options: { length: 200, min: 3, nullable: false, unique: true, editorWidth: 'half', condition: { field: 'active', op: 'eq', value: true, action: 'show' } },
     },
     { id: 'f_score', name: 'score', type: 'integer', options: { nullable: true, min: 0, max: 100 } },
   ],
@@ -77,6 +77,7 @@ const withMeta: Schema = {
 test('generateSchemaSource emits min / max / editorWidth / condition / displayField', () => {
   const src = generateSchemaSource(withMeta);
   assert.match(src, /min: 3/); // string char-min
+  assert.match(src, /unique: true/); // UNIQUE constraint flag
   assert.match(src, /c\.integer\(\{[^}]*min: 0[^}]*max: 100/); // numeric value bounds
   assert.match(src, /editorWidth: "half"/);
   assert.match(src, /condition: \{.*"field":"active".*"action":"show".*\}/);

@@ -51,6 +51,8 @@ export interface FieldOptions {
   editorWidth?: 'full' | 'half';
   /** admin conditional visibility. */
   condition?: FieldCondition;
+  /** emit a single-column UNIQUE constraint (not for text/boolean/json/array/media). */
+  unique?: boolean;
 }
 
 /** A field as it lives in `modules/<name>/schema.ts` — `id` is stable identity, `name` is the renamable key. */

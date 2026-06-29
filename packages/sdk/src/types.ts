@@ -95,6 +95,8 @@ export interface FieldOptions {
   editorWidth?: 'full' | 'half';
   /** admin conditional visibility ("show/hide when …"). Metadata only. */
   condition?: FieldCondition;
+  /** emit a single-column UNIQUE constraint (not for text/boolean/json/array/media). */
+  unique?: boolean;
 }
 
 /** A field's admin conditional-visibility rule. Metadata only (mirrors the api's FieldCondition). */

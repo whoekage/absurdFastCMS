@@ -191,6 +191,16 @@ test('a relation CHANGE and a rename-of-a-relation-owner are deferred (loud)', (
   assert.throws(() => diff([r1], [renamedType]), SchemaDiffError);
 });
 
+test('toggling a field unique flag is deferred (loud) — drop and re-add', () => {
+  const before = schema('ct_u', 'thing', [f('f_slug', 'slug', 'string', { length: 200 })]);
+  const turnOn = schema('ct_u', 'thing', [f('f_slug', 'slug', 'string', { length: 200, unique: true })]);
+  assert.throws(() => diff([before], [turnOn]), SchemaDiffError);
+  // and the reverse (drop the flag) is equally deferred.
+  assert.throws(() => diff([turnOn], [before]), SchemaDiffError);
+  // a NEW unique field is fine (addField, not a toggle).
+  assert.doesNotThrow(() => diff([], [turnOn]));
+});
+
 test('duplicate ids fail LOUD', () => {
   const dupType = [base, schema('ct_a', 'other', [])];
   assert.throws(() => diff([], dupType), SchemaDiffError);

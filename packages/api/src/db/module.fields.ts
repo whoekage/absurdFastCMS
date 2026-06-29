@@ -1,4 +1,4 @@
-import { resolveType, resolveComponentField, isComponentFieldKind, ComponentFieldError, type CmsType, type ComponentFieldKind, type FieldOptions } from './type.catalog.ts';
+import { resolveType, resolveComponentField, isComponentFieldKind, ComponentFieldError, TypeOptionError, type CmsType, type ComponentFieldKind, type FieldOptions } from './type.catalog.ts';
 import { validateFieldName, validateDefault, DuplicateFieldError, type RelationKind, type ResolvedField } from './ddl.ts';
 
 /**
@@ -90,6 +90,15 @@ function rejectTopLevelRelation(type: CmsType | ComponentFieldKind): void {
   }
 }
 
+// `unique` emits a single-column UNIQUE constraint (db/ddl.ts columnSpec). It is meaningless or unsafe on
+// these: text (unbounded — PG can't index >8KB btree entries reliably), boolean (≤2 distinct values),
+// json/jsonb (no default equality op-class), array (multi-value), and media (a foreign id ref, uniqueness
+// belongs on the link/file). Component/dynamiczone kinds are jsonb trees — likewise non-uniqueable.
+const NON_UNIQUEABLE: ReadonlySet<string> = new Set(['text', 'boolean', 'json', 'array', 'media']);
+function isUniqueable(type: CmsType | ComponentFieldKind): boolean {
+  return !isComponentFieldKind(type) && !NON_UNIQUEABLE.has(type);
+}
+
 /**
  * Validate a batch of field specs: each name passes {@link validateFieldName}, names are unique
  * case-insensitively (DuplicateFieldError), each type resolves, and a supplied default type-checks.
@@ -109,6 +118,11 @@ export function resolveFields(specs: FieldSpec[]): ResolvedField[] {
     // is never existence-checked on write nor populated on read). Top-level relations go through the be-01
     // link-table path (RelationSpec), NOT this scalar-field path.
     rejectTopLevelRelation(spec.type);
+    // `unique` is applicability-gated: reject it on types where a UNIQUE constraint is meaningless or
+    // unindexable (text/boolean/json/array/media + component kinds) BEFORE it reaches the DDL.
+    if (spec.options?.unique && !isUniqueable(spec.type)) {
+      throw new TypeOptionError(`unique is not supported on a ${spec.type} field`);
+    }
     // be-05: a component/component-repeatable/dynamiczone field resolves to a jsonb column via a SIBLING
     // helper (NOT the RESOLVERS record — so the `satisfies Record<CmsType,...>` guard stays exhaustive).
     // A component field never carries a constant default (it is a structured tree, not a scalar).
@@ -118,7 +132,9 @@ export function resolveFields(specs: FieldSpec[]): ResolvedField[] {
     const nullable = spec.options?.nullable ?? true;
     let defaultValue: unknown;
     if (spec.options?.default !== undefined) defaultValue = validateDefault(resolved, spec.options.default).sqlLiteral;
-    out.push({ name, resolved, nullable, defaultValue, localized: spec.localized ?? true });
+    const rf: ResolvedField = { name, resolved, nullable, defaultValue, localized: spec.localized ?? true };
+    if (spec.options?.unique) rf.unique = true;
+    out.push(rf);
   }
   return out;
 }

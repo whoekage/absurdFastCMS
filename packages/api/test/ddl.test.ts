@@ -261,6 +261,26 @@ test('T16 default value type validation', () => {
   assert.equal(validateDefault(resolveType('decimal', { precision: 4, scale: 2 }), '0.5').sqlLiteral, '0.5'); // leading zero not counted
 });
 
+// T18 — `unique` emits an inline UNIQUE column constraint via columnSpec; applicability-gated in resolveFields.
+test('T18 unique column constraint + applicability guard', () => {
+  const fields = resolveFields([
+    { name: 'slug', type: 'string', options: { unique: true, nullable: false } },
+    { name: 'email', type: 'email', options: { unique: true } },
+  ]);
+  assert.equal(fields.find((f) => f.name === 'slug')!.unique, true);
+  const c = compileCreateTable('ct_u', fields);
+  assert.match(c.sql, /"slug" varchar\(255\) not null unique/);
+  assert.match(c.sql, /"email" varchar\(254\) unique/);
+  // non-uniqueable types are rejected at resolve (text/boolean/json/array/media).
+  for (const t of ['text', 'boolean', 'json', 'array', 'media'] as CmsType[]) {
+    assert.throws(() => resolveFields([{ name: 'x', type: t, options: { unique: true } }]), TypeOptionError, t);
+  }
+  // a non-unique field carries no flag and compiles without a UNIQUE constraint.
+  const plain = resolveFields([{ name: 'name', type: 'string' }]);
+  assert.equal(plain[0]!.unique, undefined);
+  assert.doesNotMatch(compileCreateTable('ct_p', plain).sql, /unique/);
+});
+
 // T17 — intent-only engine types are STRUCTURALLY separate from the engine's ColumnType union. [8]
 test('T17 intent-only engine types separated from ColumnType', () => {
   const realColumnTypes: ColumnType[] = ['i32', 'f64', 'bool', 'string', 'date', 'text'];

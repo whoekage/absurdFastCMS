@@ -301,6 +301,8 @@ export interface ResolvedField {
   defaultValue?: unknown;
   /** i18n: true => localized (per-variant); false => shared. Stored in meta; no effect on the column DDL. */
   localized?: boolean;
+  /** true => emit a UNIQUE column constraint (single-column). Validated for applicability in resolveFields. */
+  unique?: boolean;
 }
 
 /** Render one user column onto a Kysely createTable/alterTable add-column builder. */
@@ -319,6 +321,10 @@ function columnSpec(name: string, field: ResolvedField): (cb: import('kysely').C
       // is neutralized by that escaping (verified end-to-end), not by a param channel.
       b = b.defaultTo(field.defaultValue as never);
     }
+    // UNIQUE column constraint. NULLs are exempt (PG allows many NULLs under UNIQUE), so an optional
+    // unique field still permits multiple empty rows. NOTE: spans drafts + locale variants for now —
+    // a partial unique index for D&P/i18n is a documented follow-up.
+    if (field.unique) b = b.unique();
     return b;
   };
 }

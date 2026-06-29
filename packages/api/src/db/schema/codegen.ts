@@ -114,7 +114,8 @@ function fieldBuilderCall(f: FieldSchema): string {
   // round-trips through the file (the `info`/`label` lesson: an un-emitted option is silently lost on boot).
   const cm =
     (o.editorWidth !== undefined ? `, editorWidth: ${lit(o.editorWidth)}` : '') +
-    (o.condition !== undefined ? `, condition: ${lit(o.condition)}` : '');
+    (o.condition !== undefined ? `, condition: ${lit(o.condition)}` : '') +
+    (o.unique ? `, unique: true` : '');
   switch (f.type) {
     case 'string': return `c.string({ ${id}${max}${min}${nul}${def}${cm} })`;
     case 'text': return `c.text({ ${id}${nul}${def}${cm} })`;
