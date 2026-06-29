@@ -23,8 +23,10 @@ const KIND_OPTIONS: { value: RelationKind; label: string }[] = [
 interface RelationRowsEditorProps {
   relations: RelationDraft[];
   onChange: (next: RelationDraft[]) => void;
-  /** Candidate target module moduleNames (includes this module for self-refs). */
+  /** Candidate target module names (includes this module for self-refs). */
   targets: readonly string[];
+  /** name → human label for the target picker (display label, send name). */
+  targetLabels: Record<string, string>;
 }
 
 /**
@@ -33,7 +35,7 @@ interface RelationRowsEditorProps {
  * field name, cardinality, target module, and an optional inverse field (→ two-way). The link table is
  * created server-side on apply.
  */
-export function RelationRowsEditor({ relations, onChange, targets }: RelationRowsEditorProps) {
+export function RelationRowsEditor({ relations, onChange, targets, targetLabels }: RelationRowsEditorProps) {
   const setAt = (key: string, patch: Partial<RelationDraft>) =>
     onChange(relations.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   const removeAt = (key: string) => onChange(relations.filter((r) => r.key !== key));
@@ -95,7 +97,7 @@ export function RelationRowsEditor({ relations, onChange, targets }: RelationRow
               <SelectContent>
                 {targets.map((t) => (
                   <SelectItem key={t} value={t}>
-                    {t}
+                    {targetLabels[t] ?? t}
                   </SelectItem>
                 ))}
               </SelectContent>

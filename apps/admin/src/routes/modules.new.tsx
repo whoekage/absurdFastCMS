@@ -40,6 +40,7 @@ function NewModulePage() {
               initial={emptyModuleForm()}
               version={query.data.version}
               allModuleNames={query.data.schemas.map((s) => s.name)}
+              moduleLabels={Object.fromEntries(query.data.schemas.map((s) => [s.name, s.label ?? s.name]))}
               onSaved={(result) => {
                 const name = result.schema?.name;
                 if (name) void navigate({ to: '/modules/$name', params: { name } });

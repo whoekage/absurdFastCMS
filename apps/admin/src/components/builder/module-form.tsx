@@ -34,6 +34,8 @@ interface ModuleFormProps {
   version: string;
   /** Every existing module name (relation targets + name-uniqueness check). */
   allModuleNames: string[];
+  /** name → human label for every existing module, so relation targets can show the label. */
+  moduleLabels: Record<string, string>;
   /** Called after a successful apply with the save result (route navigates / refreshes). */
   onSaved: (result: SaveResult) => void;
 }
@@ -44,7 +46,7 @@ interface ModuleFormProps {
  *   migrate + live-swap). Destructive changes are gated behind an explicit ack; FORBIDDEN ones can't apply.
  * Optimistic concurrency rides the catalog `version` (If-Match); a 412 means someone else edited.
  */
-export function ModuleForm({ mode, initial, version, allModuleNames, onSaved }: ModuleFormProps) {
+export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabels, onSaved }: ModuleFormProps) {
   const queryClient = useQueryClient();
   const [state, setState] = useState<ModuleFormState>(initial);
   const [phase, setPhase] = useState<'editing' | 'reviewing'>('editing');
@@ -56,6 +58,11 @@ export function ModuleForm({ mode, initial, version, allModuleNames, onSaved }: 
   const isEdit = mode === 'edit';
   // Relation targets: every module plus this one (self-ref); on create the name isn't saved yet.
   const targets = [...new Set([state.name.trim(), ...allModuleNames])].filter((t) => t !== '');
+  // name → label for the target picker: other modules + this one (its own label, falling back to name).
+  const targetLabels: Record<string, string> = {
+    ...moduleLabels,
+    ...(state.name.trim() ? { [state.name.trim()]: state.label.trim() || state.name.trim() } : {}),
+  };
 
   const patch = (p: Partial<ModuleFormState>) => setState((s) => ({ ...s, ...p }));
   const setFieldAt = (key: string, next: FieldDraft) =>
@@ -242,6 +249,7 @@ export function ModuleForm({ mode, initial, version, allModuleNames, onSaved }: 
         relations={state.relations}
         onChange={(relations) => patch({ relations })}
         targets={targets}
+        targetLabels={targetLabels}
       />
 
       {error && <p className="text-sm text-destructive">{error}</p>}

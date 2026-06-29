@@ -51,6 +51,7 @@ function EditModulePage() {
                 initial={moduleToForm(schema)}
                 version={query.data.version}
                 allModuleNames={query.data.schemas.map((s) => s.name).filter((id) => id !== name)}
+                moduleLabels={Object.fromEntries(query.data.schemas.map((s) => [s.name, s.label ?? s.name]))}
                 onSaved={() => void navigate({ to: '/modules' })}
               />
             </CardContent>
