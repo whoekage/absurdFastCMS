@@ -91,8 +91,10 @@ export interface RegistryField {
   enumValues?: readonly string[];
   /** varchar length (params.length), for the clean-400 length guard. */
   length?: number;
-  /** minimum char length (params.min) — the write-time lower-bound guard for string/email/uid. */
+  /** lower bound (params.min) — char-length for string/email/uid, VALUE for integer/float. Write-time guard. */
   min?: number;
+  /** upper VALUE bound (params.max) for integer/float — write-time guard. */
+  max?: number;
   /** type === 'json' (drives the `::text` SELECT cast on both load and RETURNING). */
   json: boolean;
   /**
@@ -301,6 +303,8 @@ function buildUserField(name: string, row: FieldRow): RegistryField {
   }
   const min = numberParam(params, 'min');
   if (min !== undefined) field.min = min;
+  const max = numberParam(params, 'max');
+  if (max !== undefined) field.max = max;
   // be-04 MEDIA: tag the field as a media reference (single int4 / multiple jsonb) from its catalog
   // params. The engine_type already drove `type` (i32 or json) above — this only adds the cardinality
   // flag the body parser + populate post-step read. A multiple-media field IS a json column, so

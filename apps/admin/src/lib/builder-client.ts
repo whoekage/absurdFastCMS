@@ -23,6 +23,14 @@ export type FieldType = CmsType | ComponentFieldKind;
 /** Top-level relation cardinality (mirrors the API's RelationKind). */
 export type RelationKind = 'oneToOne' | 'oneToMany' | 'manyToOne' | 'manyToMany';
 
+/** A field's admin conditional-visibility rule ("show/hide when <field> <op> <value>"). Metadata only. */
+export interface FieldCondition {
+  field: string;
+  op: 'eq' | 'ne';
+  value: string | number | boolean;
+  action: 'show' | 'hide';
+}
+
 /** The per-field options grab-bag (mirrors the catalog's FieldOptions). */
 export interface FieldOptions {
   length?: number;
@@ -35,6 +43,14 @@ export interface FieldOptions {
   component?: string;
   components?: string[];
   target?: string;
+  /** lower bound — char-length (string/email/uid) or VALUE (integer/float). */
+  min?: number;
+  /** upper VALUE bound (integer/float). Strings use `length` for their char max. */
+  max?: number;
+  /** admin editor layout width: 'full' (default) or 'half'. */
+  editorWidth?: 'full' | 'half';
+  /** admin conditional visibility. */
+  condition?: FieldCondition;
 }
 
 /** A field as it lives in `modules/<name>/schema.ts` — `id` is stable identity, `name` is the renamable key. */
@@ -53,6 +69,8 @@ export interface RelationSchema {
   kind: RelationKind;
   target: string;
   inverseField?: string;
+  /** Which target field the relation picker shows/searches (admin metadata). */
+  displayField?: string;
 }
 
 /** A whole module declaration (one schema file), as returned by GET /builder/modules[/:name] (carries ids). */

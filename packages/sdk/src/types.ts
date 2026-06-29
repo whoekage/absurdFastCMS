@@ -87,8 +87,10 @@ export interface FieldOptions {
    * exist (checked at component-type definition). Distinct from a top-level (be-01) link-table relation.
    */
   target?: string;
-  /** minimum char length (string/email/uid) — write-time lower bound (pairs with `length` as max). */
+  /** lower bound — char-length (string/email/uid) or VALUE (integer/float). */
   min?: number;
+  /** upper VALUE bound (integer/float). Strings use `length` for their char max. */
+  max?: number;
   /** admin editor layout width: 'full' (default) or 'half'. Metadata only. */
   editorWidth?: 'full' | 'half';
   /** admin conditional visibility ("show/hide when …"). Metadata only. */

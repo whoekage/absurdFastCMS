@@ -71,8 +71,10 @@ export interface FieldCondition {
 export interface FieldOptions {
   /** varchar length (char count) for string/email/uid/enumeration sizing. */
   length?: number;
-  /** minimum char length for string/email/uid — a WRITE-TIME lower bound (pairs with `length` as the max). */
+  /** lower bound — CONTEXTUAL: min char-length for string/email/uid, min VALUE for integer/float (write-time). */
   min?: number;
+  /** upper bound — VALUE max for integer/float (write-time). Strings use `length` for their char max. */
+  max?: number;
   /** admin editor layout width: 'full' (default, own row) or 'half' (two fields side-by-side). Metadata only. */
   editorWidth?: 'full' | 'half';
   /** admin conditional visibility. Metadata only (see {@link FieldCondition}). */
@@ -169,6 +171,21 @@ function varcharParams(o: FieldOptions | undefined, length: number): Record<stri
   return params;
 }
 
+/** Numeric value bounds (min/max) for integer/float — recorded as write-time guards (no DDL effect). */
+function numBounds(o: FieldOptions | undefined): Record<string, unknown> {
+  const p: Record<string, unknown> = {};
+  if (o?.min !== undefined) {
+    if (typeof o.min !== 'number' || !Number.isFinite(o.min)) throw new TypeOptionError(`min must be a finite number, got ${String(o.min)}`);
+    p.min = o.min;
+  }
+  if (o?.max !== undefined) {
+    if (typeof o.max !== 'number' || !Number.isFinite(o.max)) throw new TypeOptionError(`max must be a finite number, got ${String(o.max)}`);
+    if (o.min !== undefined && o.max < (o.min as number)) throw new TypeOptionError(`max ${o.max} is less than min ${o.min}`);
+    p.max = o.max;
+  }
+  return p;
+}
+
 /** Validate + dedup the `enumeration` value set; returns the distinct values and the longest length. */
 function resolveEnum(options: FieldOptions | undefined): { values: string[]; maxLen: number } {
   const values = options?.values;
@@ -201,9 +218,9 @@ const RESOLVERS = {
     if (length < maxLen) throw new TypeOptionError(`enumeration length ${length} is shorter than the longest value (${maxLen})`);
     return { pgType: `varchar(${length})`, engineType: 'string', params: { values, length } };
   },
-  integer: () => ({ pgType: 'integer', engineType: 'i32', params: {} }),
+  integer: (o) => ({ pgType: 'integer', engineType: 'i32', params: numBounds(o) }),
   biginteger: () => ({ pgType: 'bigint', engineType: 'i64', params: {} }),
-  float: () => ({ pgType: 'double precision', engineType: 'f64', params: {} }),
+  float: (o) => ({ pgType: 'double precision', engineType: 'f64', params: numBounds(o) }),
   decimal: (o) => {
     const precision = intOption(o?.precision, 'precision', 1, NUMERIC_MAX_PRECISION, 10);
     const scale = intOption(o?.scale, 'scale', 0, precision, 2);

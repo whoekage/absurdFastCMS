@@ -69,7 +69,7 @@ function common(o?: BaseOpts): Record<string, unknown> {
 }
 
 type StringOpts = BaseOpts & { max?: number; min?: number; default?: string };
-type NumOpts = BaseOpts & { default?: number };
+type NumOpts = BaseOpts & { min?: number; max?: number; default?: number };
 type DecimalOpts = BaseOpts & { precision?: number; scale?: number; default?: number };
 type MediaOpts = BaseOpts & { multiple?: boolean };
 type RelOpts = { id?: string; kind: RelationKind; inverse?: string; displayField?: string };
@@ -89,11 +89,11 @@ export const c = {
   enum: <const V extends readonly string[], O extends BaseOpts = {}>(values: V, o?: O): FieldBuilder<Nullable<V[number], O>> =>
     field('enumeration', clean({ values: [...values], nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   integer: <O extends NumOpts = {}>(o?: O): FieldBuilder<Nullable<number, O>> =>
-    field('integer', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+    field('integer', clean({ nullable: o?.nullable ?? true, min: o?.min, max: o?.max, default: o?.default, ...common(o) }), o?.id),
   biginteger: <O extends BaseOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> => // i64 serializes as string
     field('biginteger', clean({ nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   float: <O extends NumOpts = {}>(o?: O): FieldBuilder<Nullable<number, O>> =>
-    field('float', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+    field('float', clean({ nullable: o?.nullable ?? true, min: o?.min, max: o?.max, default: o?.default, ...common(o) }), o?.id),
   decimal: <O extends DecimalOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> => // numeric serializes as string
     field('decimal', clean({ precision: o?.precision, scale: o?.scale, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   boolean: <O extends BaseOpts & { default?: boolean } = {}>(o?: O): FieldBuilder<Nullable<boolean, O>> =>

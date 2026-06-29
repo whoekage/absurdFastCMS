@@ -42,7 +42,7 @@ test('build: system fields prepended in order, engine types 1:1, decimal scale/p
         { name: 'meta', type: 'json', options: { nullable: true } },
         { name: 'kind', type: 'enumeration', options: { values: ['a', 'b', 'c'], nullable: false } },
         { name: 'ref', type: 'uuid', options: { nullable: true } },
-        { name: 'count', type: 'integer', options: { nullable: true } },
+        { name: 'count', type: 'integer', options: { nullable: true, min: 0, max: 100 } },
         { name: 'flag', type: 'boolean', options: { nullable: false } },
         { name: 'when', type: 'datetime', options: { nullable: false } },
       ],
@@ -69,6 +69,10 @@ test('build: system fields prepended in order, engine types 1:1, decimal scale/p
   assert.equal(byName.get('price')!.precision, 10);
   assert.equal(byName.get('qty')!.scale, 0);
   assert.equal(byName.get('qty')!.precision, 8);
+
+  // numeric value bounds (min/max) thread from the catalog params into the registry field.
+  assert.equal(byName.get('count')!.min, 0);
+  assert.equal(byName.get('count')!.max, 100);
 
   // enum carries values; json is flagged
   assert.deepEqual([...byName.get('kind')!.enumValues!].sort(), ['a', 'b', 'c']);

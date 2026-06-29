@@ -109,6 +109,7 @@ function fieldBuilderCall(f: FieldSchema): string {
   const def = o.default !== undefined ? `, default: ${lit(o.default)}` : '';
   const max = o.length !== undefined ? `, max: ${o.length}` : '';
   const min = o.min !== undefined ? `, min: ${o.min}` : '';
+  const maxv = o.max !== undefined ? `, max: ${o.max}` : '';
   // Common per-field metadata every type carries (editor layout + conditional visibility) — emit so it
   // round-trips through the file (the `info`/`label` lesson: an un-emitted option is silently lost on boot).
   const cm =
@@ -121,9 +122,9 @@ function fieldBuilderCall(f: FieldSchema): string {
     case 'uid': return `c.uid({ ${id}${max}${min}${nul}${cm} })`;
     case 'uuid': return `c.uuid({ ${id}${nul}${cm} })`;
     case 'enumeration': return `c.enum(${lit(o.values ?? [])} as const, { ${id}${nul}${cm} })`;
-    case 'integer': return `c.integer({ ${id}${nul}${def}${cm} })`;
+    case 'integer': return `c.integer({ ${id}${nul}${def}${min}${maxv}${cm} })`;
     case 'biginteger': return `c.biginteger({ ${id}${nul}${cm} })`;
-    case 'float': return `c.float({ ${id}${nul}${def}${cm} })`;
+    case 'float': return `c.float({ ${id}${nul}${def}${min}${maxv}${cm} })`;
     case 'decimal': return `c.decimal({ ${id}${o.precision !== undefined ? `, precision: ${o.precision}` : ''}${o.scale !== undefined ? `, scale: ${o.scale}` : ''}${nul}${cm} })`;
     case 'boolean': return `c.boolean({ ${id}${nul}${def}${cm} })`;
     case 'date': return `c.date({ ${id}${nul}${cm} })`;

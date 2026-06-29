@@ -382,6 +382,12 @@ function coerceComponentInstance(
   return out;
 }
 
+/** Enforce a number field's value bounds (integer/float `min`/`max`) — a clean 400, not a DB error. */
+function checkNumericBounds(name: string, field: RegistryField, v: number): void {
+  if (field.min !== undefined && v < field.min) throw new BodyParseError(`field "${name}" must be >= ${field.min}`);
+  if (field.max !== undefined && v > field.max) throw new BodyParseError(`field "${name}" must be <= ${field.max}`);
+}
+
 /** Type-check + coerce one non-null value against its engine field. Coerce throws become 400s here. */
 function coerce(field: RegistryField, v: unknown): unknown {
   const name = field.name;
@@ -392,9 +398,11 @@ function coerce(field: RegistryField, v: unknown): unknown {
   switch (field.engineType) {
     case 'i32':
       if (typeof v !== 'number' || !Number.isInteger(v)) throw new BodyParseError(`field "${name}" must be an integer`);
+      checkNumericBounds(name, field, v);
       return v;
     case 'f64':
       if (typeof v !== 'number' || !Number.isFinite(v)) throw new BodyParseError(`field "${name}" must be a finite number`);
+      checkNumericBounds(name, field, v);
       return v;
     case 'bool':
       if (typeof v !== 'boolean') throw new BodyParseError(`field "${name}" must be a boolean`);
