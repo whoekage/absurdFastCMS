@@ -114,19 +114,6 @@ export const CATALOG = {
       ko: '모듈 {name}이(가) 이미 존재합니다',
     },
   },
-  'db.ddl.module_not_found': {
-    status: 500,
-    messages: {
-      en: 'module {name} not found',
-      ru: 'модуль {name} не найден',
-      ky: 'модуль {name} табылган жок',
-      kk: 'модуль {name} табылмады',
-      uz: 'modul {name} topilmadi',
-      es: 'módulo {name} no encontrado',
-      ja: 'モジュール {name} が見つかりません',
-      ko: '모듈 {name}을(를) 찾을 수 없습니다',
-    },
-  },
   'db.ddl.field_exists': {
     status: 500,
     messages: {
@@ -140,36 +127,11 @@ export const CATALOG = {
       ko: '필드 {value}이(가) 이미 존재합니다',
     },
   },
-  'db.ddl.field_not_found': {
-    status: 500,
-    messages: {
-      en: 'field {value} not found',
-      ru: 'поле {value} не найдено',
-      ky: 'талаа {value} табылган жок',
-      kk: 'өріс {value} табылмады',
-      uz: 'maydon {value} topilmadi',
-      es: 'campo {value} no encontrado',
-      ja: 'フィールド {value} が見つかりません',
-      ko: '필드 {value}을(를) 찾을 수 없습니다',
-    },
-  },
   'db.ddl.default_type': {
     status: 500,
     messages: '{detail}',
   },
-  'db.ddl.type_change_forbidden': {
-    status: 500,
-    messages: '{detail}',
-  },
   'db.ddl.type_change_failed': {
-    status: 500,
-    messages: '{detail}',
-  },
-  'db.ddl.dependent_types': {
-    status: 500,
-    messages: '{detail}',
-  },
-  'db.ddl.duplicate_data': {
     status: 500,
     messages: '{detail}',
   },

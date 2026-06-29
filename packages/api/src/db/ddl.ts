@@ -104,14 +104,6 @@ export class ModuleExistsError extends AppError {
     this.module = module;
   }
 }
-export class ModuleNotFoundError extends AppError {
-  readonly module: string;
-  constructor(module: string) {
-    super('db.ddl.module_not_found', { name: JSON.stringify(module) });
-    this.name = 'ModuleNotFoundError';
-    this.module = module;
-  }
-}
 export class FieldExistsError extends AppError {
   readonly value: string;
   constructor(value: string) {
@@ -120,24 +112,10 @@ export class FieldExistsError extends AppError {
     this.value = value;
   }
 }
-export class FieldNotFoundError extends AppError {
-  readonly value: string;
-  constructor(value: string) {
-    super('db.ddl.field_not_found', { value: JSON.stringify(value) });
-    this.name = 'FieldNotFoundError';
-    this.value = value;
-  }
-}
 export class DefaultTypeError extends AppError {
   constructor(message: string) {
     super('db.ddl.default_type', { detail: message });
     this.name = 'DefaultTypeError';
-  }
-}
-export class TypeChangeForbiddenError extends AppError {
-  constructor(message: string) {
-    super('db.ddl.type_change_forbidden', { detail: message });
-    this.name = 'TypeChangeForbiddenError';
   }
 }
 export class TypeChangeFailedError extends AppError {
@@ -150,18 +128,6 @@ export class SchemaChangeConflictError extends AppError {
   constructor(message: string) {
     super('db.schema.conflict', { detail: message });
     this.name = 'SchemaChangeConflictError';
-  }
-}
-export class DependentTypesError extends AppError {
-  constructor(message: string) {
-    super('db.ddl.dependent_types', { detail: message });
-    this.name = 'DependentTypesError';
-  }
-}
-export class DuplicateDataError extends AppError {
-  constructor(message: string) {
-    super('db.ddl.duplicate_data', { detail: message });
-    this.name = 'DuplicateDataError';
   }
 }
 export class UnknownRelationKindError extends AppError {

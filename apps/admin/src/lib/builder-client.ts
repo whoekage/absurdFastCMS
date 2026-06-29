@@ -240,16 +240,6 @@ export async function listModules(signal?: AbortSignal): Promise<CatalogResult> 
   return { schemas: r.schemas, version: r.version };
 }
 
-/** GET /builder/modules/:name — one module's raw schema (with ids) + version. Throws 404 when unknown. */
-export async function getModule(name: string, signal?: AbortSignal): Promise<{ schema: ModuleSchema; version: string }> {
-  const r = await request<{ schema: ModuleSchema; version: string }>({
-    method: 'GET',
-    path: `/builder/modules/${enc(name)}`,
-    ...(signal ? { signal } : {}),
-  });
-  return { schema: r.schema, version: r.version };
-}
-
 /** POST /builder/modules/:name/preview — a dry run: which changes would apply / be blocked + generated source. */
 export async function previewModule(
   name: string,
@@ -295,15 +285,5 @@ export async function deleteModule(
     version,
     ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
     ...(opts.signal ? { signal: opts.signal } : {}),
-  });
-}
-
-/** POST /builder/reload — re-import the schema files (no migrate); advances the version. */
-export async function reloadModules(signal?: AbortSignal): Promise<{ version: string }> {
-  return request<{ version: string }>({
-    method: 'POST',
-    path: '/builder/reload',
-    body: {},
-    ...(signal ? { signal } : {}),
   });
 }
