@@ -34,7 +34,7 @@ import { TeamView } from '../src/auth/team.view.ts';
  * which is deleted. The gate matrix is re-expressed onto the SURVIVING gated surface — the same shared
  * `gate()` (SessionCache.validate + RbacRegistry.checkPermission) backs all three:
  *   - `builder.manage` → the files-first Builder routes (`POST /builder/reload`, `PUT/DELETE/preview
- *     /builder/modules/:apiId`); the per-field/relation/component-field sub-route 401 cases collapse
+ *     /builder/modules/:name`); the per-field/relation/component-field sub-route 401 cases collapse
  *     into the whole-type Builder gate (documented coverage delta — the granular sub-routes no longer exist).
  *   - `content.create|update|delete|publish` → the data write routes on `crudt`.
  *   - `media.upload` → `POST /_files/upload`.
@@ -94,9 +94,9 @@ async function builderEtag(): Promise<string> {
 }
 
 /** Whether the Builder catalog currently exposes a type (a files-first replacement for the meta-row check). */
-async function builderHasType(apiId: string): Promise<boolean> {
-  const list = (await (await fetch(`${base}/builder/modules`)).json()) as { schemas?: { apiId: string }[] };
-  return (list.schemas ?? []).some((s) => s.apiId === apiId);
+async function builderHasType(name: string): Promise<boolean> {
+  const list = (await (await fetch(`${base}/builder/modules`)).json()) as { schemas?: { name: string }[] };
+  return (list.schemas ?? []).some((s) => s.name === name);
 }
 
 before(async () => {
@@ -107,12 +107,12 @@ before(async () => {
 
   // Pre-build dpgate (Draft & Publish) + crudt (plain) files-first: write the modules fixtures, then migrate
   // them so the ct_ tables + snapshot exist. The first HTTP sign-up below is therefore still genuinely first.
-  const dpgate = schema({ apiId: 'dpgate', draftPublish: true, fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }] });
-  const crudt = schema({ apiId: 'crudt', fields: [{ name: 'title', cmsType: 'string' }] });
+  const dpgate = schema({ name: 'dpgate', draftPublish: true, fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }] });
+  const crudt = schema({ name: 'crudt', fields: [{ name: 'title', cmsType: 'string' }] });
   await rm(genDir, { recursive: true, force: true });
   for (const schema of [dpgate, crudt]) {
-    await mkdir(path.join(genDir, schema.apiId), { recursive: true });
-    await writeFile(path.join(genDir, schema.apiId, 'schema.ts'), generateSchemaSource(schema));
+    await mkdir(path.join(genDir, schema.name), { recursive: true });
+    await writeFile(path.join(genDir, schema.name, 'schema.ts'), generateSchemaSource(schema));
   }
   await migrate(sql, [dpgate, crudt], { allowDestructive: true });
 
@@ -216,7 +216,7 @@ test('checklist#1/#10: a builder.manage mutation is 401 with no session, 403 as 
   const create = await fetch(`${base}/builder/modules/gatecheck`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json', cookie: adminCookie, 'if-match': await builderEtag() },
-    body: JSON.stringify({ apiId: 'gatecheck', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] }),
+    body: JSON.stringify({ name: 'gatecheck', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] }),
   });
   assert.ok(create.status === 200 || create.status === 201, `super-admin builder PUT must 2xx, got ${create.status} ${await create.clone().text()}`);
   assert.equal(await builderHasType('gatecheck'), true, 'a super-admin builder PUT must create the type');
@@ -225,8 +225,8 @@ test('checklist#1/#10: a builder.manage mutation is 401 with no session, 403 as 
 test('checklist#1: every gated mutation route is 401 with no session (builder + data + media)', async () => {
   const routes: [string, string, string | undefined][] = [
     ['POST', '/builder/reload', '{}'],
-    ['POST', '/builder/modules/x/preview', '{"apiId":"x","fields":[]}'],
-    ['PUT', '/builder/modules/x', '{"apiId":"x","fields":[]}'],
+    ['POST', '/builder/modules/x/preview', '{"name":"x","fields":[]}'],
+    ['PUT', '/builder/modules/x', '{"name":"x","fields":[]}'],
     ['DELETE', '/builder/modules/x', undefined],
     ['POST', '/crudt', '{"title":"x"}'],
     ['PUT', '/crudt/1', '{"title":"x"}'],
@@ -333,7 +333,7 @@ test('checklist#3/#4: a body-supplied role/userId/isAdmin NEVER escalates authz'
     method: 'PUT',
     headers: { 'content-type': 'application/json', cookie: authorCookie, 'if-match': await builderEtag() },
     body: JSON.stringify({
-      apiId: 'evil', fields: [{ name: 'x', type: 'string' }],
+      name: 'evil', fields: [{ name: 'x', type: 'string' }],
       userId: adminId, role: 'super-admin', isAdmin: true, permission: 'builder.manage',
     }),
   });
@@ -348,7 +348,7 @@ test('checklist#3/#4: a body-supplied role/userId/isAdmin NEVER escalates authz'
   // A request with userId in the body but NO session → 401 (body userId ignored).
   const noSession = await fetch(`${base}/builder/modules/evil2`, {
     method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ apiId: 'evil2', fields: [], userId: adminId, role: 'super-admin' }),
+    body: JSON.stringify({ name: 'evil2', fields: [], userId: adminId, role: 'super-admin' }),
   });
   assert.equal(noSession.status, 401, 'a body userId with no session must be 401, not an escalation');
 });
@@ -473,7 +473,7 @@ test('a ZERO-permission (no perms seeded) session is 403 on every gated write, p
   // Every gated builder/write route → 403 (authenticated, but lacking the mapped perm).
   const gated: [string, string, string | undefined][] = [
     ['POST', '/builder/reload', '{}'],
-    ['PUT', '/builder/modules/nopermct', JSON.stringify({ apiId: 'nopermct', fields: [] })],
+    ['PUT', '/builder/modules/nopermct', JSON.stringify({ name: 'nopermct', fields: [] })],
     ['POST', '/crudt', JSON.stringify({ title: 'x' })],
     ['PUT', '/crudt/1', JSON.stringify({ title: 'x' })],
     ['DELETE', '/crudt/1', undefined],

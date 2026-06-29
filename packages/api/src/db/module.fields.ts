@@ -4,7 +4,7 @@ import { validateFieldName, validateDefault, DuplicateFieldError, type RelationK
 /**
  * PURE module field helpers + the meta ROW TYPES. After the legacy-meta teardown, the meta-write
  * operations (createContentType / addField / addRelation / dropContentType / …) and the meta-read selects
- * are GONE — files (`modules/<apiId>/schema.ts`) + `_schema_applied` are the source of truth, materialized
+ * are GONE — files (`modules/<name>/schema.ts`) + `_schema_applied` are the source of truth, materialized
  * by `migrate()`. What survives here is {@link resolveFields} (the field-spec → resolved-field validation,
  * reused by the files-first `schema/adapt.ts` + `schema/migrate.ts`) and the row-shape TYPES the
  * {@link Registry} / adapter still consume.
@@ -20,10 +20,10 @@ export interface FieldSpec {
   localized?: boolean;
 }
 
-/** A `content_types` row shape (snake_case as stored) — the unit `schema/adapt.ts` builds for the registry. */
+/** A module row shape — the in-memory unit `schema/adapt.ts` builds for the registry. */
 export interface ModuleRow {
   id: number;
-  api_id: string;
+  name: string;
   table_name: string;
   created_at: Date;
   updated_at: Date;
@@ -53,17 +53,17 @@ export interface FieldRow {
 export interface RelationSpec {
   field: string; // the relation field / API key on the owner
   kind: RelationKind; // oneToOne|oneToMany|manyToOne|manyToMany
-  target: string; // target type api_id (may equal owner api_id => self-referential)
+  target: string; // target module name (may equal owner name => self-referential)
   inverseField?: string; // present => two-way (adds inverse meta row on the target, no DDL); absent => one-way
 }
 
-/** A `content_type_relations` row shape (snake_case as stored). */
+/** A relation row shape — the in-memory unit `schema/adapt.ts` builds for the registry. */
 export interface RelationRow {
   id: number;
   content_type_id: number;
   field_name: string;
   kind: string;
-  target_api_id: string;
+  target_name: string;
   is_owner: boolean;
   inverse_field: string | null;
   link_table: string;

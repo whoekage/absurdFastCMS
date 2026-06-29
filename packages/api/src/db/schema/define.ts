@@ -3,10 +3,10 @@ import type { RelationKind } from '../ddl.ts';
 import type { Schema, FieldSchema, RelationSchema } from './model.ts';
 
 /**
- * THE CODE-FIRST AUTHORING DSL (pivot §11) — a `schema/<apiId>.ts` declares its module via
+ * THE CODE-FIRST AUTHORING DSL (pivot §11) — a `schema/<name>.ts` declares its module via
  * {@link defineSchema} + the {@link c} field builders. Lifecycle hooks live in a SIBLING
- * `schema/<apiId>.hooks.ts` ({@link defineHooks}) — a clean machine/human split: the visual Builder OWNS +
- * regenerates `<apiId>.ts` wholesale (no AST surgery), and NEVER touches the dev-owned `.hooks.ts`. This is
+ * `schema/<name>.hooks.ts` ({@link defineHooks}) — a clean machine/human split: the visual Builder OWNS +
+ * regenerates `<name>.ts` wholesale (no AST surgery), and NEVER touches the dev-owned `.hooks.ts`. This is
  * the Payload/Drizzle shape: typed field builders, types inferred for free ({@link InferType}), no JSON.
  *
  * The DSL is a thin AUTHORING layer over the kept engine: a builder just records `{ id?, cmsType, options }`
@@ -14,7 +14,7 @@ import type { Schema, FieldSchema, RelationSchema } from './model.ts';
  * `Schema` IR the diff/migrate/registry already consume — so the whole engine is UNCHANGED; only
  * the source format moved. Runtime validation stays registry-driven (no redundant zod object is built here).
  *
- * IDs are OPTIONAL: absent ⇒ the field's id is its key / the type's id is its apiId (name-based). Pin an
+ * IDs are OPTIONAL: absent ⇒ the field's id is its key / the type's id is its name (name-based). Pin an
  * explicit `id` to make a later rename LOSSLESS (the diff matches by id → RENAME COLUMN). Rename-safety is
  * thus an opt-in the dev controls, exactly as the visual Builder will emit ids automatically.
  */
@@ -117,7 +117,7 @@ export interface TypeOptions {
   i18n?: boolean;
 }
 export interface HookContext {
-  readonly apiId: string;
+  readonly name: string;
   readonly op: 'create' | 'update' | 'delete';
 }
 /**
@@ -146,18 +146,21 @@ export interface Hooks {
 /** The captured module definition (carries the field record + options as type params for inference). */
 export interface TypeDef<F extends FieldsRecord = FieldsRecord, O extends TypeOptions = TypeOptions> {
   readonly id?: string;
+  /** Editable human display name; `label ?? name` is what the admin shows. Not derivable from the file name. */
+  readonly label?: string;
   readonly options?: O;
   readonly fields: F;
 }
 
 /**
  * Author a module. Identity helper (like `defineConfig`) — returns the def verbatim but captures the
- * field record + options as generics so {@link InferType} can derive the typed entry. The `apiId` is the
- * FILE NAME (the loader supplies it); `id`/field ids are optional (see the DSL header). Lifecycle hooks go
- * in a sibling `schema/<apiId>.hooks.ts` ({@link defineHooks}), NOT here.
+ * field record + options as generics so {@link InferType} can derive the typed entry. The `name` is the
+ * FILE NAME (the loader supplies it); `label`/`id`/field ids are optional (see the DSL header). Lifecycle
+ * hooks go in a sibling `schema/<name>.hooks.ts` ({@link defineHooks}), NOT here.
  */
 export function defineSchema<const F extends FieldsRecord, const O extends TypeOptions = {}>(def: {
   id?: string;
+  label?: string;
   options?: O;
   fields: F;
 }): TypeDef<F, O> {
@@ -165,9 +168,9 @@ export function defineSchema<const F extends FieldsRecord, const O extends TypeO
 }
 
 /**
- * Author a module's lifecycle hooks — the default export of `schema/<apiId>.hooks.ts`. Identity
+ * Author a module's lifecycle hooks — the default export of `schema/<name>.hooks.ts`. Identity
  * helper for type-checking. `before*` transform/veto inside the write tx; `after*` react post-commit
- * (see the Hooks types). The loader pairs this file with `<apiId>.ts` by name.
+ * (see the Hooks types). The loader pairs this file with `<name>.ts` by name.
  */
 export function defineHooks(hooks: Hooks): Hooks {
   return hooks;
@@ -192,9 +195,9 @@ export type InferType<D> = D extends TypeDef<infer F, infer O>
  * Introspect a {@link TypeDef} into the engine's internal {@link Schema} IR (the SAME shape the
  * JSON path produced) — so diff/migrate/registry are unchanged. The field KEY is the name; a relation
  * builder becomes a {@link RelationSchema} (split out of `fields`), everything else a {@link FieldSchema}.
- * `apiId` comes from the file name; ids fall back to the key/apiId when not pinned.
+ * `name` comes from the file name; ids fall back to the key/name when not pinned.
  */
-export function defToSchema(def: TypeDef, apiId: string): Schema {
+export function defToSchema(def: TypeDef, moduleName: string): Schema {
   const fields: FieldSchema[] = [];
   const relations: RelationSchema[] = [];
   for (const [name, b] of Object.entries(def.fields)) {
@@ -208,7 +211,8 @@ export function defToSchema(def: TypeDef, apiId: string): Schema {
       fields.push({ id: b.id ?? name, name, type: b.cmsType, options: b.options });
     }
   }
-  const schema: Schema = { id: def.id ?? apiId, apiId, fields };
+  const schema: Schema = { id: def.id ?? moduleName, name: moduleName, fields };
+  if (def.label !== undefined) schema.label = def.label;
   if (def.options !== undefined) schema.options = def.options;
   if (relations.length > 0) schema.relations = relations;
   return schema;

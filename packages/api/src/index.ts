@@ -12,13 +12,13 @@ export type { ContiConfig } from './compose/config.ts';
 // calls `adminBundleDir()` to serve the bundled admin at the root. (migrationsDir stays internal.)
 export { adminBundleDir } from './paths.ts';
 export type { S3Config } from './config.ts';
-// Code-first schema authoring DSL (the `schema/<apiId>.ts` surface): defineSchema + the `c.*` builders.
+// Code-first schema authoring DSL (the `schema/<name>.ts` surface): defineSchema + the `c.*` builders.
 export { defineSchema, defineHooks, c } from './db/schema/define.ts';
 export type { InferType, TypeDef, BeforeHookFn, AfterHookFn, Hooks, HookContext } from './db/schema/define.ts';
 export { HookError } from './db/schema/hooks.ts';
 // Files-first schema migration (the `conti migrate` / `conti migrate lint` commands).
 export { runMigrate, runMigrateLint, runDrop } from './compose/migrate.ts';
-// Visual-Builder server side: apply a schema edit (mint ids → gate → write modules/<apiId>/schema.ts → migrate).
+// Visual-Builder server side: apply a schema edit (mint ids → gate → write modules/<name>/schema.ts → migrate).
 export { applySchemaEdit } from './compose/builder.ts';
 export type { ModuleDraft, SchemaEditResult } from './compose/builder.ts';
 // S3 boot reconciliation guard (heals the S2 crash window / forward edits at boot).

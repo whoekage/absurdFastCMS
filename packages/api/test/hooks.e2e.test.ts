@@ -23,7 +23,7 @@ before(async () => {
   db = await createFileDatabase('hooks');
   sql = db.sql;
   const widget = schema({
-    apiId: 'widget',
+    name: 'widget',
     fields: [
       { name: 'title', cmsType: 'string', options: { nullable: true } },
       { name: 'slug', cmsType: 'string', options: { nullable: true } },

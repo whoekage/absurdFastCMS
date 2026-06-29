@@ -11,7 +11,7 @@ import { cleanCatalog, tableExists, physicalColumns } from './helpers.ts';
 
 /**
  * Phase 5 (server side of the visual Builder) — applySchemaEdit over REAL Postgres. Proves: an edit mints
- * ids + materializes the DB (migrate) + writes modules/<apiId>/schema.ts, the written file ROUND-TRIPS
+ * ids + materializes the DB (migrate) + writes modules/<name>/schema.ts, the written file ROUND-TRIPS
  * back to the same IR via loadTypes (generateSchemaSource is the inverse of defToSchema), and a destructive
  * edit is GATED — nothing written, nothing applied — until allowDestructive. The gen dir lives under
  * packages/api so the generated `import '@conti/core'` resolves.
@@ -38,7 +38,7 @@ after(async () => {
 
 test('create: mints ids, migrates the DB, writes schema.ts that round-trips to the same IR', async () => {
   const r = await applySchemaEdit(sql, genDir, {
-    apiId: 'gadget',
+    name: 'gadget',
     fields: [
       { name: 'title', type: 'string', options: { nullable: true } },
       { name: 'count', type: 'integer', options: { nullable: false, default: 0 } },
@@ -51,21 +51,21 @@ test('create: mints ids, migrates the DB, writes schema.ts that round-trips to t
 
   // the WRITTEN file loads back to the identical IR (codegen ⇄ defToSchema round-trip).
   const { schemas } = await loadTypes(genDir);
-  const loaded = schemas.find((s) => s.apiId === 'gadget');
+  const loaded = schemas.find((s) => s.name === 'gadget');
   assert.deepStrictEqual(loaded, r.schema);
 });
 
 test('destructive edit is gated: blocked → nothing written/applied; allowDestructive → applied', async () => {
   await applySchemaEdit(sql, genDir, {
-    apiId: 'widget',
+    name: 'widget',
     fields: [
       { name: 'a', type: 'string', options: { nullable: true } },
       { name: 'b', type: 'string', options: { nullable: true } },
     ],
   });
-  const created = (await loadTypes(genDir)).schemas.find((s) => s.apiId === 'widget')!;
+  const created = (await loadTypes(genDir)).schemas.find((s) => s.name === 'widget')!;
   // drop 'b' — keep 'a' with its existing id (rename-safety: existing ids preserved).
-  const dropDraft = { apiId: 'widget', id: created.id, fields: [created.fields.find((f) => f.name === 'a')!] };
+  const dropDraft = { name: 'widget', id: created.id, fields: [created.fields.find((f) => f.name === 'a')!] };
 
   const blocked = await applySchemaEdit(sql, genDir, dropDraft);
   assert.equal(blocked.ok, false);
@@ -78,18 +78,18 @@ test('destructive edit is gated: blocked → nothing written/applied; allowDestr
 });
 
 test('S2 atomicity: a migrate that fails AFTER lint leaves schema.ts untouched + orphans no temp file', async () => {
-  await applySchemaEdit(sql, genDir, { apiId: 'box', fields: [{ name: 'title', type: 'string', options: { length: 1024, nullable: true } }] });
+  await applySchemaEdit(sql, genDir, { name: 'box', fields: [{ name: 'title', type: 'string', options: { length: 1024, nullable: true } }] });
   await sql.unsafe(`INSERT INTO ct_box (title) VALUES ('${'y'.repeat(1024)}')`); // an over-long row
-  const created = (await loadTypes(genDir)).schemas.find((s) => s.apiId === 'box')!;
+  const created = (await loadTypes(genDir)).schemas.find((s) => s.name === 'box')!;
 
   // Shrink title to 256 WITH allowDestructive: this PASSES migrateLint (the ack is given) so applySchemaEdit
   // proceeds to write the temp file + migrate — but migrate's pre-flight throws MigrationDataLossError on the
   // 1024-char row. The temp must be unlinked and schema.ts left at length 1024 (file never ahead of the DB).
-  const shrink = { apiId: 'box', id: created.id, fields: [{ id: created.fields[0]!.id, name: 'title', type: 'string' as const, options: { length: 256, nullable: true } }] };
+  const shrink = { name: 'box', id: created.id, fields: [{ id: created.fields[0]!.id, name: 'title', type: 'string' as const, options: { length: 256, nullable: true } }] };
   await assert.rejects(() => applySchemaEdit(sql, genDir, shrink, { allowDestructive: true }), MigrationDataLossError);
 
   // schema.ts UNTOUCHED: it still round-trips to length 1024 (the failed edit did not flip the file).
-  const reloaded = (await loadTypes(genDir)).schemas.find((s) => s.apiId === 'box')!;
+  const reloaded = (await loadTypes(genDir)).schemas.find((s) => s.name === 'box')!;
   assert.equal(reloaded.fields[0]!.options?.length, 1024, 'schema.ts still the pre-edit length');
   // No orphan temp file left behind in the type's dir.
   const entries = await readdir(fileURLToPath(new URL(`./fixtures/.gen-${process.pid}/box`, import.meta.url)));
@@ -98,59 +98,59 @@ test('S2 atomicity: a migrate that fails AFTER lint leaves schema.ts untouched +
   assert.equal((await physicalColumns(sql, 'ct_box')).find((c) => c.name === 'title')?.type, 'character varying');
 });
 
-test('S5 apiId-RENAME via id-keyed next: same id + new apiId → renameType, data carried, old table gone', async () => {
-  const created = await applySchemaEdit(sql, genDir, { apiId: 'gizmo', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
+test('S5 name-RENAME via id-keyed next: same id + new name → renameType, data carried, old table gone', async () => {
+  const created = await applySchemaEdit(sql, genDir, { name: 'gizmo', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
   await sql.unsafe(`INSERT INTO ct_gizmo (title) VALUES ('keep')`);
 
-  // address the SAME stable id, change apiId → the id-keyed next produces ONE entry (no duplicate-id throw).
-  const renamed = await applySchemaEdit(sql, genDir, { id: created.schema!.id, apiId: 'doohickey', fields: [{ id: created.schema!.fields[0]!.id, name: 'title', type: 'string', options: { nullable: true } }] });
+  // address the SAME stable id, change name → the id-keyed next produces ONE entry (no duplicate-id throw).
+  const renamed = await applySchemaEdit(sql, genDir, { id: created.schema!.id, name: 'doohickey', fields: [{ id: created.schema!.fields[0]!.id, name: 'title', type: 'string', options: { nullable: true } }] });
   assert.deepEqual(renamed.applied!.map((c) => c.kind), ['renameType']);
   assert.equal(await tableExists(sql, 'ct_gizmo'), false);
   assert.equal((await sql<{ title: string }[]>`SELECT title FROM ct_doohickey`)[0]?.title, 'keep'); // data carried
   // the applied snapshot has exactly ONE entry for that id, now named doohickey.
   const snap = (await readAppliedSchemas(sql)).filter((s) => s.id === created.schema!.id);
   assert.equal(snap.length, 1);
-  assert.equal(snap[0]!.apiId, 'doohickey');
+  assert.equal(snap[0]!.name, 'doohickey');
 });
 
 test('S5 applySchemaDelete: drops the type + its table + snapshot row; 404 on an unknown type', async () => {
-  await applySchemaEdit(sql, genDir, { apiId: 'trinket', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
+  await applySchemaEdit(sql, genDir, { name: 'trinket', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   const r = await applySchemaDelete(sql, genDir, 'trinket');
   assert.deepEqual(r.applied!.map((c) => c.kind), ['dropType']);
   assert.equal(await tableExists(sql, 'ct_trinket'), false);
-  assert.equal((await readAppliedSchemas(sql)).some((s) => s.apiId === 'trinket'), false);
+  assert.equal((await readAppliedSchemas(sql)).some((s) => s.name === 'trinket'), false);
   await assert.rejects(() => applySchemaDelete(sql, genDir, 'nope'), BuilderNotFoundError);
 });
 
 test('S5 ownership guard: a client field id NOT in this type rejects; a legit rename (same id) is allowed', async () => {
-  const a = await applySchemaEdit(sql, genDir, { apiId: 'alpha', fields: [{ name: 'x', type: 'string', options: { nullable: true } }] });
+  const a = await applySchemaEdit(sql, genDir, { name: 'alpha', fields: [{ name: 'x', type: 'string', options: { nullable: true } }] });
   const foreignFieldId = a.schema!.fields[0]!.id; // belongs to 'alpha'
-  await applySchemaEdit(sql, genDir, { apiId: 'beta', fields: [{ name: 'y', type: 'string', options: { nullable: true } }] });
-  const beta = (await readAppliedSchemas(sql)).find((s) => s.apiId === 'beta')!;
+  await applySchemaEdit(sql, genDir, { name: 'beta', fields: [{ name: 'y', type: 'string', options: { nullable: true } }] });
+  const beta = (await readAppliedSchemas(sql)).find((s) => s.name === 'beta')!;
 
   // Forge: edit beta but claim alpha's field id on a beta field → rejected (cross-type id theft).
   await assert.rejects(
-    () => applySchemaEdit(sql, genDir, { id: beta.id, apiId: 'beta', fields: [{ id: foreignFieldId, name: 'y', type: 'string', options: { nullable: true } }] }),
+    () => applySchemaEdit(sql, genDir, { id: beta.id, name: 'beta', fields: [{ id: foreignFieldId, name: 'y', type: 'string', options: { nullable: true } }] }),
     BuilderValidationError,
   );
   // A legit rename (beta's OWN field id, new name) is allowed (the guard must not block renames).
-  const ok = await applySchemaEdit(sql, genDir, { id: beta.id, apiId: 'beta', fields: [{ id: beta.fields[0]!.id, name: 'renamed', type: 'string', options: { nullable: true } }] });
+  const ok = await applySchemaEdit(sql, genDir, { id: beta.id, name: 'beta', fields: [{ id: beta.fields[0]!.id, name: 'renamed', type: 'string', options: { nullable: true } }] });
   assert.deepEqual(ok.applied!.map((c) => c.kind), ['renameField']);
 });
 
 test('S5 preflight: a reserved/invalid identifier rejects with BuilderValidationError; nothing written', async () => {
   await assert.rejects(
-    () => applySchemaEdit(sql, genDir, { apiId: 'gamma', fields: [{ name: 'created_at', type: 'string', options: { nullable: true } }] }),
+    () => applySchemaEdit(sql, genDir, { name: 'gamma', fields: [{ name: 'created_at', type: 'string', options: { nullable: true } }] }),
     BuilderValidationError,
   );
   assert.equal(await tableExists(sql, 'ct_gamma'), false); // gated before any write/migrate
 });
 
 test('S5 previewSchemaEdit: returns the change-set + generated source but writes/migrates NOTHING', async () => {
-  const p = await previewSchemaEdit(sql, { apiId: 'delta', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
+  const p = await previewSchemaEdit(sql, { name: 'delta', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   assert.equal(p.ok, true);
   assert.ok(p.changes.some((c) => c.kind === 'addType'));
   assert.match(p.generatedSource, /defineSchema/);
   assert.equal(await tableExists(sql, 'ct_delta'), false); // dry run: no table
-  assert.equal((await readAppliedSchemas(sql)).some((s) => s.apiId === 'delta'), false); // no snapshot row
+  assert.equal((await readAppliedSchemas(sql)).some((s) => s.name === 'delta'), false); // no snapshot row
 });

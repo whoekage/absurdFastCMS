@@ -16,13 +16,13 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
  *   - rename + retype the SAME field in one migrate (both ops, ordered),
  *   - rename an enumeration/`status` field and prove the CHECK still gates after the rename,
  *   - swap two field names via ids (the no-temp-name-staging collision case),
- *   - rename a TYPE (apiId/table) with data; rename then rename-back; the round-trip identity,
+ *   - rename a TYPE (name/table) with data; rename then rename-back; the round-trip identity,
  *   - contrast a STABLE-id rename (data kept) vs a NEW id on a "renamed" field (drop+add => data LOST).
  */
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, name: string, fields: FieldSchema[]): Schema => ({ id, name, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -188,7 +188,7 @@ test('rename a field to the OLD name of a DROPPED field (id reuse-free): rename 
   assert.equal(row?.legacy, 'KEEP', 'the SURVIVING field f_keep kept its value (not the dropped OLD)');
 });
 
-test('RENAME TYPE (apiId -> table) with multi-row, multi-column data: RENAME TO, all rows intact', async () => {
+test('RENAME TYPE (name -> table) with multi-row, multi-column data: RENAME TO, all rows intact', async () => {
   await migrate(sql, [
     schema('ct_a', 'thing', [
       f('f_t', 'title', 'string', { nullable: true }),
@@ -202,7 +202,7 @@ test('RENAME TYPE (apiId -> table) with multi-row, multi-column data: RENAME TO,
       f('f_t', 'title', 'string', { nullable: true }),
       f('f_v', 'views', 'integer', { nullable: true }),
     ]),
-  ]); // same id ct_a, apiId thing -> gadget
+  ]); // same id ct_a, name thing -> gadget
   assert.deepEqual(r.applied.map((c) => c.kind), ['renameType']);
   assert.equal(await tableExists(sql, 'ct_gadget'), true);
   assert.equal(await tableExists(sql, 'ct_thing'), false);

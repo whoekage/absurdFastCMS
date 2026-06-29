@@ -43,7 +43,7 @@ before(async () => {
   db = await createFileDatabase('ps');
   sql = db.sql;
   articleSchema = schema({
-    apiId: 'article',
+    name: 'article',
     fields: [
       { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
       { name: 'body', cmsType: 'text', options: { nullable: false } },

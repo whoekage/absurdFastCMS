@@ -10,7 +10,7 @@ import { cleanCatalog, tableExists, physicalColumns, schema } from './helpers.ts
 
 /**
  * RELATIONS SLICE 2 (files-first port) — relation declaration via `migrate()` from the in-code IR + the
- * uniform LINK-TABLE runtime DDL, end-to-end against a REAL Postgres (no mocks). The ct_<apiId> arena is
+ * uniform LINK-TABLE runtime DDL, end-to-end against a REAL Postgres (no mocks). The ct_<name> arena is
  * NEVER touched. Introspects information_schema + pg_catalog (pg_constraint.contype/confdeltype) to prove the
  * physical link table + per-kind UNIQUE + ON DELETE CASCADE FKs EXACTLY match the locked design, across all
  * four kinds (migrate-edge-relations only covers manyToMany), plus self-ref, the 63-byte truncation, the
@@ -22,7 +22,7 @@ import { cleanCatalog, tableExists, physicalColumns, schema } from './helpers.ts
  * files-first analog and are intentionally retired: (1) the relation-vs-scalar `FieldExistsError` collision
  * (the legacy `addRelation` re-checked field-name collisions; the files path defers name uniqueness to
  * `resolveFields`/parse and does not re-run it for a relation field), and (2) the `ReservedTableNameError`
- * on a `ct_`-prefixed TARGET (the files path resolves a target by apiId, so `ct_author` simply reads as an
+ * on a `ct_`-prefixed TARGET (the files path resolves a target by name, so `ct_author` simply reads as an
  * unknown type → `SchemaAdaptError`). The drop-relation guards live in migrate-edge-relations.test.ts.
  */
 
@@ -84,9 +84,9 @@ const UNIQUE_FOR: Record<string, string[][]> = {
 
 /** author + book schemas, book optionally owning a relation `authors` of `kind` to author. */
 function pair(rel?: { kind: (typeof KINDS)[number]; inverseField?: string }): Schema[] {
-  const author = schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
+  const author = schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
   const book = schema({
-    apiId: 'book',
+    name: 'book',
     fields: [{ name: 'title', cmsType: 'string' }],
     ...(rel ? { relations: [{ field: 'authors', kind: rel.kind, target: 'author', ...(rel.inverseField ? { inverseField: rel.inverseField } : {}) }] } : {}),
   });
@@ -122,7 +122,7 @@ for (const kind of KINDS) {
     assert.equal(reg.get('book')!.relations.length, 1);
     assert.equal(reg.get('book')!.relations[0]!.isOwner, true);
     assert.equal(reg.get('book')!.relations[0]!.kind, kind);
-    assert.equal(reg.get('book')!.relations[0]!.targetApiId, 'author');
+    assert.equal(reg.get('book')!.relations[0]!.targetName, 'author');
     assert.equal(reg.get('author')!.relations.length, 0);
 
     // ct_book arena untouched (no relation column ever).
@@ -144,7 +144,7 @@ for (const kind of KINDS) {
     assert.equal(author.relations.length, 1);
     assert.equal(author.relations[0]!.isOwner, false);
     assert.equal(author.relations[0]!.field, 'books');
-    assert.equal(author.relations[0]!.targetApiId, 'book');
+    assert.equal(author.relations[0]!.targetName, 'book');
     assert.equal(author.relations[0]!.linkTable, link, 'inverse reads the SAME link table reversed');
 
     // still exactly ONE physical link table.
@@ -181,9 +181,9 @@ test('R10 deleting an entry prunes its link rows (CASCADE) but never the opposit
 test('R13 two long relation field names sharing a prefix hash to distinct <=63-byte link tables', async () => {
   const longA = 'authors_with_a_very_long_descriptive_field_name_variant_aaaaaa';
   const longB = 'authors_with_a_very_long_descriptive_field_name_variant_bbbbbb';
-  const author = schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
+  const author = schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
   const book = schema({
-    apiId: 'book',
+    name: 'book',
     fields: [{ name: 'title', cmsType: 'string' }],
     relations: [
       { field: longA, kind: 'manyToOne', target: 'author' },
@@ -205,8 +205,8 @@ test('R13 two long relation field names sharing a prefix hash to distinct <=63-b
 // --- R14: absent target ------------------------------------------------------------------------
 
 test('R14 a relation to a non-existent target is rejected: SchemaAdaptError at registry build, no link table materialized', async () => {
-  const book = schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'ghost', kind: 'manyToOne', target: 'nosuchtype' }] });
-  // The typed guard lives at registry build (the cross-type relation pass resolves targets by apiId).
+  const book = schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'ghost', kind: 'manyToOne', target: 'nosuchtype' }] });
+  // The typed guard lives at registry build (the cross-type relation pass resolves targets by name).
   assert.throws(() => Registry.fromSchemas([book]), SchemaAdaptError);
   // migrate also fails (the link-table FK references a missing ct_ table) and materializes nothing.
   await assert.rejects(() => migrate(sql, [book], { allowDestructive: true }));
@@ -216,7 +216,7 @@ test('R14 a relation to a non-existent target is rejected: SchemaAdaptError at r
 // --- R16: self-referential ---------------------------------------------------------------------
 
 test('R16 self-referential two-way: one link table, both FKs to ct_comment, owner + inverse in the registry', async () => {
-  const comment = schema({ apiId: 'comment', fields: [{ name: 'body', cmsType: 'text' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'comment', inverseField: 'children' }] });
+  const comment = schema({ name: 'comment', fields: [{ name: 'body', cmsType: 'text' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'comment', inverseField: 'children' }] });
   await migrate(sql, [comment], { allowDestructive: true });
   const link = 'comment_parent_lnk';
   assert.ok(await tableExists(sql, link));
@@ -248,7 +248,7 @@ test('R20 a forced mid-tx failure (pre-existing link table) rolls back: no snaps
 
 test('R21 Registry.fromSchemas surfaces relation metadata without touching the target fields/columnPlan', async () => {
   // Baseline: author with NO relations.
-  const authorOnly = [schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] })];
+  const authorOnly = [schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] })];
   const baseDef = Registry.fromSchemas(authorOnly).get('author')!;
   const baseFields = baseDef.fields.map((f) => f.name);
   const baseColumnPlan = baseDef.columnPlan.map((c) => `${c.name}:${c.kind}`);
@@ -261,7 +261,7 @@ test('R21 Registry.fromSchemas surfaces relation metadata without touching the t
   const rel = book.relations[0]!;
   assert.equal(rel.field, 'authors');
   assert.equal(rel.kind, 'manyToMany');
-  assert.equal(rel.targetApiId, 'author');
+  assert.equal(rel.targetName, 'author');
   assert.equal(rel.isOwner, true);
   assert.equal(rel.inverseField, 'books');
   assert.equal(rel.linkTable, 'book_authors_lnk');
@@ -281,7 +281,7 @@ test('R21 Registry.fromSchemas surfaces relation metadata without touching the t
 // --- self-referential create atomicity ---------------------------------------------------------
 
 test('R a module with a self-referential relation materializes the owner + link table atomically', async () => {
-  const node = schema({ apiId: 'node', fields: [{ name: 'label', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'node', inverseField: 'children' }] });
+  const node = schema({ name: 'node', fields: [{ name: 'label', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'node', inverseField: 'children' }] });
   await migrate(sql, [node], { allowDestructive: true });
   assert.ok(await tableExists(sql, 'ct_node'));
   assert.ok(await tableExists(sql, 'node_parent_lnk'));

@@ -55,16 +55,16 @@ const KNOWN_COLUMN_TYPES: ReadonlySet<string> = new Set<ColumnType>([
 export { SYSTEM_COLUMN_NAMES };
 
 /**
- * A typed, field-scoped registry error. References the api_id + offending field NAME only — never any
+ * A typed, field-scoped registry error. References the module name + offending field NAME only — never any
  * SQL / Postgres detail — so corrupt / forward-incompatible meta fails LOUD at boot without a leak.
  */
 export class RegistryError extends AppError {
-  readonly apiId: string;
+  readonly module: string;
   readonly field: string;
-  constructor(apiId: string, field: string, reason: string) {
-    super('db.registry.invalid_field', { apiId, field, reason });
+  constructor(module: string, field: string, reason: string) {
+    super('db.registry.invalid_field', { name: module, field, reason });
     this.name = 'RegistryError';
-    this.apiId = apiId;
+    this.module = module;
     this.field = field;
   }
 }
@@ -111,7 +111,7 @@ export interface RegistryField {
   /**
    * be-05b RELATION-INSIDE-COMPONENT: present iff `cmsType === 'relation'` (a component field only) — an
    * INLINE id ref to a target module. The field IS a plain `json` column (`field.json===true`),
-   * emitted verbatim un-populated. `target` is the referenced module api_id; `multiple` selects
+   * emitted verbatim un-populated. `target` is the referenced module name; `multiple` selects
    * single-id vs array-of-ids cardinality. The body parser reads it (positive-int4 + cardinality), the
    * write existence-check reads it (the id(s) must exist in the TARGET ct_ table), and the read populate
    * post-step reads it (resolve the id(s) via the engine, applying target draft/publish + locale
@@ -150,7 +150,7 @@ export interface RelationMeta {
   /** API key on this side. */
   field: string;
   kind: RelationKind;
-  targetApiId: string;
+  targetName: string;
   /** true => this side emitted the link-table DDL. */
   isOwner: boolean;
   /** present => two-way (the partner field on the target). */
@@ -162,9 +162,9 @@ export interface RelationMeta {
 
 /** A module fully resolved for the runtime — the unit the registry hands to every consumer. */
 export interface ModuleDef {
-  /** The canonical stored api_id (the engine + registry key). */
-  apiId: string;
-  /** 'ct_'+apiId (re-validated via deriveTableName at build). */
+  /** The canonical stored name (the engine + registry key). */
+  name: string;
+  /** 'ct_'+name (re-validated via deriveTableName at build). */
   tableName: string;
   /** SYSTEM_FIELDS first, then user fields by sort. */
   fields: RegistryField[];
@@ -237,16 +237,16 @@ function numberParam(params: Record<string, unknown>, key: string): number | und
  * Build the {@link RegistryField} for one user field row, validating engine_type + decimal params and
  * re-validating the identifier (defense-in-depth). Throws {@link RegistryError} on anything corrupt.
  */
-function buildUserField(apiId: string, row: FieldRow): RegistryField {
+function buildUserField(name: string, row: FieldRow): RegistryField {
   // Belt-and-suspenders: a field NAME that somehow slipped past create-time validation is rejected here
   // before it ever becomes a SQL identifier.
   try {
     validateIdentifier(row.name);
   } catch {
-    throw new RegistryError(apiId, String(row.name), 'invalid identifier');
+    throw new RegistryError(name, String(row.name), 'invalid identifier');
   }
   if (!KNOWN_COLUMN_TYPES.has(row.engine_type)) {
-    throw new RegistryError(apiId, row.name, `unknown engine_type "${row.engine_type}"`);
+    throw new RegistryError(name, row.name, `unknown engine_type "${row.engine_type}"`);
   }
   const type = row.engine_type as ColumnType;
   const cmsType = row.cms_type as CmsType;
@@ -254,7 +254,7 @@ function buildUserField(apiId: string, row: FieldRow): RegistryField {
   // `time` resolves to engineType i32, but postgres.js returns a STRING for a `time` column — feeding
   // that string into an Int32Array would silently NaN. Fail LOUD: this load path does not support it.
   if (cmsType === 'time') {
-    throw new RegistryError(apiId, row.name, 'time is not supported on the load path');
+    throw new RegistryError(name, row.name, 'time is not supported on the load path');
   }
 
   const params = (row.params ?? {}) as Record<string, unknown>;
@@ -272,17 +272,17 @@ function buildUserField(apiId: string, row: FieldRow): RegistryField {
 
   if (type === 'decimal') {
     const scale = numberParam(params, 'scale');
-    if (scale === undefined) throw new RegistryError(apiId, row.name, 'decimal field is missing scale');
+    if (scale === undefined) throw new RegistryError(name, row.name, 'decimal field is missing scale');
     // Bound-check before it reaches the I64Column ctor (scale must be 0..18) so corrupt / forward-
     // incompatible meta fails LOUD here as a typed, field-scoped RegistryError, never as a raw column error.
     if (!Number.isInteger(scale) || scale < 0 || scale > 18) {
-      throw new RegistryError(apiId, row.name, 'decimal scale out of range');
+      throw new RegistryError(name, row.name, 'decimal scale out of range');
     }
     field.scale = scale;
     const precision = numberParam(params, 'precision');
     if (precision !== undefined) {
       if (!Number.isInteger(precision) || precision < 1 || precision < scale) {
-        throw new RegistryError(apiId, row.name, 'decimal precision out of range');
+        throw new RegistryError(name, row.name, 'decimal precision out of range');
       }
       field.precision = precision;
     }
@@ -292,7 +292,7 @@ function buildUserField(apiId: string, row: FieldRow): RegistryField {
   const length = numberParam(params, 'length');
   if (length !== undefined) {
     if (!Number.isInteger(length) || length < 1) {
-      throw new RegistryError(apiId, row.name, 'length out of range');
+      throw new RegistryError(name, row.name, 'length out of range');
     }
     field.length = length;
   }
@@ -312,7 +312,7 @@ function buildUserField(apiId: string, row: FieldRow): RegistryField {
   } else if (isComponentFieldKind(row.cms_type)) {
     // be-05 COMPONENT: tag the field with its structural intent from the catalog params. engine_type is
     // `json` (set above), so `type==='json'` + `field.json===true` already — the column loads/serializes as
-    // RawJson verbatim with NO engine change. This only records kind + the referenced component api_id(s).
+    // RawJson verbatim with NO engine change. This only records kind + the referenced component name(s).
     const kind = row.cms_type as ComponentFieldKind;
     const c: { kind: ComponentFieldKind; component?: string; components?: readonly string[] } = { kind };
     if (typeof params['component'] === 'string') c.component = params['component'];
@@ -461,24 +461,24 @@ function buildIndexPlan(fields: RegistryField[]): IndexPlan {
  * Build a {@link RelationMeta} from a relation row, re-validating identifiers + kind (defense-in-depth,
  * fail LOUD via {@link RegistryError}). NO edges loaded, NO Relation object built.
  */
-function buildRelation(apiId: string, row: RelationRow): RelationMeta {
+function buildRelation(name: string, row: RelationRow): RelationMeta {
   try {
     validateIdentifier(row.field_name);
   } catch {
-    throw new RegistryError(apiId, String(row.field_name), 'invalid relation field identifier');
+    throw new RegistryError(name, String(row.field_name), 'invalid relation field identifier');
   }
   try {
     validateIdentifier(row.link_table);
   } catch {
-    throw new RegistryError(apiId, row.field_name, 'invalid link_table identifier');
+    throw new RegistryError(name, row.field_name, 'invalid link_table identifier');
   }
   if (!RELATION_KINDS.has(row.kind)) {
-    throw new RegistryError(apiId, row.field_name, `unknown relation kind "${row.kind}"`);
+    throw new RegistryError(name, row.field_name, `unknown relation kind "${row.kind}"`);
   }
   const meta: RelationMeta = {
     field: row.field_name,
     kind: row.kind as RelationKind,
-    targetApiId: row.target_api_id,
+    targetName: row.target_name,
     isOwner: row.is_owner,
     linkTable: row.link_table,
     sort: row.sort,
@@ -489,9 +489,9 @@ function buildRelation(apiId: string, row: RelationRow): RelationMeta {
 
 /** Assemble a full {@link ModuleDef} from a content_types row + its user field rows + relation rows. */
 function buildDef(ct: ModuleRow, fieldRows: FieldRow[], relationRows: RelationRow[]): ModuleDef {
-  // Re-derive the table name (re-validates the api_id identifier — defense-in-depth) rather than
+  // Re-derive the table name (re-validates the name identifier — defense-in-depth) rather than
   // trusting the stored table_name verbatim.
-  const tableName = deriveTableName(ct.api_id);
+  const tableName = deriveTableName(ct.name);
 
   const fields: RegistryField[] = SYSTEM_FIELDS.map(systemField);
   // i18n opt-in: un-skip the synthesized `document_id` system field (be-02b loader-skip becomes
@@ -504,7 +504,7 @@ function buildDef(ct: ModuleRow, fieldRows: FieldRow[], relationRows: RelationRo
   // i18n opt-in: append the synthesized `locale` system field after published_at, before user fields
   // (matching the DDL column order). For a non-i18n type NO locale field is pushed (byte-identical).
   if (ct.i18n) fields.push(localeField());
-  for (const row of fieldRows) fields.push(buildUserField(ct.api_id, row));
+  for (const row of fieldRows) fields.push(buildUserField(ct.name, row));
 
   const fieldDefs: FieldDef[] = fields.map((f) => ({
     name: f.name,
@@ -522,7 +522,7 @@ function buildDef(ct: ModuleRow, fieldRows: FieldRow[], relationRows: RelationRo
 
   // Relations are METADATA ONLY here: built from meta (already sort-ordered by getRelations), NOT folded
   // into fields/fieldDefs/columnPlan/writable — the read arena stays byte-identical.
-  const relations = relationRows.map((r) => buildRelation(ct.api_id, r));
+  const relations = relationRows.map((r) => buildRelation(ct.name, r));
   const relationsByField = new Map<string, RelationMeta>(relations.map((r) => [r.field, r]));
 
   // be-04 MEDIA: index the media fields (a SUBSET of `writable`, since a media field is a real column).
@@ -534,7 +534,7 @@ function buildDef(ct: ModuleRow, fieldRows: FieldRow[], relationRows: RelationRo
   for (const f of writable) if (f.component !== undefined) componentFields.set(f.name, f.component);
 
   return {
-    apiId: ct.api_id,
+    name: ct.name,
     tableName,
     fields,
     fieldDefs,
@@ -554,14 +554,14 @@ function buildDef(ct: ModuleRow, fieldRows: FieldRow[], relationRows: RelationRo
 }
 
 /**
- * be-05 — a COMPONENT type resolved for the runtime: its api_id + its fields (each a {@link RegistryField},
+ * be-05 — a COMPONENT type resolved for the runtime: its name + its fields (each a {@link RegistryField},
  * reusing the same builder as a module user field). A component has NO physical table / NO engine
  * presence, so a {@link ComponentDef} carries NO fieldDefs/columnPlan/indexPlan — only the field SHAPE the
  * recursive write validator + read populate post-step (next phases) walk. `requiredOnCreate` mirrors a
  * module's: a NOT-NULL field with no default must be present in a component instance.
  */
 export interface ComponentDef {
-  apiId: string;
+  name: string;
   fields: RegistryField[];
   fieldsByName: Map<string, RegistryField>;
   nullableNames: ReadonlySet<string>;
@@ -582,7 +582,7 @@ function buildComponentDef(cmp: ComponentTypeRow, fieldRows: ComponentFieldRow[]
   // A component field row has no pg_type/engine_type column; buildUserField reads `engine_type`, so adapt:
   // a scalar's engine intent is re-derived nowhere here — instead we build a FieldRow-shaped object whose
   // engine_type is `json` for a component/media-multiple field and otherwise resolved from the catalog.
-  const fields = fieldRows.map((r) => buildUserField(cmp.api_id, componentRowToFieldRow(r)));
+  const fields = fieldRows.map((r) => buildUserField(cmp.name, componentRowToFieldRow(r)));
   const fieldsByName = new Map<string, RegistryField>(fields.map((f) => [f.name, f]));
   const nullableNames = new Set<string>(fields.filter((f) => f.nullable).map((f) => f.name));
   const requiredOnCreate = fields.filter((f) => !f.nullable && !f.hasDefault).map((f) => f.name);
@@ -592,7 +592,7 @@ function buildComponentDef(cmp: ComponentTypeRow, fieldRows: ComponentFieldRow[]
   for (const f of fields) if (f.media !== undefined) mediaFields.set(f.name, f.media);
   const relationRefFields = new Map<string, { target: string; multiple: boolean }>();
   for (const f of fields) if (f.relationRef !== undefined) relationRefFields.set(f.name, f.relationRef);
-  return { apiId: cmp.api_id, fields, fieldsByName, nullableNames, requiredOnCreate, componentFields, mediaFields, relationRefFields };
+  return { name: cmp.name, fields, fieldsByName, nullableNames, requiredOnCreate, componentFields, mediaFields, relationRefFields };
 }
 
 /**
@@ -631,37 +631,37 @@ function componentEngineType(r: ComponentFieldRow): string {
 }
 
 /**
- * The module registry: O(1) lookup by api_id, built from meta with exactly two query CLASSES
+ * The module registry: O(1) lookup by name, built from meta with exactly two query CLASSES
  * (listContentTypes + getFields-per-type) and per-type rebuild on a schema change / write.
  */
 export class Registry {
-  private readonly byApiId = new Map<string, ModuleDef>();
+  private readonly byName = new Map<string, ModuleDef>();
   /** be-05: the parallel component-type store (no engine presence; pure schema for write/populate walks). */
   private readonly components = new Map<string, ComponentDef>();
 
-  /** Is a module by this api_id known? (mirrors engine.has — same canonical key). */
-  has(apiId: string): boolean {
-    return this.byApiId.has(apiId);
+  /** Is a module by this name known? (mirrors engine.has — same canonical key). */
+  has(name: string): boolean {
+    return this.byName.has(name);
   }
 
   /** O(1) def lookup, or undefined. */
-  get(apiId: string): ModuleDef | undefined {
-    return this.byApiId.get(apiId);
+  get(name: string): ModuleDef | undefined {
+    return this.byName.get(name);
   }
 
   /** Every def, in build order. */
   all(): ModuleDef[] {
-    return [...this.byApiId.values()];
+    return [...this.byName.values()];
   }
 
-  /** be-05: O(1) component def lookup by api_id, or undefined. */
-  getComponent(apiId: string): ComponentDef | undefined {
-    return this.components.get(apiId);
+  /** be-05: O(1) component def lookup by name, or undefined. */
+  getComponent(name: string): ComponentDef | undefined {
+    return this.components.get(name);
   }
 
-  /** be-05: is a component type by this api_id known? */
-  hasComponent(apiId: string): boolean {
-    return this.components.has(apiId);
+  /** be-05: is a component type by this name known? */
+  hasComponent(name: string): boolean {
+    return this.components.has(name);
   }
 
   /** be-05: every component def, in build order. */
@@ -681,25 +681,25 @@ export class Registry {
     // Components FIRST (a module / component field can reference one).
     for (const cs of components) {
       const { cmp, fieldRows } = componentSchemaToRows(cs);
-      reg.components.set(cmp.api_id, buildComponentDef(cmp, fieldRows));
+      reg.components.set(cmp.name, buildComponentDef(cmp, fieldRows));
     }
     // Relations span two types (owner + synthesized inverse), so build them in one cross-type pass first.
     const relByType = relationRowsByType(schemas);
     for (const schema of schemas) {
       const { ct, fieldRows } = schemaToRows(schema);
-      reg.byApiId.set(ct.api_id, buildDef(ct, fieldRows, relByType.get(schema.id) ?? []));
+      reg.byName.set(ct.name, buildDef(ct, fieldRows, relByType.get(schema.id) ?? []));
     }
     return reg;
   }
 
   /** be-05: remove ONE component def (the drop hook). Returns whether it was present. */
-  removeComponent(apiId: string): boolean {
-    return this.components.delete(apiId);
+  removeComponent(name: string): boolean {
+    return this.components.delete(name);
   }
 
   /** Remove ONE type's def (the drop hook). Returns whether it was present (false signals a desync). */
-  removeType(apiId: string): boolean {
-    return this.byApiId.delete(apiId);
+  removeType(name: string): boolean {
+    return this.byName.delete(name);
   }
 
   /**
@@ -708,6 +708,6 @@ export class Registry {
    * {@link removeType} for a live schema change without a full registry rebuild.
    */
   install(def: ModuleDef): void {
-    this.byApiId.set(def.apiId, def);
+    this.byName.set(def.name, def);
   }
 }

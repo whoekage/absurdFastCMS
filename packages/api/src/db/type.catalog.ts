@@ -71,12 +71,12 @@ export interface FieldOptions {
   default?: unknown;
   /** `media` only: false (default) -> a single int4 file id column; true -> a jsonb array of file ids. */
   multiple?: boolean;
-  /** be-05 component / component-repeatable only: the referenced component-type api_id. */
+  /** be-05 component / component-repeatable only: the referenced component-type name. */
   component?: string;
   /** be-05 dynamiczone only: the allowed component-type api_ids (the zone's allowed-set). */
   components?: string[];
   /**
-   * be-05b RELATION-INSIDE-COMPONENT only: the target module api_id an inline ref points at. NOTE
+   * be-05b RELATION-INSIDE-COMPONENT only: the target module name an inline ref points at. NOTE
    * this is semantically DISTINCT from a top-level (be-01) relation: a relation field INSIDE a component
    * stores inline id ref(s) IN the component json (set-by-value, resolved-on-read, NOT independently
    * queryable) — there is NO link table, NO CSR, NO inverse side. The `multiple` flag above is reused for
@@ -225,14 +225,14 @@ export function resolveType(cmsType: CmsType, options?: FieldOptions): ResolvedT
  * NOT members of {@link CmsType}: each PHYSICALLY resolves to a single `jsonb` column (no link table, no
  * per-kind RESOLVERS arm — keeping the `satisfies Record<CmsType,...>` exhaustiveness guard intact), but
  * their `params` SHAPE differs from `media` (a component/dynamiczone carries the referenced component
- * api_id(s), not a cardinality flag). The component INSTANCE tree is stored INLINE in the jsonb column.
+ * name(s), not a cardinality flag). The component INSTANCE tree is stored INLINE in the jsonb column.
  *
- *   component            — ONE instance of a component type (`params.component = "<apiId>"`).
+ *   component            — ONE instance of a component type (`params.component = "<name>"`).
  *   component-repeatable — an ORDERED ARRAY of instances of one component (`params.component`).
  *   dynamiczone          — an ORDERED ARRAY of instances, each tagged `__component`, drawn from an
  *                          allowed-set (`params.components = ["a","b",...]`).
  *   relation             — be-05b: an INLINE id ref (or array of ids) to a TARGET module
- *                          (`params.target = "<apiId>"`, `params.multiple`). It rides the SAME json-column
+ *                          (`params.target = "<name>"`, `params.multiple`). It rides the SAME json-column
  *                          plumbing as a multiple-media field — set-by-value, existence-checked on write,
  *                          resolved by the read populate-walk. It is NOT a be-01 link-table relation (no
  *                          link table, no CSR, no inverse side, not independently queryable).
@@ -257,26 +257,26 @@ export class ComponentFieldError extends Error {
  * Resolve a component field kind (+ options) to its physical pg column + the recorded params. Every
  * kind is a `jsonb` column (engine `json`) — byte-identical mechanics to a multiple-media field — so the
  * read path emits the inline component tree verbatim (RawJson) un-populated, and indexing skips it (json).
- * The referenced component api_id(s) are validated for SHAPE here (legal identifier) but their EXISTENCE
+ * The referenced component name(s) are validated for SHAPE here (legal identifier) but their EXISTENCE
  * is checked by the repository against `component_types` (this module never touches a connection).
  *
  * params shape (stored verbatim in content_type_fields.params / component_type_fields.params):
- *   component / component-repeatable -> { kind, component: '<apiId>' }
- *   dynamiczone                      -> { kind, components: ['<apiId>', ...] }
- *   relation                         -> { kind, target: '<apiId>', multiple }
+ *   component / component-repeatable -> { kind, component: '<name>' }
+ *   dynamiczone                      -> { kind, components: ['<name>', ...] }
+ *   relation                         -> { kind, target: '<name>', multiple }
  */
 export function resolveComponentField(kind: ComponentFieldKind, options?: FieldOptions): ResolvedType {
   if (kind === 'relation') {
     // be-05b: an inline id ref to a TARGET module. pgType is ALWAYS jsonb (engine `json`) for BOTH
     // cardinalities (unlike a top-level media single, which is an int4 COLUMN — here the ref always lives
     // INSIDE a json component column, so json is correct + simpler). SHAPE-only validation of the target
-    // api_id here (a non-empty string with no NUL); its EXISTENCE in `content_types` is checked by the
+    // name here (a non-empty string with no NUL); its EXISTENCE in `content_types` is checked by the
     // repository against the live catalog (this module never touches a connection).
     const target = options?.target;
     if (typeof target !== 'string' || target.length === 0) {
-      throw new ComponentFieldError('relation requires a target module api_id');
+      throw new ComponentFieldError('relation requires a target module name');
     }
-    if (target.includes(' ')) throw new ComponentFieldError(`relation target ${JSON.stringify(target)} is not a valid api_id`);
+    if (target.includes(' ')) throw new ComponentFieldError(`relation target ${JSON.stringify(target)} is not a valid name`);
     return { cmsType: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, target, multiple: options?.multiple === true } };
   }
   if (kind === 'dynamiczone') {
@@ -286,16 +286,16 @@ export function resolveComponentField(kind: ComponentFieldKind, options?: FieldO
     }
     const seen = new Set<string>();
     for (const c of components) {
-      if (typeof c !== 'string' || c.length === 0) throw new ComponentFieldError(`dynamiczone components must be non-empty api_id strings, got ${String(c)}`);
+      if (typeof c !== 'string' || c.length === 0) throw new ComponentFieldError(`dynamiczone components must be non-empty name strings, got ${String(c)}`);
       if (seen.has(c.toLowerCase())) throw new ComponentFieldError(`duplicate dynamiczone component: ${c}`);
       seen.add(c.toLowerCase());
     }
     return { cmsType: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, components: [...components] } };
   }
-  // component / component-repeatable: exactly one referenced component api_id.
+  // component / component-repeatable: exactly one referenced component name.
   const component = options?.component;
   if (typeof component !== 'string' || component.length === 0) {
-    throw new ComponentFieldError(`${kind} requires a component api_id`);
+    throw new ComponentFieldError(`${kind} requires a component name`);
   }
   return { cmsType: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, component } };
 }

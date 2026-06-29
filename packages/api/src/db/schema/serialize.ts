@@ -4,7 +4,7 @@ import { schemaZ, type Schema } from './model.ts';
 import { AppError } from '../../errors/app-error.ts';
 
 /**
- * The FILE boundary for the files-first schema: parse + Zod-validate one `schema/<apiId>.json`, serialize
+ * The FILE boundary for the files-first schema: parse + Zod-validate one `schema/<name>.json`, serialize
  * back to canonical text, and load a whole `schema/` directory. PURE except for the fs reads in
  * {@link loadSchemaDir}. All malformed input fails as a typed {@link SchemaFileError} that names the file
  * and the precise Zod path — a dev hand-editing JSON gets an actionable message, never a raw stack.
@@ -43,8 +43,8 @@ export function stringifySchema(schema: Schema): string {
 /**
  * Load every `*.json` in a schema directory into {@link Schema}s, sorted by filename for a
  * deterministic build order. A MISSING directory is an EMPTY catalog (valid — a fresh project before its
- * first type). Each file's stem MUST equal its `apiId` (so a rename touches the file name too, and the
- * route key `apiId` is always findable by name).
+ * first type). Each file's stem MUST equal its `name` (so a rename touches the file name too, and the
+ * route key `name` is always findable by name).
  */
 export async function loadSchemaDir(dir: string): Promise<Schema[]> {
   let entries: string[];
@@ -60,8 +60,8 @@ export async function loadSchemaDir(dir: string): Promise<Schema[]> {
     const text = await readFile(path.join(dir, f), 'utf8');
     const schema = parseSchema(text, f);
     const stem = f.slice(0, -'.json'.length);
-    if (stem !== schema.apiId) {
-      throw new SchemaFileError(f, `filename stem "${stem}" must equal apiId "${schema.apiId}"`);
+    if (stem !== schema.name) {
+      throw new SchemaFileError(f, `filename stem "${stem}" must equal name "${schema.name}"`);
     }
     out.push(schema);
   }

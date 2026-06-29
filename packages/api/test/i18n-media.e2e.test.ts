@@ -56,7 +56,7 @@ before(async () => {
   // SINGLE media field (the int4 case that already worked — asserted still fine), plus a LOCALIZED media
   // field (overlaid per variant via the request body).
   const pageSchema = schema({
-    apiId: 'page',
+    name: 'page',
     i18n: true,
     fields: [
       { name: 'title', cmsType: 'string', options: { nullable: false }, localized: true },

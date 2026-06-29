@@ -47,7 +47,7 @@ export async function swapFromIR(
   // The new registry, built PURELY from the in-memory IR (no DB, no files). A throw here touches nothing.
   const nextReg = Registry.fromSchemas(next, nextComponents);
 
-  // Partition the touched apiIds by the kind of engine op each needs. `setTypeOption` is intentionally
+  // Partition the touched moduleNames by the kind of engine op each needs. `setTypeOption` is intentionally
   // absent: migrate always throws MigrationUnsupportedError for it, so it can never reach a committed
   // change-set (applySchemaEdit throws before any swap runs).
   const creates = new Set<string>();
@@ -55,12 +55,12 @@ export async function swapFromIR(
   const changes = new Set<string>();
   for (const c of applied) {
     switch (c.kind) {
-      case 'addType': creates.add(c.apiId); break;
-      case 'dropType': drops.add(c.apiId); break;
-      case 'renameType': drops.add(c.fromApiId); creates.add(c.toApiId); break; // from !== to → no key clash
+      case 'addType': creates.add(c.name); break;
+      case 'dropType': drops.add(c.name); break;
+      case 'renameType': drops.add(c.fromName); creates.add(c.toName); break; // from !== to → no key clash
       case 'addField': case 'dropField': case 'renameField': case 'retypeField':
       case 'setFieldNullable': case 'reorderFields': case 'addRelation': case 'dropRelation':
-        changes.add(c.apiId); break;
+        changes.add(c.name); break;
       // setTypeOption: unreachable (see above) — deliberately not handled.
     }
   }
@@ -71,14 +71,14 @@ export async function swapFromIR(
   // PHASE 1 (isolated, off-side, may throw): build every new/changed type's DetachedTable from the
   // COMMITTED post-migrate DB. Nothing on `live` is touched yet → a throw keeps last-good serving.
   const built = new Map<string, Awaited<ReturnType<typeof buildDetached>>>();
-  for (const apiId of [...creates, ...changes]) {
-    built.set(apiId, await buildDetached(sql, nextReg.get(apiId)!));
+  for (const name of [...creates, ...changes]) {
+    built.set(name, await buildDetached(sql, nextReg.get(name)!));
   }
 
   // PHASE 2 (synchronous burst, NO await): swap per-type storage + the registry/hooks refs atomically.
-  for (const apiId of drops) live.engine.dropType(apiId);
-  for (const apiId of creates) live.engine.registerDetached(apiId, built.get(apiId)!);
-  for (const apiId of changes) live.engine.replaceType(apiId, built.get(apiId)!);
+  for (const name of drops) live.engine.dropType(name);
+  for (const name of creates) live.engine.registerDetached(name, built.get(name)!);
+  for (const name of changes) live.engine.replaceType(name, built.get(name)!);
   live.registry = nextReg; // `live.engine` is the SAME object (per-type storage swapped) — never reassigned.
   live.hooks = nextHooks;
 

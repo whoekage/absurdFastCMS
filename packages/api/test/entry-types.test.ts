@@ -18,7 +18,7 @@ before(async () => {
   db = await createFileDatabase('et');
   sql = db.sql;
   server = await startTestServer(sql, [schema({
-    apiId: 'metric',
+    name: 'metric',
     fields: [
       { name: 'big', cmsType: 'biginteger', options: { nullable: false } },
       { name: 'amount', cmsType: 'decimal', options: { precision: 18, scale: 2, nullable: false } },

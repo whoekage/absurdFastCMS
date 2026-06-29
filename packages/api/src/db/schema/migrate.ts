@@ -108,18 +108,18 @@ export interface MigrateResult {
 /** A short human description of a change (for the blocked-migration error + `migrate lint` output). */
 export function describeChange(c: Change): string {
   switch (c.kind) {
-    case 'addType': return `create type ${c.apiId}`;
-    case 'dropType': return `DROP type ${c.apiId}`;
-    case 'renameType': return `rename type ${c.fromApiId} -> ${c.toApiId}`;
-    case 'setTypeOption': return `set ${c.apiId}.${c.option}=${c.to}`;
-    case 'addField': return `add ${c.apiId}.${c.field.name}`;
-    case 'dropField': return `DROP ${c.apiId}.${c.name}`;
-    case 'renameField': return `rename ${c.apiId}.${c.from} -> ${c.to}`;
-    case 'retypeField': return `retype ${c.apiId}.${c.name} (${c.classification})`;
-    case 'setFieldNullable': return `set ${c.apiId}.${c.name} ${c.to ? 'NULL' : 'NOT NULL'}`;
-    case 'reorderFields': return `reorder ${c.apiId} fields (wire-only)`;
-    case 'addRelation': return `add relation ${c.apiId}.${c.field} -> ${c.target} (${c.relKind})`;
-    case 'dropRelation': return `DROP relation ${c.apiId}.${c.field}`;
+    case 'addType': return `create type ${c.name}`;
+    case 'dropType': return `DROP type ${c.name}`;
+    case 'renameType': return `rename type ${c.fromName} -> ${c.toName}`;
+    case 'setTypeOption': return `set ${c.name}.${c.option}=${c.to}`;
+    case 'addField': return `add ${c.name}.${c.field.name}`;
+    case 'dropField': return `DROP ${c.name}.${c.fieldName}`;
+    case 'renameField': return `rename ${c.name}.${c.from} -> ${c.to}`;
+    case 'retypeField': return `retype ${c.name}.${c.fieldName} (${c.classification})`;
+    case 'setFieldNullable': return `set ${c.name}.${c.fieldName} ${c.to ? 'NULL' : 'NOT NULL'}`;
+    case 'reorderFields': return `reorder ${c.name} fields (wire-only)`;
+    case 'addRelation': return `add relation ${c.name}.${c.field} -> ${c.target} (${c.relKind})`;
+    case 'dropRelation': return `DROP relation ${c.name}.${c.field}`;
   }
 }
 
@@ -198,15 +198,15 @@ async function applyOne(tx: Sql, c: Change): Promise<void> {
       const fields = resolveFields(c.schema.fields.map(fieldSchemaToSpec));
       const dp = c.schema.options?.draftAndPublish ?? false;
       const i18n = c.schema.options?.i18n ?? false;
-      await run(tx, compileCreateTable(deriveTableName(c.schema.apiId), fields, dp, i18n));
+      await run(tx, compileCreateTable(deriveTableName(c.schema.name), fields, dp, i18n));
       return;
     }
     case 'renameType':
-      await run(tx, compileRenameTable(deriveTableName(c.fromApiId), deriveTableName(c.toApiId)));
+      await run(tx, compileRenameTable(deriveTableName(c.fromName), deriveTableName(c.toName)));
       return;
     case 'addField': {
       const rf = resolveFields([fieldSchemaToSpec(c.field)])[0]!;
-      await run(tx, compileAddColumn(deriveTableName(c.apiId), rf));
+      await run(tx, compileAddColumn(deriveTableName(c.name), rf));
       return;
     }
     case 'renameField':
@@ -214,14 +214,14 @@ async function applyOne(tx: Sql, c: Change): Promise<void> {
       // cycle (which a naive in-order apply hits with 42701 duplicate_column) is staged through a temp name.
       throw new Error('internal: renameField is applied in applyChangeSet (batched), not applyOne');
     case 'retypeField': {
-      const tbl = deriveTableName(c.apiId);
+      const tbl = deriveTableName(c.name);
       const fromEnum = Array.isArray(c.from.params['values']);
       const toEnum = Array.isArray(c.to.params['values']);
       if (!fromEnum && !toEnum) {
         // Plain non-enum retype (int->bigint, varchar resize, decimal): the column-type cast. Pre-flight a
         // lossy SHRINK (varchar shorten / scale reduce) so real truncation/rounding fails LOUD, not silently.
-        await assertNoTruncation(tx, tbl, c.name, c.from, c.to);
-        await run(tx, compileAlterColumnType(tbl, c.name, c.to));
+        await assertNoTruncation(tx, tbl, c.fieldName, c.from, c.to);
+        await run(tx, compileAlterColumnType(tbl, c.fieldName, c.to));
         return;
       }
       // Enum membership lives in a CHECK, not the column type, so an enum value-set change is a CHECK SWAP —
@@ -229,32 +229,32 @@ async function applyOne(tx: Sql, c: Change): Promise<void> {
       // Drop the old CHECK; ALTER the base type only when the category changes (enum<->non-enum); add the
       // new CHECK (it VALIDATES existing rows -> a row using a removed member fails the ADD -> tx rollback,
       // data intact — you cannot remove an in-use member; adding a member always succeeds).
-      if (fromEnum) await dropColumnChecks(tx, tbl, c.name);
+      if (fromEnum) await dropColumnChecks(tx, tbl, c.fieldName);
       // ALTER the base type when the CATEGORY changes (enum<->non-enum), OR when an enum->enum GROWS its
       // varchar (a new longer member needs room). NEVER shrink an enum's varchar — the CHECK is the real
       // constraint, and a shrink would truncate an in-use value.
       const grows = fromEnum && toEnum && Number(c.to.params['length'] ?? 0) > Number(c.from.params['length'] ?? 0);
       if ((fromEnum !== toEnum && c.from.pgType !== c.to.pgType) || grows) {
         // A category change (enum<->non-enum) can shrink the varchar — pre-flight it like the plain path.
-        await assertNoTruncation(tx, tbl, c.name, c.from, c.to);
-        await run(tx, compileAlterColumnType(tbl, c.name, c.to));
+        await assertNoTruncation(tx, tbl, c.fieldName, c.from, c.to);
+        await run(tx, compileAlterColumnType(tbl, c.fieldName, c.to));
       }
-      if (toEnum) await run(tx, compileAddCheck(tbl, c.name, c.to.params['values'] as string[]));
+      if (toEnum) await run(tx, compileAddCheck(tbl, c.fieldName, c.to.params['values'] as string[]));
       return;
     }
     case 'setFieldNullable':
       // c.to === true means the column becomes NULLABLE => NOT NULL is dropped.
-      await run(tx, compileSetColumnNotNull(deriveTableName(c.apiId), c.name, !c.to));
+      await run(tx, compileSetColumnNotNull(deriveTableName(c.name), c.fieldName, !c.to));
       return;
     case 'dropField':
-      await run(tx, compileDropColumn(deriveTableName(c.apiId), c.name));
+      await run(tx, compileDropColumn(deriveTableName(c.name), c.fieldName));
       return;
     case 'dropType':
-      await run(tx, compileDropTable(deriveTableName(c.apiId)));
+      await run(tx, compileDropTable(deriveTableName(c.name)));
       return;
     case 'addRelation':
       // The link table FKs both endpoint ct_ tables; the diff orders addRelation after every addType.
-      await run(tx, compileCreateLinkTable(c.linkTable, deriveTableName(c.apiId), deriveTableName(c.target), c.relKind));
+      await run(tx, compileCreateLinkTable(c.linkTable, deriveTableName(c.name), deriveTableName(c.target), c.relKind));
       return;
     case 'dropRelation':
       await run(tx, compileDropTable(c.linkTable)); // a link table is a plain table — drop it (edges lost).
@@ -264,7 +264,7 @@ async function applyOne(tx: Sql, c: Change): Promise<void> {
       return;
     case 'setTypeOption':
       throw new MigrationUnsupportedError(
-        `toggling "${c.option}" (draft&publish / i18n) on the existing type "${c.apiId}" is deferred to a later slice`,
+        `toggling "${c.option}" (draft&publish / i18n) on the existing type "${c.name}" is deferred to a later slice`,
       );
   }
 }
@@ -276,7 +276,7 @@ export async function ensureAppliedTable(sql: Sql): Promise<void> {
   try {
     await sql`CREATE TABLE IF NOT EXISTS _schema_applied (
       type_id text PRIMARY KEY,
-      api_id text NOT NULL,
+      name text NOT NULL,
       schema jsonb NOT NULL,
       applied_at timestamptz NOT NULL DEFAULT now()
     )`;
@@ -288,7 +288,7 @@ export async function ensureAppliedTable(sql: Sql): Promise<void> {
 
 /** The last-applied catalog, reconstructed from `_schema_applied` (Zod-validated against corruption). */
 export async function readAppliedSchemas(sql: Sql): Promise<Schema[]> {
-  const rows = await sql<{ schema: unknown }[]>`SELECT schema FROM _schema_applied ORDER BY api_id`;
+  const rows = await sql<{ schema: unknown }[]>`SELECT schema FROM _schema_applied ORDER BY name`;
   return rows.map((r) => schemaZ.parse(r.schema) as Schema);
 }
 
@@ -299,9 +299,9 @@ async function reconcileApplied(tx: Sql, next: Schema[]): Promise<void> {
   else await tx`DELETE FROM _schema_applied`;
   for (const s of next) {
     await tx`
-      INSERT INTO _schema_applied (type_id, api_id, schema)
-      VALUES (${s.id}, ${s.apiId}, ${tx.json(s as unknown as JSONValue)})
-      ON CONFLICT (type_id) DO UPDATE SET api_id = EXCLUDED.api_id, schema = EXCLUDED.schema, applied_at = now()
+      INSERT INTO _schema_applied (type_id, name, schema)
+      VALUES (${s.id}, ${s.name}, ${tx.json(s as unknown as JSONValue)})
+      ON CONFLICT (type_id) DO UPDATE SET name = EXCLUDED.name, schema = EXCLUDED.schema, applied_at = now()
     `;
   }
 }
@@ -373,11 +373,11 @@ async function applyChangeSet(sql: Sql, cs: ChangeSet, next: Schema[]): Promise<
   for (const c of cs.changes) {
     if (c.kind !== 'renameField') continue;
     validateFieldName(c.to); // defense-in-depth: the new name becomes a SQL identifier.
-    const arr = byTable.get(c.apiId) ?? [];
+    const arr = byTable.get(c.name) ?? [];
     arr.push({ from: c.from, to: c.to, fieldId: c.fieldId });
-    byTable.set(c.apiId, arr);
+    byTable.set(c.name, arr);
   }
-  for (const [apiId, rs] of byTable) renamePlans.set(apiId, planRenameSteps(rs));
+  for (const [name, rs] of byTable) renamePlans.set(name, planRenameSteps(rs));
 
   await sql.begin(async (tx) => {
     // S6: a tight lock_timeout so a contended schema write fails FAST (55P03) and the Builder's bounded retry
@@ -392,10 +392,10 @@ async function applyChangeSet(sql: Sql, cs: ChangeSet, next: Schema[]): Promise<
       if (c.kind === 'renameField') {
         // Run this table's WHOLE rename plan at its first renameField (before that table's retypes/nullables,
         // which reference the post-rename name); skip the rest — they are already in the plan.
-        if (renamedTables.has(c.apiId)) continue;
-        renamedTables.add(c.apiId);
-        const tbl = deriveTableName(c.apiId);
-        for (const step of renamePlans.get(c.apiId)!) await run(handle, compileRenameColumn(tbl, step.from, step.to));
+        if (renamedTables.has(c.name)) continue;
+        renamedTables.add(c.name);
+        const tbl = deriveTableName(c.name);
+        for (const step of renamePlans.get(c.name)!) await run(handle, compileRenameColumn(tbl, step.from, step.to));
         continue;
       }
       await applyOne(handle, c);

@@ -8,8 +8,8 @@ import { AppError } from '../../errors/app-error.ts';
 
 /**
  * The EDGE loader for the code-first source. The project's entity definitions live under `modules/`, ONE
- * FOLDER PER module (Strapi-style): `modules/<apiId>/schema.ts` (the {@link TypeDef}, required) +
- * `modules/<apiId>/hooks.ts` (the {@link Hooks}, optional). The apiId is the FOLDER NAME (renaming the
+ * FOLDER PER module (Strapi-style): `modules/<name>/schema.ts` (the {@link TypeDef}, required) +
+ * `modules/<name>/hooks.ts` (the {@link Hooks}, optional). The name is the FOLDER NAME (renaming the
  * folder renames the type — the stable `id` keeps it lossless). `services.ts`/`controller.ts` (custom
  * logic) are reserved for a later release and not yet loaded.
  *
@@ -28,7 +28,7 @@ export class SchemaLoadError extends AppError {
   }
 }
 
-/** The loaded catalog: the IR (for migrate/registry) + the lifecycle hooks keyed by apiId (for the write path). */
+/** The loaded catalog: the IR (for migrate/registry) + the lifecycle hooks keyed by name (for the write path). */
 export interface LoadedTypes {
   schemas: Schema[];
   hooks: Map<string, Hooks>;
@@ -65,8 +65,8 @@ async function loadTypesImpl(dir: string, token: string): Promise<LoadedTypes> {
     .sort();
   const schemas: Schema[] = [];
   const hooks = new Map<string, Hooks>();
-  for (const apiId of entityNames) {
-    const schemaFile = path.join(dir, apiId, 'schema.ts');
+  for (const name of entityNames) {
+    const schemaFile = path.join(dir, name, 'schema.ts');
     if (!existsSync(schemaFile)) continue; // a grouping dir, not an entity
     let mod: { default?: TypeDef };
     try {
@@ -76,13 +76,13 @@ async function loadTypesImpl(dir: string, token: string): Promise<LoadedTypes> {
       throw e;
     }
     if (!mod.default || typeof mod.default !== 'object' || !('fields' in mod.default)) {
-      throw new SchemaLoadError(`${apiId}/schema.ts`, 'must `export default defineSchema({ ... })`');
+      throw new SchemaLoadError(`${name}/schema.ts`, 'must `export default defineSchema({ ... })`');
     }
-    schemas.push(defToSchema(mod.default, apiId));
-    const hooksFile = path.join(dir, apiId, 'hooks.ts');
+    schemas.push(defToSchema(mod.default, name));
+    const hooksFile = path.join(dir, name, 'hooks.ts');
     if (existsSync(hooksFile)) {
       const hmod = (await import(pathToFileURL(hooksFile).href + bust)) as { default?: Hooks };
-      if (hmod.default !== undefined) hooks.set(apiId, hmod.default);
+      if (hmod.default !== undefined) hooks.set(name, hmod.default);
     }
   }
   return { schemas, hooks };

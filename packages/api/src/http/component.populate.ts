@@ -55,11 +55,11 @@ export function componentPopulateTargets(def: ModuleDef, query: string): Map<str
 
 /**
  * The collect accumulator: inline media `files.id`s (one global Set, resolved against `files`) PLUS inline
- * relation-ref ids BINNED BY TARGET module api_id (resolved per-target against the engine).
+ * relation-ref ids BINNED BY TARGET module name (resolved per-target against the engine).
  */
 interface CollectAcc {
   media: Set<number>;
-  /** target api_id -> the set of referenced row ids. */
+  /** target name -> the set of referenced row ids. */
   relations: Map<string, Set<number>>;
 }
 
@@ -86,9 +86,9 @@ function collectTree(
 }
 
 /** Collect inline media ids + relation-ref ids from one component instance (recursing nested components). */
-function collectInstance(registry: Registry, apiId: string, obj: unknown, into: CollectAcc): void {
+function collectInstance(registry: Registry, name: string, obj: unknown, into: CollectAcc): void {
   if (typeof obj !== 'object' || obj === null) return;
-  const cdef: ComponentDef | undefined = registry.getComponent(apiId);
+  const cdef: ComponentDef | undefined = registry.getComponent(name);
   if (cdef === undefined) return;
   const o = obj as Record<string, unknown>;
   for (const [name, { multiple }] of cdef.mediaFields) {
@@ -120,11 +120,11 @@ function collectInstance(registry: Registry, apiId: string, obj: unknown, into: 
 
 /**
  * The resolve accumulator handed to the splice walk: media assets by `files.id` PLUS, per relation TARGET
- * api_id, the visible resolved rows by id (a missing key/id => dangling/invisible => null/dropped).
+ * name, the visible resolved rows by id (a missing key/id => dangling/invisible => null/dropped).
  */
 interface ResolveAcc {
   media: Map<number, FileAsset>;
-  /** target api_id -> (row id -> the resolved, visibility-filtered row object). */
+  /** target name -> (row id -> the resolved, visibility-filtered row object). */
   relations: Map<string, Map<number, Record<string, unknown>>>;
 }
 
@@ -151,9 +151,9 @@ function inlineTree(
 }
 
 /** Resolve every inline media + relation field of one component instance (recursing nested components). */
-function inlineInstance(registry: Registry, apiId: string, obj: unknown, resolved: ResolveAcc): void {
+function inlineInstance(registry: Registry, name: string, obj: unknown, resolved: ResolveAcc): void {
   if (typeof obj !== 'object' || obj === null) return;
-  const cdef: ComponentDef | undefined = registry.getComponent(apiId);
+  const cdef: ComponentDef | undefined = registry.getComponent(name);
   if (cdef === undefined) return;
   const o = obj as Record<string, unknown>;
   const byId = resolved.media;
@@ -183,7 +183,7 @@ function inlineInstance(registry: Registry, apiId: string, obj: unknown, resolve
   for (const [name, cmeta] of cdef.componentFields) inlineTree(registry, cmeta, o[name], resolved);
 }
 
-/** A dynamiczone block's component api_id, or null when the block is malformed. */
+/** A dynamiczone block's component name, or null when the block is malformed. */
 function blockComponent(block: unknown): string | null {
   if (typeof block !== 'object' || block === null) return null;
   const cmp = (block as Record<string, unknown>)['__component'];

@@ -30,7 +30,7 @@ before(async () => {
   // the USER field `publishedAt` (camelCase) ALSO present, to prove it does NOT collide with the snake_case
   // system `published_at` column.
   const post = schema({
-    apiId: 'post',
+    name: 'post',
     fields: [
       { name: 'title', cmsType: 'string', options: { nullable: false } },
       { name: 'publishedAt', cmsType: 'datetime', options: { nullable: true } }, // user field, distinct key

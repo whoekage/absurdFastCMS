@@ -21,15 +21,15 @@ import { cleanCatalog, physicalColumns } from './helpers.ts';
  * NOTE: tests drive `reconcileBoot` with an IN-MEMORY files-IR built from `readAppliedSchemas` (the real
  * minted ids), NEVER by re-`loadTypes`-ing an edited file — Node's ESM module cache returns the first-imported
  * version of a path for the whole process, so a re-read of a rewritten schema.ts is stale (the documented
- * gotcha). Each test uses a DISTINCT apiId so on-disk paths never collide across the suite.
+ * gotcha). Each test uses a DISTINCT name so on-disk paths never collide across the suite.
  */
 
 const genDir = fileURLToPath(new URL(`./fixtures/.gen-${process.pid}-s3/`, import.meta.url));
-const schemaPath = (apiId: string): string => path.join(genDir, apiId, 'schema.ts');
-const applied = async (apiId: string): Promise<Schema> => (await readAppliedSchemas(sql)).find((s) => s.apiId === apiId)!;
+const schemaPath = (name: string): string => path.join(genDir, name, 'schema.ts');
+const applied = async (name: string): Promise<Schema> => (await readAppliedSchemas(sql)).find((s) => s.name === name)!;
 async function writeSchemaFile(s: Schema): Promise<void> {
-  await mkdir(path.join(genDir, s.apiId), { recursive: true });
-  await writeFile(schemaPath(s.apiId), generateSchemaSource(s));
+  await mkdir(path.join(genDir, s.name), { recursive: true });
+  await writeFile(schemaPath(s.name), generateSchemaSource(s));
 }
 
 let sql: Sql;
@@ -51,7 +51,7 @@ after(async () => {
 });
 
 test('A — files BEHIND (crash window): recover-forward regenerates the file, the reverse drop is NOT applied', async () => {
-  await applySchemaEdit(sql, genDir, { apiId: 'gbehind', fields: [
+  await applySchemaEdit(sql, genDir, { name: 'gbehind', fields: [
     { name: 'title', type: 'string', options: { nullable: true } },
     { name: 'b', type: 'string', options: { nullable: true } },
   ] });
@@ -69,11 +69,11 @@ test('A — files BEHIND (crash window): recover-forward regenerates the file, t
   assert.equal((await sql<{ b: string }[]>`SELECT b FROM ct_gbehind`)[0]?.b, 'keep');
   // schema.ts was regenerated back to the full shape; the served IR has 'b'.
   assert.match(await readFile(schemaPath('gbehind'), 'utf8'), /\bb:\s*c\.string/, 'file restored with field b');
-  assert.ok(r.schemas.find((s) => s.apiId === 'gbehind')!.fields.some((f) => f.name === 'b'), 'served IR has b');
+  assert.ok(r.schemas.find((s) => s.name === 'gbehind')!.fields.some((f) => f.name === 'b'), 'served IR has b');
 });
 
 test('B — files AHEAD (forward SAFE add): migrate forward, snapshot + column updated', async () => {
-  await applySchemaEdit(sql, genDir, { apiId: 'gahead', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
+  await applySchemaEdit(sql, genDir, { name: 'gahead', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   const base = await applied('gahead');
   const ahead: Schema = { ...base, fields: [...base.fields, { id: 'f_added', name: 'c', type: 'string', options: { nullable: true } }] };
 
@@ -84,7 +84,7 @@ test('B — files AHEAD (forward SAFE add): migrate forward, snapshot + column u
 });
 
 test('G — files AHEAD by an already-acked DATA-DEPENDENT change: migrate forward, NOT a false-HALT', async () => {
-  await applySchemaEdit(sql, genDir, { apiId: 'gdd', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
+  await applySchemaEdit(sql, genDir, { name: 'gdd', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   await sql.unsafe(`INSERT INTO ct_gdd (a) VALUES ('row')`);
   const base = await applied('gdd');
   // NOT-NULL add WITH default — the data-dependent class that lint() blocks WITHOUT allowDestructive; the
@@ -97,7 +97,7 @@ test('G — files AHEAD by an already-acked DATA-DEPENDENT change: migrate forwa
 });
 
 test('C — clean (file == snapshot): no-op, nothing migrated', async () => {
-  await applySchemaEdit(sql, genDir, { apiId: 'gclean', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
+  await applySchemaEdit(sql, genDir, { name: 'gclean', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   const before = (await physicalColumns(sql, 'ct_gclean')).map((c) => c.name).sort();
 
   const r = await reconcileBoot(sql, genDir, [await applied('gclean')], new Map());
@@ -106,7 +106,7 @@ test('C — clean (file == snapshot): no-op, nothing migrated', async () => {
 });
 
 test('D — baseline (no _schema_applied, empty DB): migrate() creates the table + backfills snapshot, idempotent on re-run', async () => {
-  const ir: Schema = { id: 'ct_gb', apiId: 'gbase', fields: [{ id: 'f_a', name: 'a', type: 'string', options: { nullable: true } }] };
+  const ir: Schema = { id: 'ct_gb', name: 'gbase', fields: [{ id: 'f_a', name: 'a', type: 'string', options: { nullable: true } }] };
   // Baseline precondition: NO snapshot AND the table not yet present. The new migrate()-based baseline path
   // CREATEs the ct_ table itself (DDL + snapshot in one tx) — unlike the old seedFromSchemas create-if-absent,
   // a pre-existing ct_ table would now 42P07 (compileCreateTable has no IF NOT EXISTS), but that state is
@@ -117,14 +117,14 @@ test('D — baseline (no _schema_applied, empty DB): migrate() creates the table
   const r = await reconcileBoot(sql, genDir, [ir], new Map());
   assert.equal(r.outcome, 'clean');
   assert.ok((await physicalColumns(sql, 'ct_gbase')).some((c) => c.name === 'a'), 'baseline migrate created the table');
-  assert.ok((await readAppliedSchemas(sql)).some((s) => s.apiId === 'gbase'), 'snapshot backfilled');
+  assert.ok((await readAppliedSchemas(sql)).some((s) => s.name === 'gbase'), 'snapshot backfilled');
 
   // D2 — re-run is clean with an empty diff (migrate DDL ⇄ snapshot shape agree, no phantom-diff).
   assert.equal((await reconcileBoot(sql, genDir, [ir], new Map())).outcome, 'clean');
 });
 
 test('H — recover-forward of a snapshot with a localized field HALTs LOUD (never writes a lossy file)', async () => {
-  const localizedIR: Schema = { id: 'ct_gh', apiId: 'ghalt', fields: [
+  const localizedIR: Schema = { id: 'ct_gh', name: 'ghalt', fields: [
     { id: 'f_a', name: 'a', type: 'string', options: { nullable: true } },
     { id: 'f_b', name: 'b', type: 'string', options: { nullable: true }, localized: true },
   ] };

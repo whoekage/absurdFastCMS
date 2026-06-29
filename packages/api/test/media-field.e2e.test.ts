@@ -43,20 +43,20 @@ before(async () => {
   // Pre-build the full catalog (files-first): product (single media), gallery (multiple media), note (scalar-only).
   const schemas = [
     schema({
-      apiId: 'product',
+      name: 'product',
       fields: [
         { name: 'title', cmsType: 'string', options: { nullable: false } },
         { name: 'cover', cmsType: 'media' },
       ],
     }),
     schema({
-      apiId: 'gallery',
+      name: 'gallery',
       fields: [
         { name: 'name', cmsType: 'string', options: { nullable: false } },
         { name: 'photos', cmsType: 'media', options: { multiple: true } },
       ],
     }),
-    schema({ apiId: 'note', fields: [{ name: 'body', cmsType: 'text' }] }),
+    schema({ name: 'note', fields: [{ name: 'body', cmsType: 'text' }] }),
   ];
   const srv = await startTestServer(sql, schemas);
   base = srv.base;

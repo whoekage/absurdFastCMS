@@ -83,7 +83,7 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     if (lifecycle.onBeforeStart) await lifecycle.onBeforeStart(ctx);
     await runMigrations(config.database.url);
     store = new PostgresStore(config.database.url);
-    // CODE-FIRST source of truth: import the project's committed modules/<apiId>/schema.ts modules at the
+    // CODE-FIRST source of truth: import the project's committed modules/<name>/schema.ts modules at the
     // EDGE (loadTypes → the IR). The S3 boot guard then shapes the DB to a CONSISTENT IR before the served
     // engine reads it — migrate-forward (files ahead) / recover-forward (files behind, the S2 crash window) /
     // clean — superseding the old unconditional create-if-absent seed. Default to <cwd>/modules.

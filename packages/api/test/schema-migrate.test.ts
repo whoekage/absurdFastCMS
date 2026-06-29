@@ -16,7 +16,7 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, name: string, fields: FieldSchema[]): Schema => ({ id, name, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -58,7 +58,7 @@ test('RENAME preserves data: id-matched name change → RENAME COLUMN, rows inta
   assert.equal(row?.headline, 'hello'); // DATA SURVIVED the rename
 });
 
-test('RENAME TYPE preserves data: apiId change → RENAME TABLE, rows intact', async () => {
+test('RENAME TYPE preserves data: name change → RENAME TABLE, rows intact', async () => {
   await migrate(sql, [schema('ct_a', 'thing', [f('f_t', 'title', 'string', { nullable: true })])]);
   await sql.unsafe(`INSERT INTO ct_thing (title) VALUES ('keep')`);
 
@@ -111,10 +111,10 @@ test('RETYPE is gated as data-dependent and preserves data when acked', async ()
 });
 
 test('relation: migrate creates the link table after both ct_ tables; idempotent; drop removes it', async () => {
-  const writer: Schema = { id: 'ct_w', apiId: 'writer', fields: [f('f_nm', 'name', 'string', { nullable: true })] };
+  const writer: Schema = { id: 'ct_w', name: 'writer', fields: [f('f_nm', 'name', 'string', { nullable: true })] };
   const postWithRel: Schema = {
     id: 'ct_p',
-    apiId: 'post',
+    name: 'post',
     fields: [f('f_ti', 'title', 'string', { nullable: true })],
     relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' }],
   };
@@ -131,7 +131,7 @@ test('relation: migrate creates the link table after both ct_ tables; idempotent
 
   assert.equal((await migrate(sql, [writer, postWithRel])).noop, true); // idempotent
 
-  const postNoRel: Schema = { id: 'ct_p', apiId: 'post', fields: [f('f_ti', 'title', 'string', { nullable: true })] };
+  const postNoRel: Schema = { id: 'ct_p', name: 'post', fields: [f('f_ti', 'title', 'string', { nullable: true })] };
   await assert.rejects(migrate(sql, [writer, postNoRel]), MigrationBlockedError);
   const r2 = await migrate(sql, [writer, postNoRel], { allowDestructive: true });
   assert.deepEqual(r2.applied.map((c) => c.kind), ['dropRelation']);

@@ -143,7 +143,7 @@ export type FilterNode =
  * The cross-table seam for a relation leaf, supplied by the Engine (which owns every Table + the
  * relation store). Given a relation FIELD on the current owner type and the `sub` tree to evaluate on
  * the TARGET type, it returns an OWNER-sized Bitset of owners with >=1 matching related row (EXISTS).
- * The owner apiId is NOT a parameter — the Engine binds it in the closure, keeping the Table ignorant
+ * The owner name is NOT a parameter — the Engine binds it in the closure, keeping the Table ignorant
  * of api_ids. The Table only ever invokes (never constructs) this.
  */
 export type RelationResolver = (relField: string, sub: FilterNode) => Bitset;

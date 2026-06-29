@@ -93,8 +93,8 @@ const KINDS = ['oneToOne', 'oneToMany', 'manyToOne', 'manyToMany'] as const;
 for (const kind of KINDS) {
   test(`${kind} one-way: forward CSR matches the seeded adjacency; no inverse`, async () => {
     const schemas = [
-      schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-      schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind, target: 'author' }] }),
+      schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+      schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind, target: 'author' }] }),
     ];
     await setup(schemas);
     const registry = Registry.fromSchemas(schemas);
@@ -136,8 +136,8 @@ for (const kind of KINDS) {
 for (const kind of KINDS) {
   test(`${kind} two-way: inverse is the transpose with swapped endpoints`, async () => {
     const schemas = [
-      schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-      schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind, target: 'author', inverseField: 'books' }] }),
+      schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+      schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind, target: 'author', inverseField: 'books' }] }),
     ];
     await setup(schemas);
     const registry = Registry.fromSchemas(schemas);
@@ -172,7 +172,7 @@ for (const kind of KINDS) {
 
 test('self-referential two-way: parent/children resolve against the SAME table, asymmetric', async () => {
   // parent is manyToOne (a child has one parent); children is the inverse.
-  const schemas = [schema({ apiId: 'comment', fields: [{ name: 'body', cmsType: 'text' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'comment', inverseField: 'children' }] })];
+  const schemas = [schema({ name: 'comment', fields: [{ name: 'body', cmsType: 'text' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'comment', inverseField: 'children' }] })];
   await setup(schemas);
   const registry = Registry.fromSchemas(schemas);
   const link = linkOf(registry, 'comment', 'parent');
@@ -202,8 +202,8 @@ test('self-referential two-way: parent/children resolve against the SAME table, 
 
 test('zero-edge relation is a PRESENT, valid, empty Relation (not undefined)', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
   ];
   await setup(schemas);
   await insertRow('ct_author', 'name', 'a1');
@@ -220,8 +220,8 @@ test('zero-edge relation is a PRESENT, valid, empty Relation (not undefined)', a
 
 test('mixed: one owner has edges, one has none', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setup(schemas);
   const link = linkOf(Registry.fromSchemas(schemas), 'book', 'authors');
@@ -240,8 +240,8 @@ test('mixed: one owner has edges, one has none', async () => {
 
 test('rebuild of the OWNER type leaves the relation + inverse correct against the NEW dense rows', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
   ];
   await setup(schemas);
   const registry = Registry.fromSchemas(schemas);
@@ -271,8 +271,8 @@ test('rebuild of the OWNER type leaves the relation + inverse correct against th
 
 test('rebuild of the TARGET type leaves the relation + inverse correct against the NEW dense rows', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
   ];
   await setup(schemas);
   const registry = Registry.fromSchemas(schemas);
@@ -303,8 +303,8 @@ test('rebuild of the TARGET type leaves the relation + inverse correct against t
 test('a dangling link edge (owner PK absent from the loaded snapshot) is SKIPPED, valid edges intact', async () => {
   // manyToMany so the unique constraint never blocks our two edges.
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setup(schemas);
   const link = linkOf(Registry.fromSchemas(schemas), 'book', 'authors');
@@ -338,8 +338,8 @@ test('a dangling link edge (owner PK absent from the loaded snapshot) is SKIPPED
 
 test('a dangling RELATED edge (related PK absent from the loaded snapshot) is SKIPPED, valid edges intact', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setup(schemas);
   const link = linkOf(Registry.fromSchemas(schemas), 'book', 'authors');
@@ -371,8 +371,8 @@ test('a dangling RELATED edge (related PK absent from the loaded snapshot) is SK
 
 test('a dangling edge on a TWO-WAY relation is skipped on BOTH forward AND inverse', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
   ];
   await setup(schemas);
   const link = linkOf(Registry.fromSchemas(schemas), 'book', 'authors');
@@ -411,8 +411,8 @@ test('a dangling edge on a TWO-WAY relation is skipped on BOTH forward AND inver
 
 test('loadAllRelations skips (never throws) when an endpoint Table is absent from the engine', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
   ];
   await setup(schemas);
   await insertRow('ct_author', 'name', 'a1');
@@ -445,8 +445,8 @@ test('empty catalog: buildEngine succeeds, every relation lookup is undefined, a
 
 test('dropType purges every relation referencing the dropped type (forward + inverse on the partner)', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
   ];
   await setup(schemas);
   const link = linkOf(Registry.fromSchemas(schemas), 'book', 'authors');
@@ -469,9 +469,9 @@ test('dropType purges every relation referencing the dropped type (forward + inv
 
 test('one owner with two relations: both retrievable independently', async () => {
   const schemas = [
-    schema({ apiId: 'person', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'person', fields: [{ name: 'name', cmsType: 'string' }] }),
     schema({
-      apiId: 'book',
+      name: 'book',
       fields: [{ name: 'title', cmsType: 'string' }],
       relations: [
         { field: 'author', kind: 'manyToOne', target: 'person' },
@@ -500,9 +500,9 @@ test('one owner with two relations: both retrievable independently', async () =>
 
 test('two distinct owner types both two-way-targeting one type: both inverses independently retrievable', async () => {
   const schemas = [
-    schema({ apiId: 'tag', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'books' }] }),
-    schema({ apiId: 'article', fields: [{ name: 'headline', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'articles' }] }),
+    schema({ name: 'tag', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'books' }] }),
+    schema({ name: 'article', fields: [{ name: 'headline', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'articles' }] }),
   ];
   await setup(schemas);
   const registry = Registry.fromSchemas(schemas);
@@ -528,8 +528,8 @@ test('two distinct owner types both two-way-targeting one type: both inverses in
 // --- unpopulated read path unchanged ------------------------------------------------------------
 
 test('declaring a relation does NOT change the unpopulated read bytes or schemaVersion', async () => {
-  const authorCt = schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
-  const bookCt = schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
+  const authorCt = schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
+  const bookCt = schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
   const noRel = [authorCt, bookCt];
   await setup(noRel);
   await insertRow('ct_author', 'name', 'a1');
@@ -559,8 +559,8 @@ test('declaring a relation does NOT change the unpopulated read bytes or schemaV
 
 test('loadAllRelations on an ALREADY-serving engine leaves respond/respondById bytes + schemaVersion untouched', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
   ];
   await setup(schemas);
   const registry = Registry.fromSchemas(schemas);
@@ -591,8 +591,8 @@ test('loadAllRelations on an ALREADY-serving engine leaves respond/respondById b
 
 test('PostgresStore.loadFromSchemas wires relations on the server boot path', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
   ];
   await setup(schemas);
   const link = linkOf(Registry.fromSchemas(schemas), 'book', 'authors');
@@ -612,8 +612,8 @@ test('PostgresStore.loadFromSchemas wires relations on the server boot path', as
 
 test('boot vs boot-then-rebuild parity: identical adjacency for identical data', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
   ];
   await setup(schemas);
   const registry = Registry.fromSchemas(schemas);
@@ -647,8 +647,8 @@ test('boot vs boot-then-rebuild parity: identical adjacency for identical data',
 
 test('dropContentType then dropType: catalog + engine relation store both clean', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
   ];
   await setup(schemas);
 

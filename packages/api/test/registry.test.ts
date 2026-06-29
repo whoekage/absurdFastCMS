@@ -33,7 +33,7 @@ after(async () => {
 test('build: system fields prepended in order, engine types 1:1, decimal scale/precision (incl scale 0), index plan, writable/required', () => {
   const reg = Registry.fromSchemas([
     schema({
-      apiId: 'kitchen',
+      name: 'kitchen',
       fields: [
         { name: 'name', cmsType: 'string', options: { length: 50, nullable: false } },
         { name: 'big', cmsType: 'biginteger', options: { nullable: true } },
@@ -94,13 +94,13 @@ test('build: system fields prepended in order, engine types 1:1, decimal scale/p
 
 test('build: a `time` field is rejected with RegistryError (engineType i32 but pg returns a string)', () => {
   assert.throws(
-    () => Registry.fromSchemas([schema({ apiId: 'sched', fields: [{ name: 'at', cmsType: 'time', options: { nullable: true } }] })]),
+    () => Registry.fromSchemas([schema({ name: 'sched', fields: [{ name: 'at', cmsType: 'time', options: { nullable: true } }] })]),
     RegistryError,
   );
 });
 
 test('a system-fields-only type builds a 3-field def and loads to a valid 0-row table', async () => {
-  const schemas = [schema({ apiId: 'bare', fields: [] })];
+  const schemas = [schema({ name: 'bare', fields: [] })];
   await migrate(sql, schemas, { allowDestructive: true });
   const reg = Registry.fromSchemas(schemas);
   const def = reg.get('bare')!;

@@ -95,8 +95,8 @@ const KINDS = ['oneToOne', 'oneToMany', 'manyToOne', 'manyToMany'] as const;
 for (const kind of KINDS) {
   test(`single-hop EXISTS one-way (${kind}): owners with a related name=target`, async () => {
     const schemas = [
-      schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-      schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind, target: 'author' }] }),
+      schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+      schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind, target: 'author' }] }),
     ];
     await setupCatalog(schemas);
     const link = deriveLinkTableName('book', 'authors');
@@ -139,8 +139,8 @@ for (const kind of KINDS) {
 
 test('single-hop via the INVERSE field resolves to the partner type', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('book', 'authors');
@@ -179,9 +179,9 @@ test('single-hop via the INVERSE field resolves to the partner type', async () =
 
 test('deep 2-hop EXISTS: book -> author -> category', async () => {
   const schemas = [
-    schema({ apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }] }),
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'category', kind: 'manyToOne', target: 'category' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    schema({ name: 'category', fields: [{ name: 'slug', cmsType: 'string' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'category', kind: 'manyToOne', target: 'category' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   const linkAC = deriveLinkTableName('author', 'category');
@@ -235,8 +235,8 @@ test('deep 2-hop EXISTS: book -> author -> category', async () => {
 
 test('$or mixing a scalar leaf and a relation leaf (union)', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('book', 'authors');
@@ -268,8 +268,8 @@ test('$or mixing a scalar leaf and a relation leaf (union)', async () => {
 
 test('relation sub-filter led by $or parses and matches (logical combinator inside the relation)', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('book', 'authors');
@@ -304,8 +304,8 @@ test('relation sub-filter led by $or parses and matches (logical combinator insi
 
 test('$not INSIDE a relation sub-filter = EXISTS a related row NOT matching (inside-out)', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('book', 'authors');
@@ -347,8 +347,8 @@ test('manyToOne: two owners pointing to the SAME related row both match (shared-
   // manyToOne: owner_id is UNIQUE (each book has one author) but related_id MAY repeat (one author,
   // many books) — the defining shared-related case.
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('book', 'author');
@@ -378,8 +378,8 @@ test('manyToOne: two owners pointing to the SAME related row both match (shared-
 
 test('$not over a relation leaf includes zero-edge owners; excluded without $not', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('book', 'authors');
@@ -413,8 +413,8 @@ test('$not over a relation leaf includes zero-edge owners; excluded without $not
 
 test('relation filter + sort + offset pagination on the OWNER', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('book', 'authors');
@@ -446,8 +446,8 @@ test('relation filter + sort + offset pagination on the OWNER', async () => {
 
 test('relation filter + keyset pagination: pages union to the full EXISTS set, withCount correct', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('book', 'authors');
@@ -486,8 +486,8 @@ test('relation filter + keyset pagination: pages union to the full EXISTS set, w
 
 test('a keyset cursor minted under relation filter A is rejected under filter B', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('book', 'authors');
@@ -514,8 +514,8 @@ test('a keyset cursor minted under relation filter A is rejected under filter B'
 
 test('zero-match relation filter returns an empty, well-formed envelope', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('book', 'authors');
@@ -532,8 +532,8 @@ test('zero-match relation filter returns an empty, well-formed envelope', async 
 
 test('relation with rows but ZERO edges: positive [], $not all owners', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   await insertRow('ct_author', 'name', 'a1');
@@ -551,9 +551,9 @@ test('relation with rows but ZERO edges: positive [], $not all owners', async ()
 
 test('tiny-lead probe BAILS on a relation child: probeHits stays 0, byte-identical on/off, oracle-correct', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
     schema({
-      apiId: 'book',
+      name: 'book',
       fields: [{ name: 'title', cmsType: 'string' }, { name: 'tag', cmsType: 'string' }],
       relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }],
     }),
@@ -624,9 +624,9 @@ test('tiny-lead probe BAILS on a relation child: probeHits stays 0, byte-identic
 
 test('relation-FILTERED response returns owner scalars ONLY (no nested related data)', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
     schema({
-      apiId: 'book',
+      name: 'book',
       fields: [{ name: 'title', cmsType: 'string' }, { name: 'pages', cmsType: 'integer' }],
       relations: [{ field: 'authors', kind: 'manyToMany', target: 'author', inverseField: 'books' }],
     }),
@@ -672,8 +672,8 @@ test('relation-FILTERED response returns owner scalars ONLY (no nested related d
 
 test('validation: unknown sub-field, unknown op, op-shaped/bare relation, unknown top key', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   await insertRow('ct_author', 'name', 'a1');
@@ -692,7 +692,7 @@ test('validation: unknown sub-field, unknown op, op-shaped/bare relation, unknow
 
 test('depth cap: 3-hop self-referential parses; 4-hop -> 400 (no hang)', async () => {
   const schemas = [
-    schema({ apiId: 'comment', fields: [{ name: 'body', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'comment', inverseField: 'children' }] }),
+    schema({ name: 'comment', fields: [{ name: 'body', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'comment', inverseField: 'children' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('comment', 'parent');
@@ -738,8 +738,8 @@ test('queryKey: identical relation filters collide, different ones do not', () =
 
 test('relation-filtered responses BYPASS the cache: byte-identical repeats, TARGET-only write reflected', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('book', 'authors');
@@ -785,7 +785,7 @@ test('relation-filtered responses BYPASS the cache: byte-identical repeats, TARG
 
 test('non-relational filtered+sorted+paginated query is byte-identical with vs without a relation declared', async () => {
   // Engine A: no relation declared.
-  const bookCt = schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
+  const bookCt = schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }] });
   const bookOnly = [bookCt];
   await setupCatalog(bookOnly);
   for (let i = 0; i < 6; i++) await insertRow('ct_book', 'title', `t${i}`);
@@ -795,7 +795,7 @@ test('non-relational filtered+sorted+paginated query is byte-identical with vs w
 
   // Engine B: add an author type + a relation on book. Reuse the SAME book schema (stable id) so migrate's
   // diff only ADDS author + the link table — book rows survive, same query, same data.
-  const authorCt = schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
+  const authorCt = schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] });
   const withRel = [{ ...bookCt, relations: [{ id: mintId('rel'), field: 'authors', kind: 'manyToMany' as const, target: 'author' }] }, authorCt];
   await setupCatalog(withRel);
   const engineB = await boot(withRel);
@@ -818,8 +818,8 @@ test('standalone Table.scanTree on a relation leaf throws without a resolver; re
   // The same shape resolves end-to-end through the Engine (covered by the kind tests above) — assert here
   // that a resolver supplied to scanTree is honored.
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'authors', kind: 'manyToMany', target: 'author' }] }),
   ];
   await setupCatalog(schemas);
   const link = deriveLinkTableName('book', 'authors');

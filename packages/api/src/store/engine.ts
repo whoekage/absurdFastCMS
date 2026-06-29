@@ -212,7 +212,7 @@ export class Engine {
 
   /**
    * RELATION STORE: the in-memory CSR {@link Relation} per declared OWNER-side relation, keyed by
-   * `ownerApiId + "\u0000" + field` (NUL-joined — api_ids/fields pass `validateIdentifier` and never
+   * `ownerName + "\u0000" + field` (NUL-joined — api_ids/fields pass `validateIdentifier` and never
    * contain NUL, so `(a,bc)` and `(ab,c)` can never alias). Populated by the loader (boot phase-2 +
    * per-write refresh); NOT consulted by the unpopulated read path (respond/assemble/respondById) this
    * slice — stored for the next slices (relational filtering, populate). A Relation references LIVE
@@ -222,11 +222,11 @@ export class Engine {
    */
   private readonly relations = new Map<string, Relation>();
   /**
-   * RELATION TARGET CATALOG (Relations Slice 4): a parallel map `relKey(ownerApiId, field) ->
-   * targetApiId`, populated alongside {@link relations} by the loader (which holds the Registry). A
-   * {@link Relation} exposes its owner/related Table OBJECTS but NOT the target's api_id string, so this
+   * RELATION TARGET CATALOG (Relations Slice 4): a parallel map `relKey(ownerName, field) ->
+   * targetName`, populated alongside {@link relations} by the loader (which holds the Registry). A
+   * {@link Relation} exposes its owner/related Table OBJECTS but NOT the target's name string, so this
    * map is what lets the Engine (i) tell the query parser which keys are relations + their target type
-   * (see {@link relationParseContext}) and (ii) resolve `(ownerApiId, field) -> targetApiId -> Table` at
+   * (see {@link relationParseContext}) and (ii) resolve `(ownerName, field) -> targetName -> Table` at
    * execution (see {@link relationResolver}). Kept independent of the Registry object so the Engine stays
    * standalone; purged in lockstep with {@link relations} on {@link dropType}.
    */
@@ -288,35 +288,35 @@ export class Engine {
   }
 
   /** NUL-joined relation key (collision-free: validated api_ids/fields never contain NUL). */
-  private static relKey(apiId: string, field: string): string {
-    return apiId + '\u0000' + field;
+  private static relKey(name: string, field: string): string {
+    return name + '\u0000' + field;
   }
 
   /**
-   * Install (or overwrite) the {@link Relation} for `(ownerApiId, field)`. Last-write-wins (NO
+   * Install (or overwrite) the {@link Relation} for `(ownerName, field)`. Last-write-wins (NO
    * "already defined" guard, unlike {@link registerDetached}) — both the boot phase and the per-write
    * refresh call this, and a re-derive simply replaces the prior entry that referenced the now-stale
    * Table. Does NOT bump schemaVersion or invalidate the cache: a relation load/refresh touches ONLY this
    * Map, so the unpopulated read arena and plain keyset cursors stay valid.
    */
-  setRelation(ownerApiId: string, field: string, rel: Relation, targetApiId: string, kind: RelationKind): void {
-    const key = Engine.relKey(ownerApiId, field);
+  setRelation(ownerName: string, field: string, rel: Relation, targetName: string, kind: RelationKind): void {
+    const key = Engine.relKey(ownerName, field);
     this.relations.set(key, rel);
-    this.relationTargets.set(key, targetApiId);
+    this.relationTargets.set(key, targetName);
     this.relationKinds.set(key, kind);
   }
 
   /**
-   * The cardinality KIND of `(ownerApiId, field)`, or undefined for an unknown type / unknown field /
+   * The cardinality KIND of `(ownerName, field)`, or undefined for an unknown type / unknown field /
    * a scalar field (mirrors {@link relation}). The populate assembler reads this to choose object/null
    * (to-one) vs array/[] (to-many), never inferring from the live edge count.
    */
-  relationKind(ownerApiId: string, field: string): RelationKind | undefined {
-    return this.relationKinds.get(Engine.relKey(ownerApiId, field));
+  relationKind(ownerName: string, field: string): RelationKind | undefined {
+    return this.relationKinds.get(Engine.relKey(ownerName, field));
   }
 
   /**
-   * The PARSE CONTEXT for `name`: its scalar fields PLUS its relation fields (each -> target apiId),
+   * The PARSE CONTEXT for `name`: its scalar fields PLUS its relation fields (each -> target name),
    * with a resolver to recurse into a target type's own context for a deeper hop. Built fresh from the
    * relation catalog so the read path (router -> parseQuery) never touches the Registry. `resolveTarget`
    * recurses through {@link relationParseContext} for the next type; a deeper-than-cap chain is bounded
@@ -332,7 +332,7 @@ export class Engine {
     return {
       fields,
       relations,
-      resolveTarget: (apiId) => (this.has(apiId) ? this.relationParseContext(apiId) : undefined),
+      resolveTarget: (name) => (this.has(name) ? this.relationParseContext(name) : undefined),
     };
   }
 
@@ -343,26 +343,26 @@ export class Engine {
    * {@link Relation.ownersMatching}. A declared-but-unloaded relation (`relation()===undefined`, a
    * mid-rebuild desync) returns an EMPTY owner bitset — the correct EXISTS over no edges.
    */
-  private relationResolver(ownerApiId: string): RelationResolver {
+  private relationResolver(ownerName: string): RelationResolver {
     return (relField, sub) => {
-      const rel = this.relation(ownerApiId, relField);
-      if (rel === undefined) return new Bitset(this.table(ownerApiId).rowCount);
-      const targetApiId = this.relationTargets.get(Engine.relKey(ownerApiId, relField))!;
-      const targetTable = this.table(targetApiId);
-      const relatedBs = targetTable.scanTree(sub, this.relationResolver(targetApiId));
+      const rel = this.relation(ownerName, relField);
+      if (rel === undefined) return new Bitset(this.table(ownerName).rowCount);
+      const targetName = this.relationTargets.get(Engine.relKey(ownerName, relField))!;
+      const targetTable = this.table(targetName);
+      const relatedBs = targetTable.scanTree(sub, this.relationResolver(targetName));
       return rel.ownersMatching(relatedBs);
     };
   }
 
   /**
-   * The current {@link Relation} for `(ownerApiId, field)`, or undefined for an unknown type / unknown
+   * The current {@link Relation} for `(ownerName, field)`, or undefined for an unknown type / unknown
    * field / a scalar field. NEVER throws (mirrors {@link Registry.get} / {@link has} — a probe the next
    * slices branch on, e.g. `engine.relation(t, f)?.ownersMatching(bs)`). Returns the stored LIVE
    * reference (no copy); its owner/related are the Tables currently installed (the invariant the
    * loader's refresh maintains).
    */
-  relation(ownerApiId: string, field: string): Relation | undefined {
-    return this.relations.get(Engine.relKey(ownerApiId, field));
+  relation(ownerName: string, field: string): Relation | undefined {
+    return this.relations.get(Engine.relKey(ownerName, field));
   }
 
   /** Define a module by name + field schema, creating its Table and output arena. */
@@ -559,12 +559,12 @@ export class Engine {
    * self-referential + cyclic populate stop at the frontier. `plan` is already EXECUTION-resolved
    * (validated, `*`-expanded, children resolved against the target type) for THIS row's type.
    */
-  private framePopulated(apiId: string, rowId: number, plan: PopulateNode[], depth: number, parts: Buffer[], ownerFields?: string[]): void {
+  private framePopulated(name: string, rowId: number, plan: PopulateNode[], depth: number, parts: Buffer[], ownerFields?: string[]): void {
     // The OWNER body is either the frozen arena slice (no projection) or a projected scalar subset
     // (`fields` present). `ownerFields` applies ONLY at this call's level — relation rows recurse with
     // undefined, so a projected list with populate yields projected owners + FULL related rows (fields
     // filters scalars only; relations stay populate-governed).
-    const slice = ownerFields !== undefined ? this.projectRow(apiId, rowId, ownerFields) : this.arena(apiId).rowSlice(rowId);
+    const slice = ownerFields !== undefined ? this.projectRow(name, rowId, ownerFields) : this.arena(name).rowSlice(rowId);
     // Fast path: nothing to expand (empty plan, or past the cap) — emit the (projected or frozen) body.
     if (plan.length === 0 || depth > POPULATE_DEPTH_CAP) {
       parts.push(slice);
@@ -574,16 +574,16 @@ export class Engine {
     // so a real slice is never `{}` — length > 2 — and its last byte is `}`). A violation is a
     // serializer/arena desync (a server bug) -> throw (500-class), NEVER emit corrupt JSON.
     if (slice.length <= 2 || slice[slice.length - 1] !== 0x7d /* } */) {
-      throw new Error(`populate: malformed arena slice for "${apiId}" row ${rowId}`);
+      throw new Error(`populate: malformed arena slice for "${name}" row ${rowId}`);
     }
     parts.push(slice.subarray(0, slice.length - 1)); // owner body, trailing `}` dropped (no copy).
 
     for (const node of plan) {
       // Resolve purely by (currentType, field): the getter returns the inverse Relation for an inverse
       // field too (the loader registered it under the inverse key), so no forward/inverse branch.
-      const rel = this.relation(apiId, node.field);
-      const kind = this.relationKind(apiId, node.field);
-      const targetApiId = this.relationTargets.get(Engine.relKey(apiId, node.field));
+      const rel = this.relation(name, node.field);
+      const kind = this.relationKind(name, node.field);
+      const targetName = this.relationTargets.get(Engine.relKey(name, node.field));
       // Field key escaped exactly like serializeRow emits keys (byte-identity with the JSON.stringify
       // oracle); leading `,` is always correct (system fields id/created_at/updated_at precede it).
       parts.push(Buffer.from(`,${JSON.stringify(node.field)}:`, 'utf8'));
@@ -592,7 +592,7 @@ export class Engine {
       // does not — set/purged in lockstep, so not reachable today): treat as a fail-soft to-one with
       // zero edges (emit `null`), never 500 and never mis-emit a to-one as `[]`. resolvePopulate already
       // 400s an unknown field, so a STILL-VALIDATED relation whose kind is absent degrades to null here.
-      const desync = rel === undefined || targetApiId === undefined || kind === undefined;
+      const desync = rel === undefined || targetName === undefined || kind === undefined;
       const toOne = kind === 'oneToOne' || kind === 'manyToOne' || desync;
       const related = desync ? [] : rel!.relatedRows(rowId);
       // Children expand at depth+1; at/over the cap they are dropped (the frontier => fast path).
@@ -603,13 +603,13 @@ export class Engine {
           parts.push(NULL_LIT); // present-but-null; the key is always emitted.
         } else {
           // UNIQUE(owner_id) enforces a single edge; if data violates it, take the first deterministically.
-          this.framePopulated(targetApiId!, related[0]!, childPlan, depth + 1, parts);
+          this.framePopulated(targetName!, related[0]!, childPlan, depth + 1, parts);
         }
       } else {
         parts.push(OPEN_BRACKET);
         for (let i = 0; i < related.length; i++) {
           if (i > 0) parts.push(COMMA);
-          this.framePopulated(targetApiId!, related[i]!, childPlan, depth + 1, parts);
+          this.framePopulated(targetName!, related[i]!, childPlan, depth + 1, parts);
         }
         parts.push(CLOSE_BRACKET); // empty => `[]`.
       }
@@ -618,14 +618,14 @@ export class Engine {
   }
 
   /**
-   * EXECUTION-time resolution of a parsed {@link PopulatePlan} against `apiId`'s relation catalog
+   * EXECUTION-time resolution of a parsed {@link PopulatePlan} against `name`'s relation catalog
    * (Relations Slice 5): expands the `*` wildcard to every declared relation of THIS type (depth-1),
    * de-dupes by field (merging children), and VALIDATES every field at its level — an unknown / scalar
    * populate name throws {@link QueryParseError} (the router maps it to 400). Recurses into each
    * relation's TARGET type so a nested `*` / unknown is validated + expanded against the target's
    * relations. Returns the resolved plan (empty when there is nothing to populate).
    */
-  private resolvePopulate(apiId: string, plan: PopulateNode[]): PopulateNode[] {
+  private resolvePopulate(name: string, plan: PopulateNode[]): PopulateNode[] {
     if (plan.length === 0) return [];
     // Expand the `*` sentinel to every declared relation of THIS type (deterministic order = the
     // relationTargets prefix-scan order, same as relationParseContext), depth-1 frontier (children []).
@@ -633,7 +633,7 @@ export class Engine {
     for (const node of plan) {
       if (node.field === '*') {
         // The relKey prefix for THIS type (NUL-joined, via the helper so no raw NUL in source).
-        const prefix = Engine.relKey(apiId, '');
+        const prefix = Engine.relKey(name, '');
         for (const k of this.relationTargets.keys()) {
           if (k.startsWith(prefix)) expanded.push({ field: k.slice(prefix.length), children: [] });
         }
@@ -644,15 +644,15 @@ export class Engine {
     // De-dupe by field (merge children), validate each against THIS type's relations, recurse into target.
     const byField = new Map<string, PopulateNode>();
     for (const node of expanded) {
-      const targetApiId = this.relationTargets.get(Engine.relKey(apiId, node.field));
-      if (targetApiId === undefined) {
-        throw new QueryParseError(`unknown populate field "${node.field}" on "${apiId}"`);
+      const targetName = this.relationTargets.get(Engine.relKey(name, node.field));
+      if (targetName === undefined) {
+        throw new QueryParseError(`unknown populate field "${node.field}" on "${name}"`);
       }
       const prior = byField.get(node.field);
       const mergedChildren = prior ? [...prior.children, ...node.children] : node.children;
       // Recurse: validate + resolve the sub-plan against the TARGET type (`*` there expands the
       // target's relations). A desync where the target type is absent (has()===false) -> [] (no 500).
-      const resolvedChildren = this.has(targetApiId) ? this.resolvePopulate(targetApiId, mergedChildren) : [];
+      const resolvedChildren = this.has(targetName) ? this.resolvePopulate(targetName, mergedChildren) : [];
       byField.set(node.field, { field: node.field, children: resolvedChildren });
     }
     return [...byField.values()];

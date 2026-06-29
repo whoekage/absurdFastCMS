@@ -23,7 +23,7 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, name: string, fields: FieldSchema[]): Schema => ({ id, name, fields });
 
 /** The stored applied-snapshot for a type id, as canonical-ish JSON text (to prove it is byte-unchanged). */
 async function appliedSnapshot(sql: Sql, typeId: string): Promise<string | null> {

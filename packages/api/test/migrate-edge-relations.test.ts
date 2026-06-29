@@ -17,7 +17,7 @@ import { cleanCatalog, tableExists, physicalColumns } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, name: string, fields: FieldSchema[]): Schema => ({ id, name, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -38,12 +38,12 @@ after(async () => {
 // Owner ct_post (manyToOne author -> writer, inverse "posts"). Target ct_writer.
 const writer = (extra: FieldSchema[] = []): Schema => ({
   id: 'ct_w',
-  apiId: 'writer',
+  name: 'writer',
   fields: [f('f_nm', 'name', 'string', { nullable: true }), ...extra],
 });
 const postWithRel = (extra: FieldSchema[] = []): Schema => ({
   id: 'ct_p',
-  apiId: 'post',
+  name: 'post',
   fields: [f('f_ti', 'title', 'string', { nullable: true }), ...extra],
   relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' }],
 });
@@ -121,7 +121,7 @@ test('renaming the OWNER scalar field (id-matched) keeps edges + endpoint data i
   // Rename ct_post.title -> headline (same field id f_ti) — a RENAME COLUMN, lossless, must not disturb edges.
   const renamed: Schema = {
     id: 'ct_p',
-    apiId: 'post',
+    name: 'post',
     fields: [f('f_ti', 'headline', 'string', { nullable: true })],
     relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' }],
   };
@@ -142,7 +142,7 @@ test('renaming the OWNER scalar field (id-matched) keeps edges + endpoint data i
 test('dropping a relation is BLOCKED without ack — link table + edges remain intact', async () => {
   const { wId, p1Id } = await seedAuthorGraph();
 
-  const postNoRel: Schema = { id: 'ct_p', apiId: 'post', fields: [f('f_ti', 'title', 'string', { nullable: true })] };
+  const postNoRel: Schema = { id: 'ct_p', name: 'post', fields: [f('f_ti', 'title', 'string', { nullable: true })] };
   await assert.rejects(migrate(sql, [writer(), postNoRel]), MigrationBlockedError);
 
   // Nothing changed: link table still present, edges + endpoint rows untouched, applied snapshot unchanged.
@@ -159,7 +159,7 @@ test('dropping a relation is BLOCKED without ack — link table + edges remain i
 test('dropping a relation with allowDestructive removes the link table but keeps endpoint rows', async () => {
   const { wId, p1Id, p2Id } = await seedAuthorGraph();
 
-  const postNoRel: Schema = { id: 'ct_p', apiId: 'post', fields: [f('f_ti', 'title', 'string', { nullable: true })] };
+  const postNoRel: Schema = { id: 'ct_p', name: 'post', fields: [f('f_ti', 'title', 'string', { nullable: true })] };
   const r = await migrate(sql, [writer(), postNoRel], { allowDestructive: true });
   assert.deepEqual(r.applied.map((c) => c.kind), ['dropRelation']);
 
@@ -184,7 +184,7 @@ test('ADD a NEW relation to an existing owner creates a fresh link table; existi
 
   const postTwoRels: Schema = {
     id: 'ct_p',
-    apiId: 'post',
+    name: 'post',
     fields: [f('f_ti', 'title', 'string', { nullable: true })],
     relations: [
       { id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' },
@@ -204,10 +204,10 @@ test('ADD a NEW relation to an existing owner creates a fresh link table; existi
 
 test('manyToMany link table enforces UNIQUE(owner_id, related_id); ord + edges survive an unrelated add', async () => {
   // post <-> tag manyToMany. The cardinality contract is UNIQUE(owner_id, related_id).
-  const tag: Schema = { id: 'ct_t', apiId: 'tag', fields: [f('f_lb', 'label', 'string', { nullable: true })] };
+  const tag: Schema = { id: 'ct_t', name: 'tag', fields: [f('f_lb', 'label', 'string', { nullable: true })] };
   const postM2M: Schema = {
     id: 'ct_p',
-    apiId: 'post',
+    name: 'post',
     fields: [f('f_ti', 'title', 'string', { nullable: true })],
     relations: [{ id: 'rel_tg', field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'posts' }],
   };
@@ -231,7 +231,7 @@ test('manyToMany link table enforces UNIQUE(owner_id, related_id); ord + edges s
     tag,
     {
       id: 'ct_p',
-      apiId: 'post',
+      name: 'post',
       fields: [f('f_ti', 'title', 'string', { nullable: true }), f('f_bd', 'body', 'text', { nullable: true })],
       relations: [{ id: 'rel_tg', field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'posts' }],
     },

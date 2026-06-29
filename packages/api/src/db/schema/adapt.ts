@@ -15,7 +15,7 @@ import { AppError } from '../../errors/app-error.ts';
  * from a file or from the `content_type_fields` table — that equivalence is the S1 oracle.
  *
  * SYNTHETIC IDS: `buildDef`/`buildUserField` never read a row's numeric `id`/`content_type_id` (they key
- * off `api_id` + field `name`), so the file path supplies index-based placeholders. The STABLE STRING ids
+ * off `name` + field `name`), so the file path supplies index-based placeholders. The STABLE STRING ids
  * (`ct_…`/`f_…`) live only in the file + drive the S3 diff — they are intentionally absent from the rows.
  *
  * The REVERSE direction (`rowsToSchema`, meta → file) is deferred to S5 (the Builder's meta→file export);
@@ -23,14 +23,15 @@ import { AppError } from '../../errors/app-error.ts';
  */
 
 export class SchemaAdaptError extends AppError {
-  readonly apiId: string;
-  constructor(apiId: string, reason: string) {
-    super('db.schema.adapt', { apiId, reason });
-    this.apiId = apiId;
+  readonly module: string;
+  constructor(module: string, reason: string) {
+    super('db.schema.adapt', { name: module, reason });
+    this.name = 'SchemaAdaptError';
+    this.module = module;
   }
 }
 
-// Placeholder numeric ids: buildDef/buildUserField ignore them (identity is api_id + field name). Kept 0
+// Placeholder numeric ids: buildDef/buildUserField ignore them (identity is name + field name). Kept 0
 // so a stray reader sees an obviously-synthetic value rather than a plausible real DB id.
 const SYNTHETIC_ID = 0;
 
@@ -71,8 +72,8 @@ export function schemaToRows(schema: Schema): { ct: ModuleRow; fieldRows: FieldR
   const epoch = new Date(0); // synthetic created_at/updated_at — buildDef does not read them.
   const ct: ModuleRow = {
     id: SYNTHETIC_ID,
-    api_id: schema.apiId,
-    table_name: deriveTableName(schema.apiId),
+    name: schema.name,
+    table_name: deriveTableName(schema.name),
     created_at: epoch,
     updated_at: epoch,
     draft_publish: schema.options?.draftAndPublish ?? false,
@@ -105,8 +106,8 @@ export function schemaToRows(schema: Schema): { ct: ModuleRow; fieldRows: FieldR
  * `schemaToRows`. A dangling target (relation points at an unknown type) fails LOUD.
  */
 export function relationRowsByType(schemas: Schema[]): Map<string, RelationRow[]> {
-  const byApiId = new Map<string, Schema>();
-  for (const s of schemas) byApiId.set(s.apiId.toLowerCase(), s);
+  const byName = new Map<string, Schema>();
+  for (const s of schemas) byName.set(s.name.toLowerCase(), s);
   const out = new Map<string, RelationRow[]>();
   const epoch = new Date(0);
   const push = (typeId: string, row: Omit<RelationRow, 'sort'>): void => {
@@ -118,16 +119,16 @@ export function relationRowsByType(schemas: Schema[]): Map<string, RelationRow[]
     for (const rel of owner.relations ?? []) {
       // The target must exist for EITHER direction — the link-table FK references its ct_ table (mirrors
       // the meta writer's lockContentType for both one-way and two-way).
-      const target = byApiId.get(rel.target.toLowerCase());
-      if (!target) throw new SchemaAdaptError(owner.apiId, `relation "${rel.field}" targets unknown type "${rel.target}"`);
-      const linkTable = deriveLinkTableName(owner.apiId, rel.field);
+      const target = byName.get(rel.target.toLowerCase());
+      if (!target) throw new SchemaAdaptError(owner.name, `relation "${rel.field}" targets unknown type "${rel.target}"`);
+      const linkTable = deriveLinkTableName(owner.name, rel.field);
       push(owner.id, {
-        id: 0, content_type_id: 0, field_name: rel.field, kind: rel.kind, target_api_id: rel.target,
+        id: 0, content_type_id: 0, field_name: rel.field, kind: rel.kind, target_name: rel.target,
         is_owner: true, inverse_field: rel.inverseField ?? null, link_table: linkTable, created_at: epoch, updated_at: epoch,
       });
       if (rel.inverseField !== undefined) {
         push(target.id, {
-          id: 0, content_type_id: 0, field_name: rel.inverseField, kind: inverseKind(rel.kind), target_api_id: owner.apiId,
+          id: 0, content_type_id: 0, field_name: rel.inverseField, kind: inverseKind(rel.kind), target_name: owner.name,
           is_owner: false, inverse_field: rel.field, link_table: linkTable, created_at: epoch, updated_at: epoch,
         });
       }
@@ -145,7 +146,7 @@ export function relationRowsByType(schemas: Schema[]): Map<string, RelationRow[]
 export function componentSchemaToRows(schema: ComponentSchema): { cmp: ComponentTypeRow; fieldRows: ComponentFieldRow[] } {
   const resolved = resolveComponentFields(schema.fields.map(fieldSchemaToSpec));
   const epoch = new Date(0);
-  const cmp: ComponentTypeRow = { id: SYNTHETIC_ID, api_id: schema.apiId, created_at: epoch, updated_at: epoch };
+  const cmp: ComponentTypeRow = { id: SYNTHETIC_ID, name: schema.name, created_at: epoch, updated_at: epoch };
   const fieldRows: ComponentFieldRow[] = resolved.map((rf, i) => ({
     id: i,
     component_type_id: SYNTHETIC_ID,

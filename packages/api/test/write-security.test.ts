@@ -30,7 +30,7 @@ before(async () => {
   sql = db.sql;
   schemas = [
     schema({
-      apiId: 'article',
+      name: 'article',
       fields: [
         { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
         { name: 'body', cmsType: 'text', options: { nullable: false } },
@@ -41,7 +41,7 @@ before(async () => {
         { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
       ],
     }),
-    schema({ apiId: 'doc', fields: [{ name: 'blob', cmsType: 'json', options: { nullable: false } }] }),
+    schema({ name: 'doc', fields: [{ name: 'blob', cmsType: 'json', options: { nullable: false } }] }),
   ];
   server = await startTestServer(sql, schemas, {
     seed: async () => { await sql`INSERT INTO ct_article (title, body, status, views, rating, active, "publishedAt") VALUES ('Seed', 'b1', 'published', 1, 1.0, true, '2021-01-01T00:00:00.000Z')`; },

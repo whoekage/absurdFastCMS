@@ -32,7 +32,7 @@ before(async () => {
   sql = db.sql;
   // A NON-i18n type (the seed article) to assert byte-identity is unaffected + an i18n-ENABLED `page`.
   const page = schema({
-    apiId: 'page',
+    name: 'page',
     fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }],
     i18n: true,
   });
@@ -197,7 +197,7 @@ async function getJson(path: string): Promise<any> {
 test('write-side: plain create -> variant create (same document_id, distinct id+locale) -> locale reads', async () => {
   // A dedicated i18n type: localized `title`, SHARED `summary`, plus draft_publish (compose test below).
   const doc = schema({
-    apiId: 'doc',
+    name: 'doc',
     fields: [
       { name: 'title', cmsType: 'string', options: { nullable: false }, localized: true },
       { name: 'summary', cmsType: 'string', options: { nullable: true }, localized: false },
@@ -313,7 +313,7 @@ test('write-side: i18n composes with draft & publish (locale=fr&status=published
 });
 
 test('the registry def carries i18n + per-field localized + the synthesized system fields only for an i18n type', () => {
-  // Files-first source of truth: the registry def (the legacy GET /modules/:apiId projection is gone).
+  // Files-first source of truth: the registry def (the legacy GET /modules/:name projection is gone).
   const page = baseRegistry.get('page')!;
   assert.equal(page.i18n, true, 'an i18n type carries i18n:true');
   assert.equal(page.fields.find((f) => f.name === 'title')!.localized, true, 'a field defaults to localized:true');

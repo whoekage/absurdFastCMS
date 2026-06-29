@@ -8,14 +8,14 @@ import type { Locale } from './render.ts';
  * BYTE-IDENTICAL CONTRACT: each `messages.en` template, after {@link interpolate} with the SAME params
  * the subclass passes, equals the message that class historically threw — character for character. A
  * few templates therefore expect an ALREADY-transformed param, NOT the raw constructor arg:
- *   - `{value}` / `{apiId}` / `{file}` on the ddl + schema-(de)serialize codes is `JSON.stringify(arg)`
+ *   - `{value}` / `{name}` / `{file}` on the ddl + schema-(de)serialize codes is `JSON.stringify(arg)`
  *     (the originals did `${JSON.stringify(value)}`), so the surrounding quotes are reproduced exactly.
  *   - `db.ddl.identifier_too_long` `{maxBytes}` is the `MAX_IDENTIFIER_BYTES` constant (63), not a ctor arg.
  *   - `db.migration.blocked` `{count}` = `blocked.length`, `{changeList}` = the pre-joined per-change lines
  *     (`blocked.map((c) => '  - ' + describeChange(c) + ' [' + c.risk + ']').join('\n')`); the raw `blocked`
  *     array also rides in params as a wire extra (see http.ts WIRE_EXTRAS).
  *   - the `db.registry.invalid_field` / `db.schema.adapt` templates carry LITERAL double quotes around
- *     `{apiId}`/`{field}` exactly as the originals did (raw interpolation, no JSON.stringify).
+ *     `{name}`/`{field}` exactly as the originals did (raw interpolation, no JSON.stringify).
  *   - every freeform class maps its `message: string` arg to `{ detail: message }`; its `messages` is the
  *     bare string `'{detail}'` — a SHORTHAND meaning "same template in every locale" (no point enumerating
  *     8 identical entries; the detail is server English, promotable to real per-locale codes later).
@@ -78,14 +78,14 @@ export const CATALOG = {
   'db.ddl.reserved_table_name': {
     status: 500,
     messages: {
-      en: 'module api_id / table name {value} is reserved',
-      ru: 'api_id модуля / имя таблицы {value} зарезервировано',
-      ky: 'модулдун api_id / таблица аты {value} брондолгон',
-      kk: 'модульдің api_id / кесте аты {value} резервтелген',
-      uz: 'modul api_id / jadval nomi {value} band qilingan',
-      es: 'el api_id del módulo / nombre de tabla {value} está reservado',
-      ja: 'モジュールの api_id / テーブル名 {value} は予約されています',
-      ko: '모듈 api_id / 테이블 이름 {value}은(는) 예약되어 있습니다',
+      en: 'module name / table name {value} is reserved',
+      ru: 'name модуля / имя таблицы {value} зарезервировано',
+      ky: 'модулдун name / таблица аты {value} брондолгон',
+      kk: 'модульдің name / кесте аты {value} резервтелген',
+      uz: 'modul name / jadval nomi {value} band qilingan',
+      es: 'el name del módulo / nombre de tabla {value} está reservado',
+      ja: 'モジュールの name / テーブル名 {value} は予約されています',
+      ko: '모듈 name / 테이블 이름 {value}은(는) 예약되어 있습니다',
     },
   },
   'db.ddl.duplicate_field': {
@@ -104,27 +104,27 @@ export const CATALOG = {
   'db.ddl.module_exists': {
     status: 500,
     messages: {
-      en: 'module {apiId} already exists',
-      ru: 'модуль {apiId} уже существует',
-      ky: 'модуль {apiId} мурунтан эле бар',
-      kk: 'модуль {apiId} бұрыннан бар',
-      uz: 'modul {apiId} allaqachon mavjud',
-      es: 'el módulo {apiId} ya existe',
-      ja: 'モジュール {apiId} は既に存在します',
-      ko: '모듈 {apiId}이(가) 이미 존재합니다',
+      en: 'module {name} already exists',
+      ru: 'модуль {name} уже существует',
+      ky: 'модуль {name} мурунтан эле бар',
+      kk: 'модуль {name} бұрыннан бар',
+      uz: 'modul {name} allaqachon mavjud',
+      es: 'el módulo {name} ya existe',
+      ja: 'モジュール {name} は既に存在します',
+      ko: '모듈 {name}이(가) 이미 존재합니다',
     },
   },
   'db.ddl.module_not_found': {
     status: 500,
     messages: {
-      en: 'module {apiId} not found',
-      ru: 'модуль {apiId} не найден',
-      ky: 'модуль {apiId} табылган жок',
-      kk: 'модуль {apiId} табылмады',
-      uz: 'modul {apiId} topilmadi',
-      es: 'módulo {apiId} no encontrado',
-      ja: 'モジュール {apiId} が見つかりません',
-      ko: '모듈 {apiId}을(를) 찾을 수 없습니다',
+      en: 'module {name} not found',
+      ru: 'модуль {name} не найден',
+      ky: 'модуль {name} табылган жок',
+      kk: 'модуль {name} табылмады',
+      uz: 'modul {name} topilmadi',
+      es: 'módulo {name} no encontrado',
+      ja: 'モジュール {name} が見つかりません',
+      ko: '모듈 {name}을(를) 찾을 수 없습니다',
     },
   },
   'db.ddl.field_exists': {
@@ -191,14 +191,14 @@ export const CATALOG = {
   'db.registry.invalid_field': {
     status: 500,
     messages: {
-      en: 'module "{apiId}" field "{field}": {reason}',
-      ru: 'модуль "{apiId}" поле "{field}": {reason}',
-      ky: 'модуль "{apiId}" талаа "{field}": {reason}',
-      kk: 'модуль "{apiId}" өріс "{field}": {reason}',
-      uz: 'modul "{apiId}" maydon "{field}": {reason}',
-      es: 'módulo "{apiId}" campo "{field}": {reason}',
-      ja: 'モジュール "{apiId}" フィールド "{field}": {reason}',
-      ko: '모듈 "{apiId}" 필드 "{field}": {reason}',
+      en: 'module "{name}" field "{field}": {reason}',
+      ru: 'модуль "{name}" поле "{field}": {reason}',
+      ky: 'модуль "{name}" талаа "{field}": {reason}',
+      kk: 'модуль "{name}" өріс "{field}": {reason}',
+      uz: 'modul "{name}" maydon "{field}": {reason}',
+      es: 'módulo "{name}" campo "{field}": {reason}',
+      ja: 'モジュール "{name}" フィールド "{field}": {reason}',
+      ko: '모듈 "{name}" 필드 "{field}": {reason}',
     },
   },
 
@@ -219,14 +219,14 @@ export const CATALOG = {
   'db.schema.adapt': {
     status: 500,
     messages: {
-      en: 'module "{apiId}": {reason}',
-      ru: 'модуль "{apiId}": {reason}',
-      ky: 'модуль "{apiId}": {reason}',
-      kk: 'модуль "{apiId}": {reason}',
-      uz: 'modul "{apiId}": {reason}',
-      es: 'módulo "{apiId}": {reason}',
-      ja: 'モジュール "{apiId}": {reason}',
-      ko: '모듈 "{apiId}": {reason}',
+      en: 'module "{name}": {reason}',
+      ru: 'модуль "{name}": {reason}',
+      ky: 'модуль "{name}": {reason}',
+      kk: 'модуль "{name}": {reason}',
+      uz: 'modul "{name}": {reason}',
+      es: 'módulo "{name}": {reason}',
+      ja: 'モジュール "{name}": {reason}',
+      ko: '모듈 "{name}": {reason}',
     },
   },
   'db.schema.codegen': {

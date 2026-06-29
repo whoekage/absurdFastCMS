@@ -3,7 +3,7 @@ import { AppError } from '../../errors/app-error.ts';
 
 /**
  * The content-lifecycle hook DISPATCH (pivot phase 4). Hooks are dev-authored, colocated in
- * `schema/<apiId>.ts` via `defineSchema({ hooks })`, and fire at the content-service seam (`handleWrite`) —
+ * `schema/<name>.ts` via `defineSchema({ hooks })`, and fire at the content-service seam (`handleWrite`) —
  * per LOGICAL ACTION, not per DB row (the Strapi-v5 lesson: row-level hooks multi-fire on D&P/i18n and lose
  * the semantic event). The two classes split on the COMMIT boundary:
  *
@@ -28,18 +28,18 @@ export type HookOp = 'create' | 'update' | 'delete';
 const BEFORE = { create: 'beforeCreate', update: 'beforeUpdate', delete: 'beforeDelete' } as const;
 const AFTER = { create: 'afterCreate', update: 'afterUpdate', delete: 'afterDelete' } as const;
 
-/** Resolves a module's hooks by apiId and runs them with the correct transaction/error semantics. */
+/** Resolves a module's hooks by name and runs them with the correct transaction/error semantics. */
 export class HookRegistry {
   // NB: a field + assignment, not a constructor parameter-property — the latter is not erasable syntax
   // (it emits runtime code) and Node's type-stripping rejects it.
-  private readonly byApiId: ReadonlyMap<string, Hooks>;
-  constructor(byApiId: ReadonlyMap<string, Hooks> = new Map()) {
-    this.byApiId = byApiId;
+  private readonly byName: ReadonlyMap<string, Hooks>;
+  constructor(byName: ReadonlyMap<string, Hooks> = new Map()) {
+    this.byName = byName;
   }
 
   /** Does this type have any hook for `op`? (lets `handleWrite` skip the dispatch entirely when none). */
-  has(apiId: string, op: HookOp): boolean {
-    const h = this.byApiId.get(apiId);
+  has(name: string, op: HookOp): boolean {
+    const h = this.byName.get(name);
     return h !== undefined && (h[BEFORE[op]] !== undefined || h[AFTER[op]] !== undefined);
   }
 
@@ -48,10 +48,10 @@ export class HookRegistry {
    * the hook's return value, or the input unchanged when the hook returns nothing / is absent. A throw
    * propagates to abort the transaction.
    */
-  async runBefore(apiId: string, op: HookOp, data: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const fn = this.byApiId.get(apiId)?.[BEFORE[op]];
+  async runBefore(name: string, op: HookOp, data: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const fn = this.byName.get(name)?.[BEFORE[op]];
     if (fn === undefined) return data;
-    const ctx: HookContext = { apiId, op };
+    const ctx: HookContext = { name, op };
     const result = await fn(data, ctx);
     return (result ?? data) as Record<string, unknown>;
   }
@@ -60,14 +60,14 @@ export class HookRegistry {
    * Run the `after*` hook (REACT) AFTER commit + rebuild. ISOLATED: a throw is logged and swallowed — the
    * write is already durable, so an after-hook failure must never unwind it (the TypeORM #2816 lesson).
    */
-  async runAfter(apiId: string, op: HookOp, entry: Record<string, unknown>): Promise<void> {
-    const fn = this.byApiId.get(apiId)?.[AFTER[op]];
+  async runAfter(name: string, op: HookOp, entry: Record<string, unknown>): Promise<void> {
+    const fn = this.byName.get(name)?.[AFTER[op]];
     if (fn === undefined) return;
-    const ctx: HookContext = { apiId, op };
+    const ctx: HookContext = { name, op };
     try {
       await fn(entry, ctx);
     } catch (e) {
-      console.error(`conti: ${AFTER[op]} hook for "${apiId}" failed (post-commit, ignored): ${String(e)}`);
+      console.error(`conti: ${AFTER[op]} hook for "${name}" failed (post-commit, ignored): ${String(e)}`);
     }
   }
 }

@@ -170,9 +170,9 @@ function collectComponentMediaIds(
 }
 
 /** Gather inline media ids from ONE component instance object (recursing nested component fields). */
-function collectInstanceMediaIds(registry: Registry, apiId: string, obj: unknown, into: number[]): void {
+function collectInstanceMediaIds(registry: Registry, name: string, obj: unknown, into: number[]): void {
   if (typeof obj !== 'object' || obj === null) return;
-  const cdef: ComponentDef | undefined = registry.getComponent(apiId);
+  const cdef: ComponentDef | undefined = registry.getComponent(name);
   if (cdef === undefined) return;
   const o = obj as Record<string, unknown>;
   for (const [fname, { multiple }] of cdef.mediaFields) {
@@ -194,7 +194,7 @@ function collectInstanceMediaIds(registry: Registry, apiId: string, obj: unknown
  * exists in its TARGET module, INSIDE the caller's tx (so the existence check + the row insert/update
  * commit atomically). Sibling of {@link assertMediaRefsExist}: the body parser already validated shape +
  * cardinality + positive-int4; here we gather the referenced ids from the COERCED component trees, BINNED
- * BY TARGET api_id (different relation fields point at different modules), then per-target reject (a
+ * BY TARGET name (different relation fields point at different modules), then per-target reject (a
  * 400 via EntryWriteError) any id that names no row. A relation ref can ONLY live inside a component, so the
  * gate is `def.componentFields.size === 0` (a type with no component field is a byte-identical no-op).
  *
@@ -227,7 +227,7 @@ async function assertRelationRefsExist(tx: Sql | TransactionSql, def: ModuleDef,
 
 /**
  * be-05b — recursively gather every INLINE relation-ref id inside a coerced component / component-repeatable
- * / dynamiczone value, binned BY TARGET module api_id, guided by the registry's {@link ComponentDef}
+ * / dynamiczone value, binned BY TARGET module name, guided by the registry's {@link ComponentDef}
  * schemas. Mirrors {@link collectComponentMediaIds} (the same component-tree walk), but reads
  * `cdef.relationRefFields` instead of `cdef.mediaFields` and keys ids by their declared target.
  */
@@ -256,9 +256,9 @@ function collectComponentRelationRefs(
 }
 
 /** Gather inline relation-ref ids (by target) from ONE component instance (recursing nested components). */
-function collectInstanceRelationRefs(registry: Registry, apiId: string, obj: unknown, into: Map<string, number[]>): void {
+function collectInstanceRelationRefs(registry: Registry, name: string, obj: unknown, into: Map<string, number[]>): void {
   if (typeof obj !== 'object' || obj === null) return;
-  const cdef: ComponentDef | undefined = registry.getComponent(apiId);
+  const cdef: ComponentDef | undefined = registry.getComponent(name);
   if (cdef === undefined) return;
   const o = obj as Record<string, unknown>;
   for (const [fname, { target, multiple }] of cdef.relationRefFields) {
@@ -288,7 +288,7 @@ function writeOk(status: number, def: ModuleDef, row: Record<string, unknown>): 
 
 export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise<CoreResponse> {
   const { method, type, idRaw, body, action, variantLocale } = req;
-  // Registry membership === engine membership (same canonical api_id). Gate BEFORE any SQL.
+  // Registry membership === engine membership (same canonical name). Gate BEFORE any SQL.
   const def = ctx.registry().get(type);
   if (def === undefined || !ctx.engine().has(type)) return errorResponse(404, `unknown module "${type}"`);
 

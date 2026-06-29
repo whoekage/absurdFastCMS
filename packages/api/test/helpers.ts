@@ -189,13 +189,13 @@ export async function startTestServerFromFilesWithAuth(
 }
 
 /**
- * Convert the old `createContentType` spec shape (`{ apiId, fields:[{name, cmsType, options}], relations,
+ * Convert the old `createContentType` spec shape (`{ name, fields:[{name, cmsType, options}], relations,
  * draftPublish, i18n }`) into a files-first {@link Schema} (stable ids minted, `cmsType`→`type`).
  * Lets a meta-path test migrate by wrapping its specs in `schema(...)` + `startTestServerFromSchemas` instead of
  * imperative `createContentType` + `addRelation` calls.
  */
 export interface SchemaSpec {
-  apiId: string;
+  name: string;
   fields: { name: string; cmsType: FieldType; options?: FieldOptions; localized?: boolean }[];
   relations?: { field: string; kind: RelationKind; target: string; inverseField?: string }[];
   draftPublish?: boolean;
@@ -204,7 +204,7 @@ export interface SchemaSpec {
 export function schema(spec: SchemaSpec): Schema {
   const out: Schema = {
     id: mintId('ct'),
-    apiId: spec.apiId,
+    name: spec.name,
     fields: spec.fields.map((f) => ({
       id: mintId('f'),
       name: f.name,
@@ -221,7 +221,7 @@ export function schema(spec: SchemaSpec): Schema {
 /** The `article` demo type as a files-first IR (mirrors the old `ARTICLE_SEED_FIELDS`) — a shared test fixture. */
 export const ARTICLE_SCHEMA: Schema = {
   id: 'ct_article',
-  apiId: 'article',
+  name: 'article',
   fields: [
     { id: 'f_title', name: 'title', type: 'string', options: { length: 512, nullable: true } },
     { id: 'f_body', name: 'body', type: 'text', options: { nullable: false } },

@@ -62,7 +62,7 @@ const dataOf = async (p: string): Promise<{ data: Record<string, unknown>[] }> =
 
 test('1 — ADD a type goes LIVE: GET 404 → applyEdit → GET 200 + writable', async () => {
   assert.equal((await get('/gadget')).status, 404);
-  const r = await srv.applyEdit({ apiId: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
+  const r = await srv.applyEdit({ name: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
   assert.ok(r.ok && r.applied!.some((c) => c.kind === 'addType'));
   assert.equal((await get('/gadget')).status, 200); // live, no restart
   assert.equal((await post('/gadget', { title: 'x' })).status, 201);
@@ -70,12 +70,12 @@ test('1 — ADD a type goes LIVE: GET 404 → applyEdit → GET 200 + writable',
 });
 
 test('2 — ADD a field goes LIVE; a pre-existing row survives the re-stream', async () => {
-  const created = await srv.applyEdit({ apiId: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
+  const created = await srv.applyEdit({ name: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
   await post('/gadget', { title: 'keep' });
   const id = (await dataOf('/gadget')).data[0]!.id;
 
   const edit = await srv.applyEdit({
-    apiId: 'gadget', id: created.schema!.id,
+    name: 'gadget', id: created.schema!.id,
     fields: [
       { id: created.schema!.fields[0]!.id, name: 'title', type: 'string', options: { nullable: true } },
       { name: 'subtitle', type: 'string', options: { nullable: true } },
@@ -88,11 +88,11 @@ test('2 — ADD a field goes LIVE; a pre-existing row survives the re-stream', a
 });
 
 test('3 — RENAME a field goes LIVE and LOSSLESS: data carries to the new wire key', async () => {
-  const created = await srv.applyEdit({ apiId: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
+  const created = await srv.applyEdit({ name: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
   await post('/gadget', { title: 'keep' });
 
   const edit = await srv.applyEdit({
-    apiId: 'gadget', id: created.schema!.id,
+    name: 'gadget', id: created.schema!.id,
     fields: [{ id: created.schema!.fields[0]!.id, name: 'headline', type: 'string', options: { nullable: true } }], // same id, new name
   });
   assert.ok(edit.ok && edit.applied!.some((c) => c.kind === 'renameField'));
@@ -102,9 +102,9 @@ test('3 — RENAME a field goes LIVE and LOSSLESS: data carries to the new wire 
 });
 
 test('4 — a RELATION is registered LIVE: populate (owner + inverse) resolves, not a 400', async () => {
-  await srv.applyEdit({ apiId: 'writer', fields: [{ name: 'name', type: 'string', options: { nullable: true } }] });
+  await srv.applyEdit({ name: 'writer', fields: [{ name: 'name', type: 'string', options: { nullable: true } }] });
   const r = await srv.applyEdit({
-    apiId: 'post',
+    name: 'post',
     fields: [{ name: 'title', type: 'string', options: { nullable: true } }],
     relations: [{ field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' }],
   });
@@ -114,12 +114,12 @@ test('4 — a RELATION is registered LIVE: populate (owner + inverse) resolves, 
 });
 
 test('6 — a FAILED edit (migrate throws) keeps last-good serving', async () => {
-  const created = await srv.applyEdit({ apiId: 'gadget', fields: [{ name: 'title', type: 'string', options: { length: 1024, nullable: true } }] });
+  const created = await srv.applyEdit({ name: 'gadget', fields: [{ name: 'title', type: 'string', options: { length: 1024, nullable: true } }] });
   await post('/gadget', { title: 'y'.repeat(1024) }); // over-long row
 
   // Shrink to 256 WITH allowDestructive: passes lint, but migrate's pre-flight throws MigrationDataLossError.
   await assert.rejects(() => srv.applyEdit({
-    apiId: 'gadget', id: created.schema!.id,
+    name: 'gadget', id: created.schema!.id,
     fields: [{ id: created.schema!.fields[0]!.id, name: 'title', type: 'string', options: { length: 256, nullable: true } }],
   }, { allowDestructive: true }));
   // Last-good untouched: still serves + still accepts a 1024-char value (column not shrunk).
@@ -128,9 +128,9 @@ test('6 — a FAILED edit (migrate throws) keeps last-good serving', async () =>
 });
 
 test('7 — a NO-OP edit (identical IR) is ok with applied:[] and keeps serving', async () => {
-  const created = await srv.applyEdit({ apiId: 'gadget', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
+  const created = await srv.applyEdit({ name: 'gadget', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   const again = await srv.applyEdit({
-    apiId: 'gadget', id: created.schema!.id,
+    name: 'gadget', id: created.schema!.id,
     fields: [{ id: created.schema!.fields[0]!.id, name: 'a', type: 'string', options: { nullable: true } }],
   });
   assert.ok(again.ok && again.applied!.length === 0); // no-op → no swap
@@ -138,7 +138,7 @@ test('7 — a NO-OP edit (identical IR) is ok with applied:[] and keeps serving'
 });
 
 test('8 — hooks are SWAP-AWARE: a hooks.ts added then picked up on the next edit runs on writes', async () => {
-  const created = await srv.applyEdit({ apiId: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
+  const created = await srv.applyEdit({ name: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
   // Drop a hooks.ts beside the (Builder-written) schema.ts: beforeCreate uppercases title.
   await mkdir(path.join(genDir, 'gadget'), { recursive: true });
   await writeFile(
@@ -147,7 +147,7 @@ test('8 — hooks are SWAP-AWARE: a hooks.ts added then picked up on the next ed
   );
   // A real change triggers the swap, which re-loads hooks (the new hooks.ts path is imported fresh).
   await srv.applyEdit({
-    apiId: 'gadget', id: created.schema!.id,
+    name: 'gadget', id: created.schema!.id,
     fields: [
       { id: created.schema!.fields[0]!.id, name: 'title', type: 'string', options: { nullable: true } },
       { name: 'note', type: 'string', options: { nullable: true } },
@@ -164,7 +164,7 @@ test('11 — the legacy /modules mutation route is GONE (404); the files-first B
   // and /modules is no longer registered, so the request falls straight through to the 404 fallback.
   const r = await fetch(`${srv.base}/modules`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: '{}' });
   assert.equal(r.status, 404);
-  const ok = await srv.applyEdit({ apiId: 'widget', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
+  const ok = await srv.applyEdit({ name: 'widget', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   assert.ok(ok.ok);
   assert.equal((await get('/widget')).status, 200);
 });

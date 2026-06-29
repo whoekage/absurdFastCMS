@@ -201,10 +201,10 @@ export const MAX_POPULATE_NESTING = 8;
 export interface RelationParseContext {
   /** The current type's scalar fields (the whitelist the leaf parser validates against). */
   fields: FieldDef[];
-  /** Relation field name -> target apiId, for THIS type. Empty for a scalar-only caller. */
+  /** Relation field name -> target name, for THIS type. Empty for a scalar-only caller. */
   relations: Map<string, string>;
   /** Resolve a target type's context for a deeper hop, or undefined if the type is absent. */
-  resolveTarget(apiId: string): RelationParseContext | undefined;
+  resolveTarget(name: string): RelationParseContext | undefined;
 }
 
 /** Build the scalar {@link QuerySchema} (lookup map) from a context's field list. */
@@ -482,8 +482,8 @@ function parseFieldFilters(
   }
 
   // (2) RELATION — recurse the sub-filter against the TARGET type's schema.
-  const targetApiId = ctx.relations.get(field);
-  if (targetApiId !== undefined) {
+  const targetName = ctx.relations.get(field);
+  if (targetName !== undefined) {
     if (depth + 1 > MAX_RELATION_HOPS) {
       throw new QueryParseError(`relation filter too deep (max ${MAX_RELATION_HOPS} hops) at "${path}${field}"`);
     }
@@ -494,7 +494,7 @@ function parseFieldFilters(
         `relation "${path}${field}" must be filtered by a nested field, e.g. filters[${field}][<field>][$eq]`,
       );
     }
-    const targetCtx = ctx.resolveTarget(targetApiId);
+    const targetCtx = ctx.resolveTarget(targetName);
     if (targetCtx === undefined) {
       // Declared but the target type is absent (a transient engine/registry desync) — clean 400, not a 500.
       throw new QueryParseError(`relation "${path}${field}" target type unavailable`);

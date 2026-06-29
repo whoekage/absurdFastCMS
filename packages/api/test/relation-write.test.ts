@@ -86,8 +86,8 @@ async function getJson(type: string, query: string): Promise<{ status: number; j
 
 test('manyToMany: set (bare + {set}), connect, disconnect; link rows + populated GET both directions', async () => {
   const schemas = [
-    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'books' }] }),
+    schema({ name: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag', inverseField: 'books' }] }),
   ];
   let t1!: number, t2!: number, t3!: number, b1!: number;
   await boot(schemas, async () => {
@@ -124,8 +124,8 @@ test('manyToMany: set (bare + {set}), connect, disconnect; link rows + populated
 
 test('manyToOne: bare set, connect, disconnect; reassign on second connect (owner moves)', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
   ];
   let a1!: number, a2!: number, b1!: number;
   await boot(schemas, async () => {
@@ -151,8 +151,8 @@ test('manyToOne: bare set, connect, disconnect; reassign on second connect (owne
 
 test('oneToMany: connect a book to an author, then connect that book to another author REASSIGNS it', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'books', kind: 'oneToMany', target: 'book', inverseField: 'author' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'books', kind: 'oneToMany', target: 'book', inverseField: 'author' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }] }),
   ];
   let a1!: number, a2!: number, b1!: number;
   await boot(schemas, async () => {
@@ -177,8 +177,8 @@ test('oneToMany: connect a book to an author, then connect that book to another 
 
 test('oneToOne: set then reassign on both sides (displaced partner unlinked)', async () => {
   const schemas = [
-    schema({ apiId: 'person', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'passport', kind: 'oneToOne', target: 'passport', inverseField: 'holder' }] }),
-    schema({ apiId: 'passport', fields: [{ name: 'code', cmsType: 'string' }] }),
+    schema({ name: 'person', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'passport', kind: 'oneToOne', target: 'passport', inverseField: 'holder' }] }),
+    schema({ name: 'passport', fields: [{ name: 'code', cmsType: 'string' }] }),
   ];
   let p1!: number, p2!: number, pp1!: number;
   await boot(schemas, async () => {
@@ -202,8 +202,8 @@ test('oneToOne: set then reassign on both sides (displaced partner unlinked)', a
 
 test('manyToMany: connect + disconnect together (disconnect-then-connect, connect wins overlap)', async () => {
   const schemas = [
-    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
+    schema({ name: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
   ];
   let t1!: number, t2!: number, t3!: number, b1!: number;
   await boot(schemas, async () => {
@@ -230,8 +230,8 @@ test('manyToMany: connect + disconnect together (disconnect-then-connect, connec
 
 test('oneToMany owning-side {set} reassigns: prior owner emptied, related moves under the new owner', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'books', kind: 'oneToMany', target: 'book', inverseField: 'author' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'books', kind: 'oneToMany', target: 'book', inverseField: 'author' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }] }),
   ];
   let a1!: number, a2!: number, b1!: number, b2!: number, b3!: number;
   await boot(schemas, async () => {
@@ -260,8 +260,8 @@ test('oneToMany owning-side {set} reassigns: prior owner emptied, related moves 
 
 test('oneToOne dual-conflict reassign: both prior owner-edge and prior related-edge cleared', async () => {
   const schemas = [
-    schema({ apiId: 'person', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'passport', kind: 'oneToOne', target: 'passport', inverseField: 'holder' }] }),
-    schema({ apiId: 'passport', fields: [{ name: 'code', cmsType: 'string' }] }),
+    schema({ name: 'person', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'passport', kind: 'oneToOne', target: 'passport', inverseField: 'holder' }] }),
+    schema({ name: 'passport', fields: [{ name: 'code', cmsType: 'string' }] }),
   ];
   let p1!: number, p2!: number, pp1!: number, pp2!: number;
   await boot(schemas, async () => {
@@ -285,7 +285,7 @@ test('oneToOne dual-conflict reassign: both prior owner-edge and prior related-e
 
 test('oneToOne self-referential: self-link is idempotent; reassign displaces the self-edge', async () => {
   const schemas = [
-    schema({ apiId: 'node', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'spouse', kind: 'oneToOne', target: 'node', inverseField: 'spouseOf' }] }),
+    schema({ name: 'node', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'spouse', kind: 'oneToOne', target: 'node', inverseField: 'spouseOf' }] }),
   ];
   let c1!: number, c2!: number;
   await boot(schemas, async () => {
@@ -309,10 +309,10 @@ test('oneToOne self-referential: self-link is idempotent; reassign displaces the
 
 test('400s: set+connect mutually exclusive; to-one >1; unknown relation field; bad ids; null/{}/{set:null}', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
     schema({
-      apiId: 'book',
+      name: 'book',
       fields: [{ name: 'title', cmsType: 'string' }],
       relations: [
         { field: 'author', kind: 'manyToOne', target: 'author' },
@@ -355,7 +355,7 @@ test('400s: set+connect mutually exclusive; to-one >1; unknown relation field; b
 });
 
 test('unknown relation field error message is "unknown field" (same as a scalar)', async () => {
-  const schemas = [schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }] })];
+  const schemas = [schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }] })];
   await boot(schemas, async () => {
     await insertRow('ct_book', 'title', 'B');
   });
@@ -368,8 +368,8 @@ test('unknown relation field error message is "unknown field" (same as a scalar)
 
 test('to-one disconnect of >1 ids is allowed (200); extra ids are no-ops', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }] }),
   ];
   let a1!: number, a2!: number, b1!: number;
   await boot(schemas, async () => {
@@ -387,8 +387,8 @@ test('to-one disconnect of >1 ids is allowed (200); extra ids are no-ops', async
 
 test('PUT to a non-existent owner with relation ops -> 404, NO link row written', async () => {
   const schemas = [
-    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
+    schema({ name: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
   ];
   let t1!: number;
   await boot(schemas, async () => {
@@ -405,8 +405,8 @@ test('PUT to a non-existent owner with relation ops -> 404, NO link row written'
 
 test('FK: a non-existent related id -> 400, NO scalar change, NO link row', async () => {
   const schemas = [
-    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
+    schema({ name: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
   ];
   let b1!: number;
   await boot(schemas, async () => {
@@ -436,8 +436,8 @@ test('FK: a non-existent related id -> 400, NO scalar change, NO link row', asyn
 
 test('connect is idempotent (dup across requests + within a request -> one edge); disconnect non-edge no-op', async () => {
   const schemas = [
-    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
+    schema({ name: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
   ];
   let t1!: number, t2!: number, b1!: number;
   await boot(schemas, async () => {
@@ -459,10 +459,10 @@ test('connect is idempotent (dup across requests + within a request -> one edge)
 
 test('empty set clears; populated GET shows [] (to-many) and null (to-one)', async () => {
   const schemas = [
-    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
     schema({
-      apiId: 'book',
+      name: 'book',
       fields: [{ name: 'title', cmsType: 'string' }],
       relations: [
         { field: 'tags', kind: 'manyToMany', target: 'tag' },
@@ -496,8 +496,8 @@ test('empty set clears; populated GET shows [] (to-many) and null (to-one)', asy
 
 test('create-with-relations: owner id from RETURNING; response is scalars only; links use the new id', async () => {
   const schemas = [
-    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
+    schema({ name: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
   ];
   let t1!: number, t2!: number;
   await boot(schemas, async () => {
@@ -522,8 +522,8 @@ test('create-with-relations: owner id from RETURNING; response is scalars only; 
 
 test('PUT partial: an absent relation field is unchanged', async () => {
   const schemas = [
-    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
+    schema({ name: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
   ];
   let t1!: number, b1!: number;
   await boot(schemas, async () => {
@@ -549,8 +549,8 @@ test('PUT partial: an absent relation field is unchanged', async () => {
 test('writing via the INVERSE field orients link columns correctly; visible both directions', async () => {
   // OWNING side book.author (manyToOne); inverse author.books (oneToMany).
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
   ];
   let a1!: number, b1!: number, b2!: number;
   await boot(schemas, async () => {
@@ -575,8 +575,8 @@ test('writing via the INVERSE field orients link columns correctly; visible both
 test('inverse-field {set} + cross-owner reassign: book moves to the new author, columns oriented to owning ct_', async () => {
   // OWNING side book.author (manyToOne); inverse author.books (oneToMany).
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
   ];
   let a1!: number, a2!: number, b1!: number, b2!: number;
   await boot(schemas, async () => {
@@ -600,8 +600,8 @@ test('inverse-field {set} + cross-owner reassign: book moves to the new author, 
 
 test('inverse-field connect reassign maintains cardinality (manyToOne via the inverse oneToMany side)', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
   ];
   let a1!: number, a2!: number, b1!: number;
   await boot(schemas, async () => {
@@ -623,8 +623,8 @@ test('inverse-field connect reassign maintains cardinality (manyToOne via the in
 test('oneToOne write via the INVERSE field orients owner_id/related_id to the owning ct_', async () => {
   // OWNING side person.passport (oneToOne); inverse passport.holder.
   const schemas = [
-    schema({ apiId: 'person', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'passport', kind: 'oneToOne', target: 'passport', inverseField: 'holder' }] }),
-    schema({ apiId: 'passport', fields: [{ name: 'code', cmsType: 'string' }] }),
+    schema({ name: 'person', fields: [{ name: 'name', cmsType: 'string' }], relations: [{ field: 'passport', kind: 'oneToOne', target: 'passport', inverseField: 'holder' }] }),
+    schema({ name: 'passport', fields: [{ name: 'code', cmsType: 'string' }] }),
   ];
   let p1!: number, pp1!: number;
   await boot(schemas, async () => {
@@ -647,8 +647,8 @@ test('oneToOne write via the INVERSE field orients owner_id/related_id to the ow
 
 test('scalar + relation in one body apply atomically', async () => {
   const schemas = [
-    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
+    schema({ name: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
   ];
   let t1!: number, b1!: number;
   await boot(schemas, async () => {
@@ -667,8 +667,8 @@ test('scalar + relation in one body apply atomically', async () => {
 
 test('DELETE owner cascades its link rows (both columns); populated GET of the other type omits it', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'author', inverseField: 'books' }] }),
   ];
   let a1!: number, b1!: number;
   await boot(schemas, async () => {
@@ -693,7 +693,7 @@ test('DELETE owner cascades its link rows (both columns); populated GET of the o
 
 test('self-referential manyToOne parent (+ inverse children): set + visible both directions', async () => {
   const schemas = [
-    schema({ apiId: 'category', fields: [{ name: 'slug', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'category', inverseField: 'children' }] }),
+    schema({ name: 'category', fields: [{ name: 'slug', cmsType: 'string' }], relations: [{ field: 'parent', kind: 'manyToOne', target: 'category', inverseField: 'children' }] }),
   ];
   let c1!: number, c2!: number;
   await boot(schemas, async () => {
@@ -716,10 +716,10 @@ test('self-referential manyToOne parent (+ inverse children): set + visible both
 
 test('pure-scalar write is byte-identical: relation-less type, AND a type-with-relations omitting them', async () => {
   const schemas = [
-    schema({ apiId: 'note', fields: [{ name: 'text', cmsType: 'string', options: { nullable: false } }] }),
+    schema({ name: 'note', fields: [{ name: 'text', cmsType: 'string', options: { nullable: false } }] }),
     // a type WITH a relation, but the body omits the relation key entirely.
-    schema({ apiId: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
-    schema({ apiId: 'book', fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
+    schema({ name: 'tag', fields: [{ name: 'label', cmsType: 'string' }] }),
+    schema({ name: 'book', fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }], relations: [{ field: 'tags', kind: 'manyToMany', target: 'tag' }] }),
   ];
   await boot(schemas);
 

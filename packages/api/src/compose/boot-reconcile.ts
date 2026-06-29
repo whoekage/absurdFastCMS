@@ -44,7 +44,7 @@ export class SchemaReconcileHaltError extends AppError {
 
 export interface ReconcileResult {
   outcome: 'clean' | 'migrated' | 'recovered-forward';
-  /** apiIds whose `modules/<apiId>/schema.ts` was regenerated from the snapshot (recover-forward). */
+  /** moduleNames whose `modules/<name>/schema.ts` was regenerated from the snapshot (recover-forward). */
   recovered: readonly string[];
   /** The IR the served Engine MUST be built from (files after any recovery). */
   schemas: Schema[];
@@ -58,21 +58,21 @@ function isReverseDestructive(c: Change): boolean {
 }
 
 /**
- * Whether `generateSchemaSource` can write `s` WITHOUT silent loss. The v1 DSL codegen drops three IR
- * properties without erroring — `field.localized`, `collectionName`, `info` — so regenerating a schema that
- * carries any of them would write a lossy file the next boot reads as `clean` (silently changing i18n /
- * table-name / display semantics). Recover-forward HALTs rather than write such a file. (The loud cases —
- * a field type the codegen can't emit — throw `BuilderCodegenError` and are handled separately.)
+ * Whether `generateSchemaSource` can write `s` WITHOUT silent loss. The v1 DSL codegen drops two IR
+ * properties without erroring — `field.localized` and `collectionName` — so regenerating a schema that
+ * carries either would write a lossy file the next boot reads as `clean` (silently changing i18n /
+ * table-name semantics). Recover-forward HALTs rather than write such a file. (`label` IS emitted by the
+ * codegen now, so it round-trips. The loud cases — a field type the codegen can't emit — throw
+ * `BuilderCodegenError` and are handled separately.)
  */
 function isRoundTrippable(s: Schema): boolean {
   if (s.collectionName !== undefined) return false;
-  if (s.info !== undefined) return false;
   return s.fields.every((f) => f.localized === undefined);
 }
 
 /** Atomic same-dir flip (mirror of applySchemaEdit's temp→rename) so a crash mid-recovery never half-writes. */
 async function atomicWriteSchemaFile(modulesDir: string, schema: Schema): Promise<void> {
-  const dir = path.join(modulesDir, schema.apiId);
+  const dir = path.join(modulesDir, schema.name);
   await mkdir(dir, { recursive: true });
   const target = path.join(dir, 'schema.ts');
   const tmp = `${target}.${process.pid}.recover.tmp`;
@@ -106,14 +106,14 @@ export async function reconcileBoot(
   if (cs.changes.some(isReverseDestructive)) {
     // FILES BEHIND (crash window). Never let migrate apply the reverse drop. Regenerate each affected file
     // from the snapshot IR and serve the snapshot (DB already matches it).
-    const affected = [...new Set(cs.changes.filter(isReverseDestructive).map((c) => c.apiId))];
-    const appliedByApiId = new Map(appliedIR.map((s) => [s.apiId, s]));
-    for (const apiId of affected) {
-      const s = appliedByApiId.get(apiId);
+    const affected = [...new Set(cs.changes.filter(isReverseDestructive).map((c) => c.name))];
+    const appliedByName = new Map(appliedIR.map((s) => [s.name, s]));
+    for (const name of affected) {
+      const s = appliedByName.get(name);
       if (s === undefined) continue; // a reverse drop always has a snapshot entry; defensive
       if (!isRoundTrippable(s)) {
         throw new SchemaReconcileHaltError(
-          `cannot recover-forward "${apiId}": its applied schema carries a non-round-trippable property ` +
+          `cannot recover-forward "${name}": its applied schema carries a non-round-trippable property ` +
             `(localized / collectionName / info) that generateSchemaSource would silently drop — refusing to write a lossy file`,
         );
       }
@@ -121,7 +121,7 @@ export async function reconcileBoot(
         await atomicWriteSchemaFile(modulesDir, s);
       } catch (e) {
         if (e instanceof BuilderCodegenError) {
-          throw new SchemaReconcileHaltError(`cannot recover-forward "${apiId}": ${e.message}`);
+          throw new SchemaReconcileHaltError(`cannot recover-forward "${name}": ${e.message}`);
         }
         throw e;
       }

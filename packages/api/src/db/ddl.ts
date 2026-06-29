@@ -41,7 +41,7 @@ const compiler: Kysely<Record<string, never>> = new Kysely<Record<string, never>
 export const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 /** PG truncates identifiers at 63 BYTES (not chars) -> a longer name silently collides; reject it. */
 export const MAX_IDENTIFIER_BYTES = 63;
-/** The reserved per-type table prefix. A user api_id may not start with it (we add it ourselves). */
+/** The reserved per-type table prefix. A user name may not start with it (we add it ourselves). */
 export const TABLE_PREFIX = 'ct_';
 /** System columns the generator injects; a user cannot define a field with one of these names. */
 // `published_at` (snake_case) is the Draft & Publish system column — reserved on EVERY type (D&P or
@@ -97,19 +97,19 @@ export class DuplicateFieldError extends AppError {
   }
 }
 export class ModuleExistsError extends AppError {
-  readonly apiId: string;
-  constructor(apiId: string) {
-    super('db.ddl.module_exists', { apiId: JSON.stringify(apiId) });
+  readonly module: string;
+  constructor(module: string) {
+    super('db.ddl.module_exists', { name: JSON.stringify(module) });
     this.name = 'ModuleExistsError';
-    this.apiId = apiId;
+    this.module = module;
   }
 }
 export class ModuleNotFoundError extends AppError {
-  readonly apiId: string;
-  constructor(apiId: string) {
-    super('db.ddl.module_not_found', { apiId: JSON.stringify(apiId) });
+  readonly module: string;
+  constructor(module: string) {
+    super('db.ddl.module_not_found', { name: JSON.stringify(module) });
     this.name = 'ModuleNotFoundError';
-    this.apiId = apiId;
+    this.module = module;
   }
 }
 export class FieldExistsError extends AppError {
@@ -225,13 +225,13 @@ export function validateFieldName(value: unknown): string {
 }
 
 /**
- * Derive (and validate) the physical table name for a module api_id. Validates the api_id,
- * rejects reserved names / `_`-leading / `ct_`-leading (case-insensitively), assembles `ct_${apiId}`,
+ * Derive (and validate) the physical table name for a module name. Validates the name,
+ * rejects reserved names / `_`-leading / `ct_`-leading (case-insensitively), assembles `ct_${name}`,
  * then re-validates the FINAL assembled name INCLUDING the 63-byte check on the assembly (so the real
  * table name can never silently truncate) and rejects a final collision with a reserved table.
  */
-export function deriveTableName(apiId: string): string {
-  const id = validateIdentifier(apiId);
+export function deriveTableName(name: string): string {
+  const id = validateIdentifier(name);
   const lower = id.toLowerCase();
   if (id.startsWith('_')) throw new ReservedTableNameError(id);
   if (lower.startsWith(TABLE_PREFIX)) throw new ReservedTableNameError(id);
@@ -422,7 +422,7 @@ export function compileRenameColumn(tableName: string, from: string, to: string)
   return compiler.schema.alterTable(tableName).renameColumn(from, to).compile();
 }
 
-/** ALTER TABLE ... RENAME TO ... (real TABLE rename for a module apiId change — lossless). */
+/** ALTER TABLE ... RENAME TO ... (real TABLE rename for a module name change — lossless). */
 export function compileRenameTable(from: string, to: string): CompiledQuery {
   return compiler.schema.alterTable(from).renameTo(to).compile();
 }
@@ -500,22 +500,22 @@ const LINK_SUFFIX = '_lnk';
 const LINK_HASH_HEX = 10;
 
 /**
- * Resolve the physical link-table name for (ownerApiId, fieldName). Both inputs are ALREADY validated
- * identifiers (ownerApiId via deriveTableName's gate, fieldName via validateFieldName) BEFORE calling.
- * base = `${ownerApiId}_${fieldName}_lnk`; if it fits in 63 bytes, use it verbatim. On overflow, build a
+ * Resolve the physical link-table name for (ownerName, fieldName). Both inputs are ALREADY validated
+ * identifiers (ownerName via deriveTableName's gate, fieldName via validateFieldName) BEFORE calling.
+ * base = `${ownerName}_${fieldName}_lnk`; if it fits in 63 bytes, use it verbatim. On overflow, build a
  * STABLE name = truncatedPrefix + '_' + sha256(owner + '\0' + field)[:LINK_HASH_HEX], sized so the WHOLE
  * result is <= 63 bytes. The NUL separator makes ('a','bc') vs ('ab','c') hash distinctly. The FINAL name
  * is re-run through validateIdentifier (allowlist + 63-byte gate) and refused if it would collide with a
  * reserved table or the ct_ prefix. The CALLER STORES this verbatim in content_type_relations.link_table;
  * the loader/drop path read it from meta and NEVER re-derive.
  */
-export function deriveLinkTableName(ownerApiId: string, fieldName: string): string {
-  const base = `${ownerApiId}_${fieldName}${LINK_SUFFIX}`;
+export function deriveLinkTableName(ownerName: string, fieldName: string): string {
+  const base = `${ownerName}_${fieldName}${LINK_SUFFIX}`;
   let name: string;
   if (Buffer.byteLength(base, 'utf8') <= MAX_IDENTIFIER_BYTES) {
     name = base;
   } else {
-    const hash = createHash('sha256').update(`${ownerApiId}\0${fieldName}`).digest('hex').slice(0, LINK_HASH_HEX);
+    const hash = createHash('sha256').update(`${ownerName}\0${fieldName}`).digest('hex').slice(0, LINK_HASH_HEX);
     const tail = `_${hash}`; // separator + hash
     const room = MAX_IDENTIFIER_BYTES - Buffer.byteLength(tail, 'utf8');
     // Truncate the prefix on a BYTE boundary (ASCII-only here, so chars == bytes); reserve room for tail.

@@ -337,14 +337,14 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function coerceComponentInstance(
   registry: Registry,
   path: string,
-  apiId: string,
+  name: string,
   obj: Record<string, unknown>,
   depth: number,
   counter: { next: number },
   skipKey?: string,
 ): Record<string, unknown> {
-  const cdef: ComponentDef | undefined = registry.getComponent(apiId);
-  if (cdef === undefined) throw new BodyParseError(`unknown component "${apiId}" at "${path}"`);
+  const cdef: ComponentDef | undefined = registry.getComponent(name);
+  if (cdef === undefined) throw new BodyParseError(`unknown component "${name}" at "${path}"`);
   // Per-instance size guard: a single oversized blob is a clean 400 before it reaches the bind/jsonb path.
   if (JSON.stringify(obj).length > MAX_COMPONENT_ENTRY_BYTES) {
     throw new BodyParseError(`component instance at "${path}" exceeds the maximum size`);

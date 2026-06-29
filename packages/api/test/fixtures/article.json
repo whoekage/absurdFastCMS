@@ -1,8 +1,8 @@
 {
   "id": "ct_article",
-  "apiId": "article",
+  "name": "article",
+  "label": "Article",
   "collectionName": "ct_article",
-  "info": { "singularName": "article", "pluralName": "articles", "displayName": "Article" },
   "options": { "draftAndPublish": false, "i18n": false },
   "fields": [
     { "id": "f_title", "name": "title", "type": "string", "options": { "length": 512, "nullable": true } },

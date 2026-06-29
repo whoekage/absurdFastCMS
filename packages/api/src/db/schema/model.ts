@@ -5,14 +5,14 @@ import type { RelationKind } from '../ddl.ts';
 
 /**
  * THE FILES-FIRST SCHEMA MODEL (§S1 of docs/research/schema-source-of-truth.md). A module is
- * declared in a committed, dev-editable `schema/<apiId>.json` file — the SOURCE OF TRUTH. This module
+ * declared in a committed, dev-editable `schema/<name>/schema.ts` file — the SOURCE OF TRUTH. This module
  * is the model + the Zod BOUNDARY validator for that file; it is PURE (no DB, no fs) and carries the
  * cardinal design choice:
  *
  *   - every type AND field carries a STABLE `id` (short uid, NEVER changes) separate from its `name`
- *     (the API key / column name). Identity is the `id`; `name`/`apiId`/`collectionName` are renamable
- *     LABELS. The diff engine (S3) matches by `id`, so a rename is `id` unchanged + `name` changed →
- *     `ALTER ... RENAME COLUMN` (lossless) instead of Strapi's drop+add data loss.
+ *     (the API key / column name). Identity is the `id`; the module `name`/`label`/`collectionName` and a
+ *     field's `name` are renamable LABELS. The diff engine (S3) matches by `id`, so a rename is `id`
+ *     unchanged + `name` changed → `ALTER ... RENAME COLUMN` (lossless) instead of Strapi's drop+add loss.
  *
  * The file stays NON-REDUNDANT: it records ONLY `{ id, name, type, options }` per field. `engine_type`,
  * `pg_type` and the resolved `params` are NOT stored — they are re-derived from `type`+`options` through
@@ -78,24 +78,18 @@ const relationSchemaZ = z
   .strict();
 
 /**
- * One module, as it lives on disk in `schema/<apiId>.json`. `id` is identity; `apiId` is the
- * route/engine key and the basis for the `ct_<apiId>` table; `collectionName` is OPTIONAL (re-derived as
- * `ct_<apiId>` when absent — stored only to mirror Strapi's display↔table decoupling). `info` is cosmetic
- * (unused by the registry). Field ORDER is significant (the byte-identical wire order).
+ * One module, as it lives on disk in `schema/<name>/schema.ts`. `id` is identity; `name` is the
+ * route/engine key and the basis for the `ct_<name>` table; `collectionName` is OPTIONAL (re-derived as
+ * `ct_<name>` when absent — stored only to mirror Strapi's display↔table decoupling). `label` is the
+ * editable human display name (`label ?? name` is shown in the admin). Field ORDER is significant (the
+ * byte-identical wire order).
  */
 export const schemaZ = z
   .object({
     id: idSchema,
-    apiId: z.string().min(1),
+    name: z.string().min(1),
+    label: z.string().min(1).optional(),
     collectionName: z.string().min(1).optional(),
-    info: z
-      .object({
-        singularName: z.string().optional(),
-        pluralName: z.string().optional(),
-        displayName: z.string().optional(),
-      })
-      .strict()
-      .optional(),
     options: z
       .object({
         draftAndPublish: z.boolean().optional(),
@@ -113,7 +107,7 @@ export const schemaZ = z
 // `key?: T | undefined`, which drifts from `FieldOptions`. The Zod schema above stays the runtime BOUNDARY
 // validator; `serialize.parseSchema` casts its validated output to these interfaces at the seam.
 
-/** A field declaration in a `schema/<apiId>.json` file. */
+/** A field declaration in a `schema/<name>.json` file. */
 export interface FieldSchema {
   /** Stable identity (never changes; survives a rename). */
   id: string;
@@ -137,21 +131,23 @@ export interface RelationSchema {
  * A COMPONENT declaration — a reusable field group with NO physical table (stored as nested JSON in a host
  * type's jsonb column). No options (draft&publish/i18n are module concerns) and no top-level relations
  * (a `relation` field INSIDE a component is an inline id-ref, expressed as a normal {@link FieldSchema} of
- * type `relation`). Lives in `schema/components/<apiId>.ts`.
+ * type `relation`). Lives in `schema/components/<name>.ts`.
  */
 export interface ComponentSchema {
   id: string;
-  apiId: string;
+  name: string;
   fields: FieldSchema[];
 }
 
-/** A whole module declaration (one `schema/<apiId>.json` file). */
+/** A whole module declaration (one `schema/<name>/schema.ts` file). */
 export interface Schema {
-  /** Stable identity (never changes; survives an apiId/displayName rename). */
+  /** Stable identity (never changes; survives a name/label rename). */
   id: string;
-  apiId: string;
+  /** The route/engine key + basis for the `ct_<name>` table + the dir name (renamable). */
+  name: string;
+  /** Editable human display name; `label ?? name` is what the admin shows. */
+  label?: string;
   collectionName?: string;
-  info?: { singularName?: string; pluralName?: string; displayName?: string };
   options?: { draftAndPublish?: boolean; i18n?: boolean };
   fields: FieldSchema[];
   relations?: RelationSchema[];

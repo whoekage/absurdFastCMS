@@ -14,11 +14,11 @@ import { AppError } from '../errors/app-error.ts';
  * guard (a client id is honored only if it already belongs to the addressed type — the fix that keeps a
  * rename lossless without letting a client forge a cross-type id steal), (2) PRE-FLIGHTs every emitted
  * identifier / relation target (a bad name is arbitrary-code injection into the generated schema.ts), (3)
- * GATES destructive/forbidden ops (a blocked edit changes NOTHING), and (4) writes `modules/<apiId>/
+ * GATES destructive/forbidden ops (a blocked edit changes NOTHING), and (4) writes `modules/<name>/
  * schema.ts` + migrates ATOMICALLY (temp-file → migrate → rename; unlink-on-throw).
  *
- * The desired full catalog (`next`) is keyed by STABLE ID, not apiId, so an apiId RENAME (same id, new
- * apiId) and a whole-type DELETE are both expressible — `swapFromIR` already dispatches renameType/dropType.
+ * The desired full catalog (`next`) is keyed by STABLE ID, not name, so an name RENAME (same id, new
+ * name) and a whole-type DELETE are both expressible — `swapFromIR` already dispatches renameType/dropType.
  * Create / update / rename / delete / preview all funnel through ONE apply core (`applyResolvedPlan`) so the
  * file+DB atomicity (and the S6 retry/idempotency) live in exactly one place.
  */
@@ -28,7 +28,7 @@ type Draft<T> = Omit<T, 'id'> & { id?: string };
 /** A module edit from the SPA: ids are OPTIONAL (present = existing, kept; absent = new, minted). */
 export interface ModuleDraft {
   id?: string;
-  apiId: string;
+  name: string;
   options?: Schema['options'];
   fields: Draft<FieldSchema>[];
   relations?: Draft<RelationSchema>[];
@@ -106,7 +106,7 @@ function resolveSchema(draft: ModuleDraft, appliedEntry: Schema | undefined): Sc
   const typeId = appliedEntry?.id ?? draft.id ?? mintId('ct');
   const schema: Schema = {
     id: typeId,
-    apiId: draft.apiId,
+    name: draft.name,
     fields: draft.fields.map((f) => ({ ...f, id: claimId(f.id, existingFieldIds, 'f', `field "${f.name}"`) })),
   };
   if (draft.options !== undefined) schema.options = draft.options;
@@ -124,7 +124,7 @@ function resolveSchema(draft: ModuleDraft, appliedEntry: Schema | undefined): Sc
  */
 function preflightValidate(schema: Schema, next: Schema[]): void {
   try {
-    deriveTableName(schema.apiId); // identifier + reserved + ct_/_-leading + 63-byte assembly
+    deriveTableName(schema.name); // identifier + reserved + ct_/_-leading + 63-byte assembly
     const names = new Set<string>();
     for (const f of schema.fields) {
       validateFieldName(f.name);
@@ -137,17 +137,17 @@ function preflightValidate(schema: Schema, next: Schema[]): void {
         }
       }
     }
-    const apiIds = new Set(next.map((s) => s.apiId.toLowerCase()));
+    const moduleNames = new Set(next.map((s) => s.name.toLowerCase()));
     for (const r of schema.relations ?? []) {
       validateFieldName(r.field);
       validateRelationKind(r.kind);
       if (r.inverseField !== undefined) validateFieldName(r.inverseField);
       if (names.has(r.field.toLowerCase())) throw new BuilderValidationError(`relation field "${r.field}" collides with another field`);
       names.add(r.field.toLowerCase());
-      if (r.target.toLowerCase() === schema.apiId.toLowerCase() && r.inverseField === r.field) {
+      if (r.target.toLowerCase() === schema.name.toLowerCase() && r.inverseField === r.field) {
         throw new BuilderValidationError(`self-referential relation "${r.field}" needs a distinct inverseField`);
       }
-      if (!apiIds.has(r.target.toLowerCase())) throw new BuilderValidationError(`relation target "${r.target}" does not exist`);
+      if (!moduleNames.has(r.target.toLowerCase())) throw new BuilderValidationError(`relation target "${r.target}" does not exist`);
     }
   } catch (e) {
     if (e instanceof BuilderValidationError) throw e;
@@ -157,7 +157,7 @@ function preflightValidate(schema: Schema, next: Schema[]): void {
 
 interface ResolvedPlan {
   next: Schema[];
-  /** PUT: write `source` to the absolute `target` (`modules/<apiId>/schema.ts`) — temp → rename on commit. */
+  /** PUT: write `source` to the absolute `target` (`modules/<name>/schema.ts`) — temp → rename on commit. */
   write?: { target: string; source: string };
   /** DELETE: remove this source dir AFTER the migrate commits (mirror the temp-file discipline). */
   removeDir?: string;
@@ -226,7 +226,7 @@ async function readApplied(sql: Sql): Promise<Schema[]> {
 
 /** Resolve a draft → (schema with ids, id-keyed next), shared by apply + preview. */
 function resolveEdit(draft: ModuleDraft, applied: Schema[]): { schema: Schema; next: Schema[] } {
-  const appliedEntry = (draft.id !== undefined ? applied.find((s) => s.id === draft.id) : undefined) ?? applied.find((s) => s.apiId === draft.apiId);
+  const appliedEntry = (draft.id !== undefined ? applied.find((s) => s.id === draft.id) : undefined) ?? applied.find((s) => s.name === draft.name);
   const schema = resolveSchema(draft, appliedEntry);
   const next = [...applied.filter((s) => s.id !== schema.id), schema];
   preflightValidate(schema, next);
@@ -234,7 +234,7 @@ function resolveEdit(draft: ModuleDraft, applied: Schema[]): { schema: Schema; n
 }
 
 /**
- * Apply a module CREATE / UPDATE / apiId-RENAME: resolve ids (ownership-guarded) → id-keyed next →
+ * Apply a module CREATE / UPDATE / name-RENAME: resolve ids (ownership-guarded) → id-keyed next →
  * pre-flight → atomic write+migrate. Returns blocked changes (applying NOTHING) when a destructive/forbidden
  * op is present without `allowDestructive`.
  */
@@ -246,25 +246,25 @@ export async function applySchemaEdit(
 ): Promise<SchemaEditResult> {
   const applied = await readApplied(sql);
   const { schema, next } = resolveEdit(draft, applied);
-  const target = path.join(modulesDir, schema.apiId, 'schema.ts');
+  const target = path.join(modulesDir, schema.name, 'schema.ts');
   return applyResolvedPlan(sql, { next, write: { target, source: generateSchemaSource(schema) }, schema }, opts);
 }
 
 /** Drop a whole module (always destructive). Blocks if a surviving type still targets it by relation. */
-export async function applySchemaDelete(sql: Sql, modulesDir: string, apiId: string): Promise<SchemaEditResult> {
+export async function applySchemaDelete(sql: Sql, modulesDir: string, name: string): Promise<SchemaEditResult> {
   const applied = await readApplied(sql);
-  const target = applied.find((s) => s.apiId === apiId);
-  if (target === undefined) throw new BuilderNotFoundError(`module "${apiId}" does not exist`);
+  const target = applied.find((s) => s.name === name);
+  if (target === undefined) throw new BuilderNotFoundError(`module "${name}" does not exist`);
   // Inbound-relation safety: a surviving type whose relation targets this one would dangle (and its link
-  // table FKs ct_<apiId>, so DROP TABLE would error). Block with a clear message — remove the relation first.
+  // table FKs ct_<name>, so DROP TABLE would error). Block with a clear message — remove the relation first.
   const inbound = applied
     .filter((s) => s.id !== target.id)
-    .flatMap((s) => (s.relations ?? []).filter((r) => r.target.toLowerCase() === apiId.toLowerCase()).map((r) => `${s.apiId}.${r.field}`));
+    .flatMap((s) => (s.relations ?? []).filter((r) => r.target.toLowerCase() === name.toLowerCase()).map((r) => `${s.name}.${r.field}`));
   if (inbound.length > 0) {
-    throw new BuilderValidationError(`type "${apiId}" is referenced by ${inbound.join(', ')}; remove the relation(s) first`);
+    throw new BuilderValidationError(`type "${name}" is referenced by ${inbound.join(', ')}; remove the relation(s) first`);
   }
   const next = applied.filter((s) => s.id !== target.id);
-  return applyResolvedPlan(sql, { next, removeDir: path.join(modulesDir, apiId) }, { allowDestructive: true });
+  return applyResolvedPlan(sql, { next, removeDir: path.join(modulesDir, name) }, { allowDestructive: true });
 }
 
 /** Dry-run a CREATE/UPDATE: resolve + pre-flight + lint + codegen, writing NOTHING and migrating NOTHING. */

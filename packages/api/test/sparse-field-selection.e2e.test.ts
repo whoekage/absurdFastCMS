@@ -69,7 +69,7 @@ function parse(body: Buffer): unknown {
 test('LIST fields=: returns exactly id + requested columns (Strapi v5)', async () => {
   const schemas = [
     schema({
-      apiId: 'article',
+      name: 'article',
       fields: [
         { name: 'title', cmsType: 'string' },
         { name: 'body', cmsType: 'text' },
@@ -92,7 +92,7 @@ test('LIST fields=: returns exactly id + requested columns (Strapi v5)', async (
 test('SINGLE /:type/:id now threads fields (was previously ignored)', async () => {
   const schemas = [
     schema({
-      apiId: 'article',
+      name: 'article',
       fields: [
         { name: 'title', cmsType: 'string' },
         { name: 'body', cmsType: 'text' },
@@ -112,7 +112,7 @@ test('SINGLE /:type/:id now threads fields (was previously ignored)', async () =
 });
 
 test('fields with an UNKNOWN field 400s (same gate as filters)', async () => {
-  const schemas = [schema({ apiId: 'article', fields: [{ name: 'title', cmsType: 'string' }] })];
+  const schemas = [schema({ name: 'article', fields: [{ name: 'title', cmsType: 'string' }] })];
   await setup(schemas);
   const engine = await boot(schemas);
   assert.equal(get(engine, '/article', 'fields=nope').status, 400);
@@ -121,9 +121,9 @@ test('fields with an UNKNOWN field 400s (same gate as filters)', async () => {
 
 test('fields COMPOSES with populate: projected OWNER body + FULL related rows', async () => {
   const schemas = [
-    schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string' }, { name: 'bio', cmsType: 'text' }] }),
+    schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string' }, { name: 'bio', cmsType: 'text' }] }),
     schema({
-      apiId: 'book',
+      name: 'book',
       fields: [{ name: 'title', cmsType: 'string' }, { name: 'isbn', cmsType: 'string' }],
       relations: [{ field: 'author', kind: 'manyToOne', target: 'author' }],
     }),
@@ -152,7 +152,7 @@ test('fields COMPOSES with populate: projected OWNER body + FULL related rows', 
 test('NO fields: the response is byte-identical to before (full-row path unchanged)', async () => {
   const schemas = [
     schema({
-      apiId: 'article',
+      name: 'article',
       fields: [{ name: 'title', cmsType: 'string' }, { name: 'views', cmsType: 'integer' }],
     }),
   ];

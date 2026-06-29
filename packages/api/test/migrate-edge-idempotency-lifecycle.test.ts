@@ -19,7 +19,7 @@ import { cleanCatalog, physicalColumns, tableExists } from './helpers.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const schema = (id: string, apiId: string, fields: FieldSchema[]): Schema => ({ id, apiId, fields });
+const schema = (id: string, name: string, fields: FieldSchema[]): Schema => ({ id, name, fields });
 
 let sql: Sql;
 let db: Awaited<ReturnType<typeof createFileDatabase>>;
@@ -38,9 +38,9 @@ after(async () => {
 });
 
 /** Read the applied-snapshot rows for a type id (the canonical-JSON bookkeeping the diff reads back). */
-async function appliedRows(s: Sql): Promise<{ type_id: string; api_id: string; schema: Schema }[]> {
-  return s<{ type_id: string; api_id: string; schema: Schema }[]>`
-    SELECT type_id, api_id, schema FROM _schema_applied ORDER BY type_id
+async function appliedRows(s: Sql): Promise<{ type_id: string; name: string; schema: Schema }[]> {
+  return s<{ type_id: string; name: string; schema: Schema }[]>`
+    SELECT type_id, name, schema FROM _schema_applied ORDER BY type_id
   `;
 }
 
@@ -151,11 +151,11 @@ test('HEADLINE lifecycle: create -> rename -> add+default -> retype -> drop -> i
   const finalRows = await sql<{ headline: string }[]>`SELECT headline FROM ct_article ORDER BY views`;
   assert.deepEqual(finalRows.map((r) => r.headline), ['alpha', 'beta', 'gamma']);
 
-  // the applied snapshot tracks EXACTLY the final catalog: one row, latest apiId, headline+views+active.
+  // the applied snapshot tracks EXACTLY the final catalog: one row, latest name, headline+views+active.
   const applied = await appliedRows(sql);
   assert.equal(applied.length, 1);
   assert.equal(applied[0]!.type_id, 'ct_a');
-  assert.equal(applied[0]!.api_id, 'article');
+  assert.equal(applied[0]!.name, 'article');
   assert.deepEqual(applied[0]!.schema.fields.map((f) => f.name), ['headline', 'views', 'active']);
 });
 

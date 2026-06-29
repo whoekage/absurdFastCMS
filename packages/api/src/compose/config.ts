@@ -41,7 +41,7 @@ export interface ContiConfig {
   readonly debug: { readonly inspector: boolean };
   /**
    * Files-first ENTITIES location — the project's `modules/` dir holding one FOLDER per module
-   * (`modules/<apiId>/schema.ts` + optional `hooks.ts`; the SOURCE OF TRUTH). Optional: when absent,
+   * (`modules/<name>/schema.ts` + optional `hooks.ts`; the SOURCE OF TRUTH). Optional: when absent,
    * {@link createConti} defaults to `<cwd>/modules`. Resolved to an absolute path by
    * {@link loadConfigFromEnv} (relative to the project dir = cwd), so the CLI and direct callers agree.
    */

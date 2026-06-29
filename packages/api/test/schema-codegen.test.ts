@@ -11,7 +11,7 @@ import type { Schema } from '../src/db/schema/model.ts';
 
 const article: Schema = {
   id: 'ct_article',
-  apiId: 'article',
+  name: 'article',
   options: { draftAndPublish: false, i18n: false },
   fields: [
     { id: 'f_title', name: 'title', type: 'string', options: { length: 512, nullable: true } },
@@ -41,16 +41,16 @@ test('generateTypes maps the article schema to a typed interface', () => {
 });
 
 test('draft&publish + i18n add the conditional system fields', () => {
-  const out = generateTypes([{ ...article, apiId: 'page', id: 'ct_page', options: { draftAndPublish: true, i18n: true } }]);
+  const out = generateTypes([{ ...article, name: 'page', id: 'ct_page', options: { draftAndPublish: true, i18n: true } }]);
   assert.match(out, /export interface Page \{/);
   assert.match(out, /document_id: number;/);
   assert.match(out, /published_at\?: string \| null;/);
   assert.match(out, /^\s*locale: string;/m);
 });
 
-test('output is deterministic + apiId-sorted (diff-stable artifact)', () => {
-  const a = generateTypes([article, { ...article, apiId: 'zebra', id: 'ct_zebra' }]);
-  const b = generateTypes([{ ...article, apiId: 'zebra', id: 'ct_zebra' }, article]);
+test('output is deterministic + name-sorted (diff-stable artifact)', () => {
+  const a = generateTypes([article, { ...article, name: 'zebra', id: 'ct_zebra' }]);
+  const b = generateTypes([{ ...article, name: 'zebra', id: 'ct_zebra' }, article]);
   assert.equal(a, b); // order-independent
-  assert.ok(a.indexOf('interface Article') < a.indexOf('interface Zebra'), 'sorted by apiId');
+  assert.ok(a.indexOf('interface Article') < a.indexOf('interface Zebra'), 'sorted by name');
 });

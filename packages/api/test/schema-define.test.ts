@@ -8,13 +8,14 @@ import { parseSchema } from '../src/db/schema/serialize.ts';
 /**
  * Phase 1 of the TS-DSL pivot — `defineSchema` + `c.*` builders. Proves the DSL introspects to the SAME IR
  * the JSON path produced (so diff/migrate/registry are unchanged), splits relations out of `fields`, falls
- * back ids to the key/apiId, and that types are inferred (the compile-time block fails `tsc` if wrong).
+ * back ids to the key/name, and that types are inferred (the compile-time block fails `tsc` if wrong).
  */
 
 const articlePath = fileURLToPath(new URL('./fixtures/article.json', import.meta.url));
 
 const Article = defineSchema({
   id: 'ct_article',
+  label: 'Article',
   options: { draftAndPublish: false, i18n: false },
   fields: {
     title: c.string({ id: 'f_title', max: 512, nullable: true }),
@@ -27,10 +28,10 @@ const Article = defineSchema({
   },
 });
 
-test('defToSchema produces the SAME IR as the committed article.json (minus cosmetic collectionName/info)', async () => {
+test('defToSchema produces the SAME IR as the committed article.json (minus cosmetic collectionName)', async () => {
   const ir = defToSchema(Article, 'article');
   const json = parseSchema(await readFile(articlePath, 'utf8'));
-  const { collectionName: _cn, info: _info, ...core } = json; // collectionName/info are cosmetic, not in the DSL
+  const { collectionName: _cn, ...core } = json; // collectionName is cosmetic, not in the DSL (label IS)
   assert.deepStrictEqual(ir, core);
 });
 
@@ -48,10 +49,10 @@ test('defToSchema splits relations out of fields', () => {
   assert.deepEqual(ir.relations?.[0], { id: 'rel_a', field: 'author', kind: 'manyToOne', target: 'writer', inverseField: 'posts' });
 });
 
-test('ids fall back to the field key / apiId when not pinned', () => {
+test('ids fall back to the field key / name when not pinned', () => {
   const Thing = defineSchema({ fields: { name: c.string() } });
   const ir = defToSchema(Thing, 'thing');
-  assert.equal(ir.id, 'thing'); // type id <- apiId
+  assert.equal(ir.id, 'thing'); // type id <- name
   assert.equal(ir.fields[0]!.id, 'name'); // field id <- key
   assert.equal(ir.fields[0]!.options?.nullable, true); // nullable defaults true
 });

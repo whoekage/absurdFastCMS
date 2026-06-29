@@ -55,15 +55,15 @@ after(async () => {
 // The catalog-version ETag is a PUBLIC read ⇒ stays anonymous. The WRITES (PUT/DELETE/preview) carry the
 // super-admin `cookie` so the `builder.manage` gate authorizes them.
 const ver = async (): Promise<string> => (await fetch(`${srv.base}/builder/modules`)).headers.get('etag') ?? '';
-const put = async (apiId: string, body: unknown, ifMatch?: string): Promise<Response> =>
-  fetch(`${srv.base}/builder/modules/${apiId}`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
-const del = async (apiId: string, body: unknown, ifMatch?: string): Promise<Response> =>
-  fetch(`${srv.base}/builder/modules/${apiId}`, { method: 'DELETE', headers: { 'content-type': 'application/json', cookie, 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
-const preview = (apiId: string, body: unknown): Promise<Response> =>
-  fetch(`${srv.base}/builder/modules/${apiId}/preview`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify(body) });
+const put = async (name: string, body: unknown, ifMatch?: string): Promise<Response> =>
+  fetch(`${srv.base}/builder/modules/${name}`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie, 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
+const del = async (name: string, body: unknown, ifMatch?: string): Promise<Response> =>
+  fetch(`${srv.base}/builder/modules/${name}`, { method: 'DELETE', headers: { 'content-type': 'application/json', cookie, 'if-match': ifMatch ?? (await ver()) }, body: JSON.stringify(body) });
+const preview = (name: string, body: unknown): Promise<Response> =>
+  fetch(`${srv.base}/builder/modules/${name}/preview`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify(body) });
 
 test('PUT create → 200 uniform envelope; GET list/one reflect it; the type serves live', async () => {
-  const r = await put('gadget', { apiId: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
+  const r = await put('gadget', { name: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] });
   assert.equal(r.status, 200);
   const env = await r.json();
   assert.deepEqual({ ok: env.ok, blocked: env.blocked, live: env.live }, { ok: true, blocked: [], live: true });
@@ -71,15 +71,15 @@ test('PUT create → 200 uniform envelope; GET list/one reflect it; the type ser
   assert.ok(env.schema.id.startsWith('ct_') && env.schema.fields[0].id.startsWith('f_'));
   // GET list + one
   const list = await (await fetch(`${srv.base}/builder/modules`)).json();
-  assert.ok(list.ok && list.schemas.some((s: { apiId: string }) => s.apiId === 'gadget'));
+  assert.ok(list.ok && list.schemas.some((s: { name: string }) => s.name === 'gadget'));
   assert.equal((await fetch(`${srv.base}/builder/modules/gadget`)).status, 200);
   assert.equal((await fetch(`${srv.base}/builder/modules/nope`)).status, 404);
   assert.equal((await fetch(`${srv.base}/gadget`)).status, 200); // live
 });
 
-test('PUT apiId-RENAME (same id at the new path) → 200; old 404, new 200', async () => {
-  const created = await (await put('gadget', { apiId: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] })).json();
-  const r = await put('doohickey', { id: created.schema.id, apiId: 'doohickey', fields: [{ id: created.schema.fields[0].id, name: 'title', type: 'string', options: { nullable: true } }] });
+test('PUT name-RENAME (same id at the new path) → 200; old 404, new 200', async () => {
+  const created = await (await put('gadget', { name: 'gadget', fields: [{ name: 'title', type: 'string', options: { nullable: true } }] })).json();
+  const r = await put('doohickey', { id: created.schema.id, name: 'doohickey', fields: [{ id: created.schema.fields[0].id, name: 'title', type: 'string', options: { nullable: true } }] });
   assert.equal(r.status, 200);
   assert.ok((await r.json()).applied.some((c: { kind: string }) => c.kind === 'renameType'));
   assert.equal((await fetch(`${srv.base}/gadget`)).status, 404);
@@ -87,7 +87,7 @@ test('PUT apiId-RENAME (same id at the new path) → 200; old 404, new 200', asy
 });
 
 test('DELETE → 200, type gone; without allowDestructive → 409', async () => {
-  await put('gadget', { apiId: 'gadget', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
+  await put('gadget', { name: 'gadget', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   assert.equal((await del('gadget', {})).status, 409); // requires the ack
   assert.equal((await fetch(`${srv.base}/gadget`)).status, 200); // still there
 
@@ -99,7 +99,7 @@ test('DELETE → 200, type gone; without allowDestructive → 409', async () => 
 });
 
 test('POST preview → 200 with changes + generatedSource, but writes/migrates NOTHING', async () => {
-  const r = await preview('widget', { apiId: 'widget', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
+  const r = await preview('widget', { name: 'widget', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   assert.equal(r.status, 200);
   const p = await r.json();
   assert.ok(p.ok && p.applied.some((c: { kind: string }) => c.kind === 'addType') && /defineSchema/.test(p.generatedSource));
@@ -108,24 +108,24 @@ test('POST preview → 200 with changes + generatedSource, but writes/migrates N
 });
 
 test('422s: body/path mismatch, reserved identifier, dangling relation target', async () => {
-  assert.equal((await put('gadget', { apiId: 'other', fields: [] })).status, 422); // body.apiId != path
-  assert.equal((await put('gadget', { apiId: 'gadget', fields: [{ name: 'created_at', type: 'string' }] })).status, 422); // reserved
-  assert.equal((await put('post', { apiId: 'post', fields: [{ name: 'title', type: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'nope' }] })).status, 422); // dangling target
+  assert.equal((await put('gadget', { name: 'other', fields: [] })).status, 422); // body.name != path
+  assert.equal((await put('gadget', { name: 'gadget', fields: [{ name: 'created_at', type: 'string' }] })).status, 422); // reserved
+  assert.equal((await put('post', { name: 'post', fields: [{ name: 'title', type: 'string' }], relations: [{ field: 'author', kind: 'manyToOne', target: 'nope' }] })).status, 422); // dangling target
 });
 
 test('422 ownership guard via HTTP: a foreign field id on another type rejects; legit rename ok', async () => {
-  const alpha = await (await put('alpha', { apiId: 'alpha', fields: [{ name: 'x', type: 'string', options: { nullable: true } }] })).json();
-  const beta = await (await put('beta', { apiId: 'beta', fields: [{ name: 'y', type: 'string', options: { nullable: true } }] })).json();
+  const alpha = await (await put('alpha', { name: 'alpha', fields: [{ name: 'x', type: 'string', options: { nullable: true } }] })).json();
+  const beta = await (await put('beta', { name: 'beta', fields: [{ name: 'y', type: 'string', options: { nullable: true } }] })).json();
 
-  const forged = await put('beta', { id: beta.schema.id, apiId: 'beta', fields: [{ id: alpha.schema.fields[0].id, name: 'y', type: 'string', options: { nullable: true } }] });
+  const forged = await put('beta', { id: beta.schema.id, name: 'beta', fields: [{ id: alpha.schema.fields[0].id, name: 'y', type: 'string', options: { nullable: true } }] });
   assert.equal(forged.status, 422); // alpha's field id claimed on beta
-  const renamed = await put('beta', { id: beta.schema.id, apiId: 'beta', fields: [{ id: beta.schema.fields[0].id, name: 'renamed', type: 'string', options: { nullable: true } }] });
+  const renamed = await put('beta', { id: beta.schema.id, name: 'beta', fields: [{ id: beta.schema.fields[0].id, name: 'renamed', type: 'string', options: { nullable: true } }] });
   assert.equal(renamed.status, 200);
 });
 
 test('DELETE of a relation-TARGET type → 422 (inbound relation); GET still 200', async () => {
-  await put('writer', { apiId: 'writer', fields: [{ name: 'name', type: 'string', options: { nullable: true } }] });
-  await put('post', { apiId: 'post', fields: [{ name: 'title', type: 'string', options: { nullable: true } }], relations: [{ field: 'author', kind: 'manyToOne', target: 'writer' }] });
+  await put('writer', { name: 'writer', fields: [{ name: 'name', type: 'string', options: { nullable: true } }] });
+  await put('post', { name: 'post', fields: [{ name: 'title', type: 'string', options: { nullable: true } }], relations: [{ field: 'author', kind: 'manyToOne', target: 'writer' }] });
 
   const r = await del('writer', { allowDestructive: true });
   assert.equal(r.status, 422); // referenced by post.author

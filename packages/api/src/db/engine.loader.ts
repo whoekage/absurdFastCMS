@@ -27,7 +27,7 @@ export function cursorCodecFromEnv(): CursorCodec {
  */
 
 /**
- * Defense-in-depth: re-assert the registry-built `ct_<apiId>` table name shape (and the 63-byte gate)
+ * Defense-in-depth: re-assert the registry-built `ct_<name>` table name shape (and the 63-byte gate)
  * before it is ever interpolated as a SQL identifier. Shared by the loader AND the write repo so EVERY
  * SQL-building module re-runs the same gate (the identifier-gate invariant is symmetric across modules).
  * The message NEVER echoes the offending name (no SQL leak).
@@ -91,7 +91,7 @@ export async function loadType(sql: Sql, engine: Engine, def: ModuleDef): Promis
   const detached = await buildDetached(sql, def);
   // Install the fully-built detached pair directly as a NEW type — no throwaway empty Table/arena (and
   // no needless cache-invalidation publish on the cold boot path). Same byte format as Engine.insert.
-  engine.registerDetached(def.apiId, detached);
+  engine.registerDetached(def.name, detached);
 }
 
 /**
@@ -108,18 +108,18 @@ export async function loadType(sql: Sql, engine: Engine, def: ModuleDef): Promis
  * diagnostic, never linked. Always builds + stores a Relation even with zero edges (presence is driven
  * by the META, not the edge count).
  */
-async function loadOwnerRelation(sql: Sql, engine: Engine, ownerApiId: string, meta: RelationMeta): Promise<void> {
+async function loadOwnerRelation(sql: Sql, engine: Engine, ownerName: string, meta: RelationMeta): Promise<void> {
   if (!meta.isOwner) return; // inverse rows are produced by their partner owner row's swap — never double-load.
 
   // Defensive endpoint presence (phase ordering guarantees this in the normal case; a desync must not
   // crash boot/rebuild — skip + diagnostic instead).
-  if (!engine.has(ownerApiId) || !engine.has(meta.targetApiId)) {
-    console.warn(`relation load: skipping ${ownerApiId}.${meta.field} — endpoint table missing`);
+  if (!engine.has(ownerName) || !engine.has(meta.targetName)) {
+    console.warn(`relation load: skipping ${ownerName}.${meta.field} — endpoint table missing`);
     return;
   }
 
-  const ownerTable = engine.table(ownerApiId);
-  const targetTable = engine.table(meta.targetApiId); // === ownerTable when self-referential (correct).
+  const ownerTable = engine.table(ownerName);
+  const targetTable = engine.table(meta.targetName); // === ownerTable when self-referential (correct).
 
   // Defense-in-depth: re-validate the link-table identifier before interpolation. Link tables are
   // `<owner>_<field>_lnk` (NOT ct_-prefixed), so use validateIdentifier — not assertTableName/CT_TABLE_RE.
@@ -144,13 +144,13 @@ async function loadOwnerRelation(sql: Sql, engine: Engine, ownerApiId: string, m
     if (twoWay) inv.push([r, o]); // swap the dense rows for the inverse direction.
   }
 
-  engine.setRelation(ownerApiId, meta.field, Relation.fromEdges(ownerTable, targetTable, fwd), meta.targetApiId, meta.kind);
+  engine.setRelation(ownerName, meta.field, Relation.fromEdges(ownerTable, targetTable, fwd), meta.targetName, meta.kind);
   if (twoWay) {
     // Inverse: BOTH the Table args AND the edge orientation are swapped together. The inverse's TARGET
     // is the owner type (so a two-way filter via the inverse field resolves back to the owner schema).
     // Its KIND is the inverse cardinality (manyToOne -> oneToMany, etc.) so populate via the inverse
     // field dispatches to-many vs to-one correctly (the headline two-way correctness point).
-    engine.setRelation(meta.targetApiId, meta.inverseField!, Relation.fromEdges(targetTable, ownerTable, inv), ownerApiId, inverseKind(meta.kind));
+    engine.setRelation(meta.targetName, meta.inverseField!, Relation.fromEdges(targetTable, ownerTable, inv), ownerName, inverseKind(meta.kind));
   }
 }
 
@@ -164,7 +164,7 @@ async function loadOwnerRelation(sql: Sql, engine: Engine, ownerApiId: string, m
 export async function loadAllRelations(sql: Sql, engine: Engine, registry: Registry): Promise<void> {
   for (const def of registry.all()) {
     for (const meta of def.relations) {
-      if (meta.isOwner) await loadOwnerRelation(sql, engine, def.apiId, meta);
+      if (meta.isOwner) await loadOwnerRelation(sql, engine, def.name, meta);
     }
   }
 }
@@ -199,6 +199,6 @@ export async function buildEngine(sql: Sql, registry: Registry, opts?: EngineOpt
  */
 export async function rebuildType(sql: Sql, engine: Engine, def: ModuleDef, registry: Registry): Promise<void> {
   const detached = await buildDetached(sql, def);
-  engine.replaceType(def.apiId, detached); // 1. new Table installed (new dense ids).
+  engine.replaceType(def.name, detached); // 1. new Table installed (new dense ids).
   await loadAllRelations(sql, engine, registry); // 2. re-derive ALL relations against the current Tables.
 }

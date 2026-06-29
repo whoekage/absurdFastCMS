@@ -99,7 +99,7 @@ function fromDb(def: ModuleDef, dbRow: Record<string, unknown>): Record<string, 
 }
 
 /**
- * INSERT one entry into ct_<apiId>. `data` keys are already a whitelisted subset of `def.writable`
+ * INSERT one entry into ct_<name>. `data` keys are already a whitelisted subset of `def.writable`
  * names (the validator ran first). Returns the stored row (engine-named, with its serial id).
  */
 export async function insertEntry(

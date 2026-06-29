@@ -39,8 +39,8 @@ let db: Awaited<ReturnType<typeof createFileDatabase>>;
 let srv: TestServer | undefined;
 
 /** Build an in-memory ComponentSchema (mints the component + field ids). Fields use the files-first `type`. */
-function component(apiId: string, fields: { name: string; type: FieldType; options?: FieldOptions }[]): ComponentSchema {
-  return { id: mintId('cmp'), apiId, fields: fields.map((f): FieldSchema => ({ id: mintId('f'), ...f })) };
+function component(name: string, fields: { name: string; type: FieldType; options?: FieldOptions }[]): ComponentSchema {
+  return { id: mintId('cmp'), name, fields: fields.map((f): FieldSchema => ({ id: mintId('f'), ...f })) };
 }
 
 /** Per-test FULL real server: each test owns its in-memory components; writes go authed, reads stay public. */
@@ -78,7 +78,7 @@ const POST = (p: string, body: unknown) => srv!.fetch(p, { method: 'POST', body:
 const GET = (p: string) => srv!.anonFetch(p);
 
 /** The `author` target module as a files-first IR. */
-const authorType = schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false } }] });
+const authorType = schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false } }] });
 
 /** Create two `author` rows over the live write path; returns their ids (the type is pre-built per test). */
 async function seedAuthorRows(): Promise<{ a1: number; a2: number }> {
@@ -93,7 +93,7 @@ async function seedAuthorRows(): Promise<{ a1: number; a2: number }> {
 // component json. A top-level `relation` field is rejected by resolveFields -> rejectTopLevelRelation,
 // which migrate() runs (replacing the legacy POST /modules + addField controller guards).
 test('R0b a top-level `relation` field is rejected by the files-first migrate (component-only kind)', async () => {
-  const bad = schema({ apiId: 'post', fields: [{ name: 'writer', cmsType: 'relation', options: { target: 'author' } }] });
+  const bad = schema({ name: 'post', fields: [{ name: 'writer', cmsType: 'relation', options: { target: 'author' } }] });
   await assert.rejects(migrate(sql, [bad], { allowDestructive: true }), /relation/i);
 });
 
@@ -103,7 +103,7 @@ test('R1 single relation ref inside a single component: stored inline, read verb
     { name: 'role', type: 'string' },
     { name: 'writer', type: 'relation', options: { target: 'author' } },
   ]);
-  const post = schema({ apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
+  const post = schema({ name: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
   await boot([authorType, post], [byline]);
   const { a1 } = await seedAuthorRows();
 
@@ -127,7 +127,7 @@ test('R1 single relation ref inside a single component: stored inline, read verb
 // --- R2: dangling id -> 400 --------------------------------------------------------------------
 test('R2 a dangling relation id is rejected on write (400)', async () => {
   const byline = component('byline', [{ name: 'writer', type: 'relation', options: { target: 'author' } }]);
-  const post = schema({ apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
+  const post = schema({ name: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
   await boot([authorType, post], [byline]);
   await seedAuthorRows();
   const dangling = await POST('/post', { by: { writer: 999999 } });
@@ -139,8 +139,8 @@ test('R2 a dangling relation id is rejected on write (400)', async () => {
 // --- R2b: wrong-target id deterministically rejected -------------------------------------------
 test('R2b a wrong-target id that does not exist in the declared target is rejected (400)', async () => {
   const byline = component('byline', [{ name: 'writer', type: 'relation', options: { target: 'author' } }]);
-  const tag = schema({ apiId: 'tag', fields: [{ name: 'slug', cmsType: 'string', options: { nullable: false } }] });
-  const post = schema({ apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
+  const tag = schema({ name: 'tag', fields: [{ name: 'slug', cmsType: 'string', options: { nullable: false } }] });
+  const post = schema({ name: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
   await boot([authorType, tag, post], [byline]);
   await seedAuthorRows(); // authors have ids 1,2.
   // Make a tag with an id guaranteed beyond the author id space (insert 5 tags -> ids 1..5).
@@ -158,8 +158,8 @@ test('R2b a wrong-target id that does not exist in the declared target is reject
 test('R3 many relation refs inside a component: array stored, populated to an array of objects', async () => {
   const credits = component('credits', [{ name: 'writers', type: 'relation', options: { target: 'author', multiple: true } }]);
   const one = component('one', [{ name: 'w', type: 'relation', options: { target: 'author' } }]);
-  const post = schema({ apiId: 'post', fields: [{ name: 'credits', cmsType: 'component', options: { component: 'credits' } }] });
-  const solo = schema({ apiId: 'solo', fields: [{ name: 'one', cmsType: 'component', options: { component: 'one' } }] });
+  const post = schema({ name: 'post', fields: [{ name: 'credits', cmsType: 'component', options: { component: 'credits' } }] });
+  const solo = schema({ name: 'solo', fields: [{ name: 'one', cmsType: 'component', options: { component: 'one' } }] });
   await boot([authorType, post, solo], [credits, one]);
   const { a1, a2 } = await seedAuthorRows();
 
@@ -186,8 +186,8 @@ test('R3 many relation refs inside a component: array stored, populated to an ar
 test('R4 relation refs inside a repeatable component and a dynamic-zone block populate correctly', async () => {
   const row = component('row', [{ name: 'writer', type: 'relation', options: { target: 'author' } }]);
   const authorBlock = component('authorBlock', [{ name: 'writer', type: 'relation', options: { target: 'author' } }]);
-  const rep = schema({ apiId: 'rep', fields: [{ name: 'rows', cmsType: 'component-repeatable', options: { component: 'row' } }] });
-  const zoned = schema({ apiId: 'zoned', fields: [{ name: 'body', cmsType: 'dynamiczone', options: { components: ['authorBlock'] } }] });
+  const rep = schema({ name: 'rep', fields: [{ name: 'rows', cmsType: 'component-repeatable', options: { component: 'row' } }] });
+  const zoned = schema({ name: 'zoned', fields: [{ name: 'body', cmsType: 'dynamiczone', options: { components: ['authorBlock'] } }] });
   await boot([authorType, rep, zoned], [row, authorBlock]);
   const { a1, a2 } = await seedAuthorRows();
 
@@ -214,7 +214,7 @@ test('R5 a ref that becomes dangling resolves to null (single) and is dropped (m
     { name: 'lead', type: 'relation', options: { target: 'author' } },
     { name: 'team', type: 'relation', options: { target: 'author', multiple: true } },
   ]);
-  const post = schema({ apiId: 'post', fields: [{ name: 'credits', cmsType: 'component', options: { component: 'credits' } }] });
+  const post = schema({ name: 'post', fields: [{ name: 'credits', cmsType: 'component', options: { component: 'credits' } }] });
   await boot([authorType, post], [credits]);
   const { a1, a2 } = await seedAuthorRows();
   const created = (await (await POST('/post', { credits: { lead: a1, team: [a1, a2] } })).json()) as { data: { id: number } };
@@ -241,9 +241,9 @@ test('R5 a ref that becomes dangling resolves to null (single) and is dropped (m
 // --- R6: draft target resolves to null (default published-only) --------------------------------
 test('R6 a DRAFT target resolves to null on read (default published-only visibility)', async () => {
   // author opts into draft/publish.
-  const author = schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false } }], draftPublish: true });
+  const author = schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false } }], draftPublish: true });
   const byline = component('byline', [{ name: 'writer', type: 'relation', options: { target: 'author' } }]);
-  const post = schema({ apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
+  const post = schema({ name: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
   await boot([author, post], [byline]);
   const a1 = ((await (await POST('/author', { name: 'Draftee' })).json()) as { data: { id: number } }).data.id; // created as DRAFT.
   const created = (await (await POST('/post', { by: { writer: a1 } })).json()) as { data: { id: number } };
@@ -262,9 +262,9 @@ test('R6 a DRAFT target resolves to null on read (default published-only visibil
 
 // --- R7: i18n target resolves in the default locale --------------------------------------------
 test('R7 an i18n target resolves in the default locale on read', async () => {
-  const author = schema({ apiId: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false }, localized: true }], i18n: true });
+  const author = schema({ name: 'author', fields: [{ name: 'name', cmsType: 'string', options: { nullable: false }, localized: true }], i18n: true });
   const byline = component('byline', [{ name: 'writer', type: 'relation', options: { target: 'author' } }]);
-  const post = schema({ apiId: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
+  const post = schema({ name: 'post', fields: [{ name: 'by', cmsType: 'component', options: { component: 'byline' } }] });
   await boot([author, post], [byline]);
   const a1 = ((await (await POST('/author', { name: 'Ada (en)' })).json()) as { data: { id: number } }).data.id; // default-locale variant.
   const created = (await (await POST('/post', { by: { writer: a1 } })).json()) as { data: { id: number } };
@@ -280,7 +280,7 @@ test('R8 an un-populated read emits the bare relation id(s) verbatim (zero-copy 
     { name: 'lead', type: 'relation', options: { target: 'author' } },
     { name: 'team', type: 'relation', options: { target: 'author', multiple: true } },
   ]);
-  const post = schema({ apiId: 'post', fields: [{ name: 'credits', cmsType: 'component', options: { component: 'credits' } }] });
+  const post = schema({ name: 'post', fields: [{ name: 'credits', cmsType: 'component', options: { component: 'credits' } }] });
   await boot([authorType, post], [credits]);
   const { a1, a2 } = await seedAuthorRows();
   const created = (await (await POST('/post', { credits: { lead: a1, team: [a1, a2] } })).json()) as { data: { id: number } };
@@ -293,7 +293,7 @@ test('R8 an un-populated read emits the bare relation id(s) verbatim (zero-copy 
 // --- R9: a component WITHOUT a relation-ref field is unaffected ---------------------------------
 test('R9 a component without a relation-ref field reads identically (no relation populate effect)', async () => {
   const seo = component('seo', [{ name: 'metaTitle', type: 'string' }]);
-  const page = schema({ apiId: 'page', fields: [{ name: 'seo', cmsType: 'component', options: { component: 'seo' } }] });
+  const page = schema({ name: 'page', fields: [{ name: 'seo', cmsType: 'component', options: { component: 'seo' } }] });
   await boot([page], [seo]);
   const created = (await (await POST('/page', { seo: { metaTitle: 'Hi' } })).json()) as { data: { id: number } };
   const plain = await (await GET(`/page/${created.data.id}`)).text();
@@ -307,7 +307,7 @@ test('R9 a component without a relation-ref field reads identically (no relation
 
 // --- R10: a non-component type is byte-identical (relation-ref machinery never runs) ------------
 test('R10 a non-component module is byte-identical (relation-ref machinery never runs)', async () => {
-  const plainType = schema({ apiId: 'plain', fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }] });
+  const plainType = schema({ name: 'plain', fields: [{ name: 'title', cmsType: 'string', options: { nullable: false } }] });
   await boot([plainType]);
   const created = (await (await POST('/plain', { title: 'T' })).json()) as { data: { id: number } };
   const plain = await (await GET(`/plain/${created.data.id}`)).text();

@@ -13,8 +13,8 @@ import type { FieldOptions } from '../src/db/type.catalog.ts';
 
 const f = (id: string, name: string, type: FieldType, options?: FieldOptions): FieldSchema =>
   options ? { id, name, type, options } : { id, name, type };
-const schema = (id: string, apiId: string, fields: FieldSchema[], options?: Schema['options']): Schema =>
-  options ? { id, apiId, fields, options } : { id, apiId, fields };
+const schema = (id: string, name: string, fields: FieldSchema[], options?: Schema['options']): Schema =>
+  options ? { id, name, fields, options } : { id, name, fields };
 
 const only = (cs: { changes: readonly Change[] }): Change => {
   assert.equal(cs.changes.length, 1, `expected exactly one change, got ${cs.changes.map((c) => c.kind).join(',')}`);
@@ -44,16 +44,16 @@ test('addType / dropType', () => {
   assert.equal(drop.risk, 'destructive');
 });
 
-test('renameType (apiId change, same id) → table rename, lossless; info/collectionName emit nothing', () => {
+test('renameType (name change, same id) → table rename, lossless; label/collectionName emit nothing', () => {
   const renamed = schema('ct_a', 'post', base.fields);
   const c = only(diff([base], [renamed]));
   assert.equal(c.kind, 'renameType');
   assert.equal(c.risk, 'safe');
-  assert.equal((c as Extract<Change, { kind: 'renameType' }>).fromApiId, 'article');
-  assert.equal((c as Extract<Change, { kind: 'renameType' }>).toApiId, 'post');
+  assert.equal((c as Extract<Change, { kind: 'renameType' }>).fromName, 'article');
+  assert.equal((c as Extract<Change, { kind: 'renameType' }>).toName, 'post');
 
   // presentation-only deltas → empty diff
-  const labelled: Schema = { ...base, collectionName: 'whatever', info: { displayName: 'Articles!' } };
+  const labelled: Schema = { ...base, collectionName: 'whatever', label: 'Articles!' };
   assert.deepEqual(diff([base], [labelled]).changes, []);
 });
 
@@ -91,7 +91,7 @@ test('dropField is destructive', () => {
   const c = only(diff([base], [next]));
   assert.equal(c.kind, 'dropField');
   assert.equal(c.risk, 'destructive');
-  assert.equal((c as Extract<Change, { kind: 'dropField' }>).name, 'views');
+  assert.equal((c as Extract<Change, { kind: 'dropField' }>).fieldName, 'views');
 });
 
 test('retypeField: risk is derived from classifyTypeChange; enum member removal is a type change', () => {
@@ -99,7 +99,7 @@ test('retypeField: risk is derived from classifyTypeChange; enum member removal 
   const widen = schema('ct_a', 'article', [base.fields[0]!, base.fields[1]!, f('f_views', 'views', 'biginteger', { nullable: true })]);
   const c = only(diff([base], [widen])) as Extract<Change, { kind: 'retypeField' }>;
   assert.equal(c.kind, 'retypeField');
-  assert.equal(c.name, 'views'); // unchanged name
+  assert.equal(c.fieldName, 'views'); // unchanged field name
   assert.ok(['metadata-only', 'rewrite', 'forbidden'].includes(c.classification));
   const expectRisk = c.classification === 'metadata-only' ? 'safe' : c.classification === 'rewrite' ? 'data-dependent' : 'forbidden';
   assert.equal(c.risk, expectRisk);
@@ -187,7 +187,7 @@ test('a relation CHANGE and a rename-of-a-relation-owner are deferred (loud)', (
   const r1: Schema = { ...base, relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer' }] };
   const renamedField: Schema = { ...base, relations: [{ id: 'rel_au', field: 'editor', kind: 'manyToOne', target: 'writer' }] }; // same id, field changed
   assert.throws(() => diff([r1], [renamedField]), SchemaDiffError);
-  const renamedType: Schema = { ...base, apiId: 'gazette', relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer' }] };
+  const renamedType: Schema = { ...base, name: 'gazette', relations: [{ id: 'rel_au', field: 'author', kind: 'manyToOne', target: 'writer' }] };
   assert.throws(() => diff([r1], [renamedType]), SchemaDiffError);
 });
 

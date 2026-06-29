@@ -21,7 +21,7 @@ export class BuilderCodegenError extends AppError {
  * `unknown` for now (the nested-shape generation lands with relation+component files-path support).
  */
 
-/** PascalCase a snake/kebab apiId for the interface name (`blog_post` -> `BlogPost`, `article` -> `Article`). */
+/** PascalCase a snake/kebab name for the interface name (`blog_post` -> `BlogPost`, `article` -> `Article`). */
 function pascalCase(s: string): string {
   return s.replace(/(^|[_-])([a-zA-Z0-9])/g, (_m, _sep, c: string) => c.toUpperCase());
 }
@@ -69,7 +69,7 @@ function fieldLine(f: FieldSchema): string {
 }
 
 /**
- * Generate the `modules.d.ts` text for a catalog of schemas (sorted by apiId for a deterministic,
+ * Generate the `modules.d.ts` text for a catalog of schemas (sorted by name for a deterministic,
  * diff-stable artifact). One interface per module: the system fields the read path always emits,
  * then the user fields in declared (wire) order.
  */
@@ -79,9 +79,9 @@ export function generateTypes(schemas: Schema[]): string {
     '// Regenerate with `conti gen:types` after editing a schema file.\n\n';
 
   const blocks = [...schemas]
-    .sort((a, b) => (a.apiId < b.apiId ? -1 : a.apiId > b.apiId ? 1 : 0))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     .map((s) => {
-      const lines: string[] = [`export interface ${pascalCase(s.apiId)} {`, '  id: number;'];
+      const lines: string[] = [`export interface ${pascalCase(s.name)} {`, '  id: number;'];
       if (s.options?.i18n) lines.push('  document_id: number;');
       lines.push('  created_at: string;', '  updated_at: string;');
       if (s.options?.draftAndPublish) lines.push('  published_at?: string | null;');
@@ -94,7 +94,7 @@ export function generateTypes(schemas: Schema[]): string {
   return header + blocks.join('\n\n') + '\n';
 }
 
-// --- DSL SOURCE codegen (the visual Builder's writer: IR -> modules/<apiId>/schema.ts) ----------
+// --- DSL SOURCE codegen (the visual Builder's writer: IR -> modules/<name>/schema.ts) ----------
 
 /** A JSON-ish literal for embedding in generated source (strings double-quoted, arrays inline). */
 function lit(v: unknown): string {
@@ -138,14 +138,15 @@ function relationBuilderCall(r: RelationSchema): string {
 }
 
 /**
- * Generate the full `modules/<apiId>/schema.ts` SOURCE from the IR — the visual Builder's write artifact.
+ * Generate the full `modules/<name>/schema.ts` SOURCE from the IR — the visual Builder's write artifact.
  * Pure: IR in, source string out. Round-trips: loading the generated file (`loadTypes` → `defToSchema`)
  * yields an IR equal to the input. The Builder regenerates this file WHOLESALE; hooks live in the sibling
  * `hooks.ts` and are never touched.
  */
 export function generateSchemaSource(schema: Schema): string {
-  const name = pascalCase(schema.apiId);
+  const name = pascalCase(schema.name);
   const lines: string[] = ["import { defineSchema, c } from '@conti/core';", '', `const ${name} = defineSchema({`, `  id: ${lit(schema.id)},`];
+  if (schema.label !== undefined) lines.push(`  label: ${lit(schema.label)},`);
   if (schema.options !== undefined) {
     const parts: string[] = [];
     if (schema.options.draftAndPublish !== undefined) parts.push(`draftAndPublish: ${schema.options.draftAndPublish}`);

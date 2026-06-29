@@ -229,12 +229,12 @@ function corkSendNoStore(res: uWS.HttpResponse, aborted: () => boolean, status: 
 
 /** Which template a builder route is on — drives which getParameter slots to read synchronously. */
 interface CtRouteOpts {
-  /** Read getParameter(0) as `:apiId` (false for the `/modules` collection). */
-  hasApiId: boolean;
-  /** The literal segment after `:apiId` (`'fields'`), or undefined. */
+  /** Read getParameter(0) as `:name` (false for the `/modules` collection). */
+  hasName: boolean;
+  /** The literal segment after `:name` (`'fields'`), or undefined. */
   sub?: string;
-  /** Read getParameter(1) as `:name` (the `.../fields/:name` template). */
-  hasName?: boolean;
+  /** Read getParameter(1) as a field `:name` (the `.../fields/:name` template). */
+  hasFieldName?: boolean;
 }
 
 // be-04 MEDIA — sanitize a busboy-reported filename to its bare basename over a safe alphabet. NEVER used
@@ -780,7 +780,7 @@ export function createServer(deps: ServerDeps): Server {
   }
 
   // DEBUG INSPECTOR (dev-only, read-only) — mounted ONLY when DEBUG_INSPECTOR=1 outside production. The
-  // `debug-inspect` segment contains '-', illegal in an api_id, so it can never shadow a real `/:type`.
+  // `debug-inspect` segment contains '-', illegal in an name, so it can never shadow a real `/:type`.
   // Synchronous like the read routes: decode straight off the live engine, emit JSON, never mutate.
   if (config.debugInspector) {
     // INDEX: every module + row count.
@@ -933,7 +933,7 @@ export function createServer(deps: ServerDeps): Server {
   };
   const runEdit = async (draft: ModuleDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult> =>
     swapAfter(await applySchemaEdit(sql, dir, draft, opts ?? {}));
-  const runDelete = async (apiId: string): Promise<SchemaEditResult> => swapAfter(await applySchemaDelete(sql, dir, apiId));
+  const runDelete = async (name: string): Promise<SchemaEditResult> => swapAfter(await applySchemaDelete(sql, dir, name));
 
   // Programmatic entry (srv.applyEdit): serialize via the SAME mutex; a contended call THROWS (it cannot
   // return a CoreResponse). The HTTP path calls runEdit DIRECTLY from inside its own held mutex (no double-acquire).
@@ -1020,16 +1020,16 @@ export function createServer(deps: ServerDeps): Server {
   });
 
   // GET one — 404 when absent; else the single schema WITH ids + ETag/304.
-  route.get('/builder/modules/:apiId', (res, req) => {
-    const apiId = req.getParameter(0) ?? '';
+  route.get('/builder/modules/:name', (res, req) => {
+    const name = req.getParameter(0) ?? '';
     const inm = req.getHeader('if-none-match');
     let aborted = false;
     res.onAborted(() => { aborted = true; });
     void (async () => {
       try {
         await ensureVersion();
-        const schema = (await readApplied()).find((s) => s.apiId === apiId);
-        if (schema === undefined) return corkSend(res, () => aborted, builderJson(404, { ok: false, error: `module "${apiId}" does not exist` }));
+        const schema = (await readApplied()).find((s) => s.name === name);
+        if (schema === undefined) return corkSend(res, () => aborted, builderJson(404, { ok: false, error: `module "${name}" does not exist` }));
         if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
         corkSend(res, () => aborted, builderJson(200, { ok: true, schema, version: currentVersion }, { ETag: currentVersion }));
       } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
@@ -1037,14 +1037,14 @@ export function createServer(deps: ServerDeps): Server {
   });
 
   // POST preview — dry-run (no write/migrate/swap), no mutex/version. GATED.
-  route.post('/builder/modules/:apiId/preview', (res, req) => {
-    const apiId = req.getParameter(0) ?? '';
+  route.post('/builder/modules/:name/preview', (res, req) => {
+    const name = req.getParameter(0) ?? '';
     const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
     gate(res, req, 'builder.manage', true, (raw, aborted) => {
       const parsed = parseBody(raw);
       if (!parsed.ok) return corkSend(res, aborted, parsed.error);
       const body = parsed.body as { allowDestructive?: boolean } & ModuleDraft;
-      if (body.apiId !== apiId) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.apiId must equal the path apiId' }));
+      if (body.name !== name) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.name must equal the path name' }));
       void (async () => {
         let result: CoreResponse;
         try {
@@ -1056,9 +1056,9 @@ export function createServer(deps: ServerDeps): Server {
     });
   });
 
-  // PUT upsert — create / update / apiId-rename. GATED + mutex + If-Match/version + idempotency.
-  route.put('/builder/modules/:apiId', (res, req) => {
-    const apiId = req.getParameter(0) ?? '';
+  // PUT upsert — create / update / name-rename. GATED + mutex + If-Match/version + idempotency.
+  route.put('/builder/modules/:name', (res, req) => {
+    const name = req.getParameter(0) ?? '';
     const ifMatch = req.getHeader('if-match'); // '' when absent (uWS; lowercase key)
     const idemKey = req.getHeader('idempotency-key');
     const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
@@ -1066,18 +1066,18 @@ export function createServer(deps: ServerDeps): Server {
       const parsed = parseBody(raw);
       if (!parsed.ok) return corkSend(res, aborted, parsed.error);
       const body = parsed.body as { allowDestructive?: boolean; version?: string } & ModuleDraft;
-      if (body.apiId !== apiId) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.apiId must equal the path apiId' }));
+      if (body.name !== name) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.name must equal the path name' }));
       if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
       const { allowDestructive, version: _v, ...meaningful } = body;
-      const requestHash = hashRequest({ m: 'PUT', apiId, body: meaningful });
+      const requestHash = hashRequest({ m: 'PUT', name, body: meaningful });
       runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash },
         () => runEdit(body, { allowDestructive: allowDestructive === true }), locale);
     });
   });
 
   // DELETE — drop a whole type (always destructive → require allowDestructive). GATED + same wrap.
-  route.del('/builder/modules/:apiId', (res, req) => {
-    const apiId = req.getParameter(0) ?? '';
+  route.del('/builder/modules/:name', (res, req) => {
+    const name = req.getParameter(0) ?? '';
     const ifMatch = req.getHeader('if-match');
     const idemKey = req.getHeader('idempotency-key');
     const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
@@ -1087,8 +1087,8 @@ export function createServer(deps: ServerDeps): Server {
       const body = parsed.body as { allowDestructive?: boolean; version?: string };
       if (body.allowDestructive !== true) return corkSend(res, aborted, builderJson(409, { ok: false, applied: [], blocked: [], error: 'requires allowDestructive' }));
       if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
-      const requestHash = hashRequest({ m: 'DELETE', apiId });
-      runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash }, () => runDelete(apiId), locale);
+      const requestHash = hashRequest({ m: 'DELETE', name });
+      runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash }, () => runDelete(name), locale);
     });
   });
 
@@ -1181,7 +1181,7 @@ export function createServer(deps: ServerDeps): Server {
   route.del('/:type/:id', dataWrite('DELETE', 'content.delete', true));
 
   // be-04 MEDIA — asset endpoints under the `/_files` literal prefix. A leading underscore is illegal
-  // in an api_id (validateFieldName / deriveTableName), so `_files` can NEVER collide with a real
+  // in an name (validateFieldName / deriveTableName), so `_files` can NEVER collide with a real
   // `/:type`; uWS also matches a static segment over a `:param`. The UPLOAD (POST) + DELETE are GATED on
   // `media.upload`; the GET reads stay PUBLIC.
   const fileCtx: FileContext = { sql: store.sql, provider: getStorageProvider() };
@@ -1225,7 +1225,7 @@ export function createServer(deps: ServerDeps): Server {
   });
 
   // be-09c — API-TOKEN management routes under the `/_keys` literal prefix (a leading `_` is illegal in an
-  // api_id → it can NEVER shadow `/:type`; same precedent as `_files`/`_team`). auth + rbac are required
+  // name → it can NEVER shadow `/:type`; same precedent as `_files`/`_team`). auth + rbac are required
   // deps, so these always mount. ALL self routes (create/list/revoke-own) are SESSION-ONLY (gateKeys rejects ctx.via ===
   // 'key' so a key can never mint/revoke keys → no self-escalation). Owner is ALWAYS principal.userId — a
   // body `userId` is NEVER trusted (and is schema-server-only upstream → CVE-2025-61928 neutralized). The
@@ -1437,7 +1437,7 @@ export function createServer(deps: ServerDeps): Server {
   });
 
   // be-09f — TEAM-MANAGEMENT routes under the `/_team` literal prefix (a leading `_` is illegal in an
-  // api_id, so it can NEVER shadow `/:type`; same precedent as `_files`). teamView is a required dep, so
+  // name, so it can NEVER shadow `/:type`; same precedent as `_files`). teamView is a required dep, so
   // these always mount. EVERY route is gated on `team.manage` (super-admin only this
   // slice). The actor/principal comes ONLY from the session (gateTeam); the route/body `:userId` only
   // designates the TARGET (no mass-assignment). Lifecycle (suspend/remove/revoke) goes through the
