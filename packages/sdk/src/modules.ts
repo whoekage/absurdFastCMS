@@ -42,6 +42,7 @@ export interface SchemaRelation {
   kind: RelationKind;
   target: string;
   inverseField?: string;
+  displayField?: string;
 }
 
 /** One module as it lives on disk (`GET /builder/modules` element). Mirrors `@conti/api`'s `Schema`. */
@@ -135,6 +136,7 @@ export function projectSchemas(schemas: ModuleSchema[]): ModuleDefinition[] {
       target: r.target,
       owner: true,
       ...(r.inverseField !== undefined ? { inverseField: r.inverseField } : {}),
+      ...(r.displayField !== undefined ? { displayField: r.displayField } : {}),
     }));
     // Fold in the inverse side of every TWO-WAY relation any module declares against this one.
     for (const other of schemas) {

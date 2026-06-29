@@ -408,6 +408,9 @@ function coerce(field: RegistryField, v: unknown): unknown {
       if (field.length !== undefined && v.length > field.length) {
         throw new BodyParseError(`field "${name}" exceeds the maximum length ${field.length}`);
       }
+      if (field.min !== undefined && v.length < field.min) {
+        throw new BodyParseError(`field "${name}" must be at least ${field.min} character(s)`);
+      }
       return v;
     }
     case 'text':

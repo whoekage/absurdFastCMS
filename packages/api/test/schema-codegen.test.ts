@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateTypes } from '../src/db/schema/codegen.ts';
+import { generateTypes, generateSchemaSource } from '../src/db/schema/codegen.ts';
+import { parseSchema, stringifySchema } from '../src/db/schema/serialize.ts';
 import type { Schema } from '../src/db/schema/model.ts';
 
 /**
@@ -53,4 +54,33 @@ test('output is deterministic + name-sorted (diff-stable artifact)', () => {
   const b = generateTypes([{ ...article, name: 'zebra', id: 'ct_zebra' }, article]);
   assert.equal(a, b); // order-independent
   assert.ok(a.indexOf('interface Article') < a.indexOf('interface Zebra'), 'sorted by name');
+});
+
+// be-builder Stage 1 — the new field/relation metadata (min / editorWidth / condition / displayField) MUST
+// be emitted by generateSchemaSource AND accepted by the Zod boundary, or it is silently lost on the next
+// boot (the `info`/`label` lesson). These two tests pin both halves of the round-trip.
+const withMeta: Schema = {
+  id: 'ct_meta',
+  name: 'meta',
+  fields: [
+    {
+      id: 'f_title',
+      name: 'title',
+      type: 'string',
+      options: { length: 200, min: 3, nullable: false, editorWidth: 'half', condition: { field: 'active', op: 'eq', value: true, action: 'show' } },
+    },
+  ],
+  relations: [{ id: 'rel_a', field: 'author', kind: 'manyToOne', target: 'user', inverseField: 'posts', displayField: 'name' }],
+};
+
+test('generateSchemaSource emits min / editorWidth / condition / displayField', () => {
+  const src = generateSchemaSource(withMeta);
+  assert.match(src, /min: 3/);
+  assert.match(src, /editorWidth: "half"/);
+  assert.match(src, /condition: \{.*"field":"active".*"action":"show".*\}/);
+  assert.match(src, /displayField: "name"/);
+});
+
+test('parseSchema accepts + round-trips the new metadata (Zod boundary)', () => {
+  assert.deepEqual(parseSchema(stringifySchema(withMeta)), withMeta);
 });

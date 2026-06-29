@@ -55,10 +55,28 @@ export type EngineTypeIntent = ColumnType | 'i64' | 'decimal' | 'json';
 /** The three intent-only engine strings that must NEVER reach the engine column factory. */
 export const INTENT_ONLY_ENGINE_TYPES: ReadonlySet<EngineTypeIntent> = new Set<EngineTypeIntent>(['i64', 'decimal', 'json']);
 
+/**
+ * A field's conditional-visibility rule in the admin entry editor ("show/hide when <field> <op> <value>").
+ * METADATA ONLY — the engine stores every column regardless; this drives admin-form visibility, not storage.
+ */
+export interface FieldCondition {
+  /** The sibling field (name) this one's visibility depends on. */
+  field: string;
+  op: 'eq' | 'ne';
+  value: string | number | boolean;
+  action: 'show' | 'hide';
+}
+
 /** Per-field options the caller may supply; each type validates only the keys it cares about. */
 export interface FieldOptions {
   /** varchar length (char count) for string/email/uid/enumeration sizing. */
   length?: number;
+  /** minimum char length for string/email/uid — a WRITE-TIME lower bound (pairs with `length` as the max). */
+  min?: number;
+  /** admin editor layout width: 'full' (default, own row) or 'half' (two fields side-by-side). Metadata only. */
+  editorWidth?: 'full' | 'half';
+  /** admin conditional visibility. Metadata only (see {@link FieldCondition}). */
+  condition?: FieldCondition;
   /** numeric total digits (decimal). */
   precision?: number;
   /** numeric fractional digits (decimal). */
@@ -144,6 +162,13 @@ function intOption(value: unknown, name: string, min: number, max: number, fallb
   return value;
 }
 
+/** varchar params (length + optional validated `min` lower bound). `min` is a write-time char-count floor. */
+function varcharParams(o: FieldOptions | undefined, length: number): Record<string, unknown> {
+  const params: Record<string, unknown> = { length };
+  if (o?.min !== undefined) params.min = intOption(o.min, 'min', 0, length, 0);
+  return params;
+}
+
 /** Validate + dedup the `enumeration` value set; returns the distinct values and the longest length. */
 function resolveEnum(options: FieldOptions | undefined): { values: string[]; maxLen: number } {
   const values = options?.values;
@@ -165,10 +190,10 @@ function resolveEnum(options: FieldOptions | undefined): { values: string[]; max
  * throws {@link UnknownCmsTypeError} before any DDL string is built.
  */
 const RESOLVERS = {
-  string: (o) => ({ pgType: `varchar(${intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_STRING_LENGTH)})`, engineType: 'string', params: { length: intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_STRING_LENGTH) } }),
+  string: (o) => { const length = intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_STRING_LENGTH); return { pgType: `varchar(${length})`, engineType: 'string', params: varcharParams(o, length) }; },
   text: () => ({ pgType: 'text', engineType: 'text', params: {} }),
-  email: (o) => ({ pgType: `varchar(${intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_EMAIL_LENGTH)})`, engineType: 'string', params: { length: intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_EMAIL_LENGTH) } }),
-  uid: (o) => ({ pgType: `varchar(${intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_UID_LENGTH)})`, engineType: 'string', params: { length: intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_UID_LENGTH) } }),
+  email: (o) => { const length = intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_EMAIL_LENGTH); return { pgType: `varchar(${length})`, engineType: 'string', params: varcharParams(o, length) }; },
+  uid: (o) => { const length = intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_UID_LENGTH); return { pgType: `varchar(${length})`, engineType: 'string', params: varcharParams(o, length) }; },
   enumeration: (o) => {
     const { values, maxLen } = resolveEnum(o);
     // varchar sized >= the longest value char length (so a member never trips 22001), CHECK added by ddl.

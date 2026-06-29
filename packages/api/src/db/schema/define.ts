@@ -1,4 +1,4 @@
-import type { CmsType, ComponentFieldKind, FieldOptions } from '../type.catalog.ts';
+import type { CmsType, ComponentFieldKind, FieldOptions, FieldCondition } from '../type.catalog.ts';
 import type { RelationKind } from '../ddl.ts';
 import type { Schema, FieldSchema, RelationSchema } from './model.ts';
 
@@ -37,6 +37,7 @@ export interface RelationBuilder<T = unknown> {
   readonly relKind: RelationKind;
   readonly target: string;
   readonly inverse?: string;
+  readonly displayField?: string;
 }
 type AnyBuilder = FieldBuilder | RelationBuilder;
 
@@ -45,6 +46,10 @@ interface BaseOpts {
   id?: string;
   /** Defaults to TRUE (a field is nullable unless declared `nullable: false`). */
   nullable?: boolean;
+  /** Admin editor layout width — 'full' (default) or 'half' (two side-by-side). Metadata only. */
+  editorWidth?: 'full' | 'half';
+  /** Admin conditional visibility ("show when …"). Metadata only. */
+  condition?: FieldCondition;
 }
 /** Add `| null` to the inferred type unless the options literal says `nullable: false`. */
 type Nullable<T, O> = O extends { nullable: false } ? T : T | null;
@@ -58,53 +63,62 @@ function clean(o: Record<string, unknown>): FieldOptions {
 function field<T>(type: CmsType | ComponentFieldKind, options: FieldOptions, id?: string): FieldBuilder<T> {
   return id !== undefined ? { __kind: 'field', type, options, id } : { __kind: 'field', type, options };
 }
+/** The per-field metadata EVERY type carries (editor layout + conditional visibility); undefined-dropped by clean(). */
+function common(o?: BaseOpts): Record<string, unknown> {
+  return { editorWidth: o?.editorWidth, condition: o?.condition };
+}
 
-type StringOpts = BaseOpts & { max?: number; default?: string };
+type StringOpts = BaseOpts & { max?: number; min?: number; default?: string };
 type NumOpts = BaseOpts & { default?: number };
 type DecimalOpts = BaseOpts & { precision?: number; scale?: number; default?: number };
 type MediaOpts = BaseOpts & { multiple?: boolean };
-type RelOpts = { id?: string; kind: RelationKind; inverse?: string };
+type RelOpts = { id?: string; kind: RelationKind; inverse?: string; displayField?: string };
 
 /** The conti field-builder namespace (`c.string(...)`, `c.relation(...)`, ...). */
 export const c = {
   string: <O extends StringOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('string', clean({ length: o?.max, nullable: o?.nullable ?? true, default: o?.default }), o?.id),
+    field('string', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   text: <O extends BaseOpts & { default?: string } = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('text', clean({ nullable: o?.nullable ?? true, default: o?.default }), o?.id),
+    field('text', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   email: <O extends StringOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('email', clean({ length: o?.max, nullable: o?.nullable ?? true }), o?.id),
+    field('email', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   uid: <O extends StringOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('uid', clean({ length: o?.max, nullable: o?.nullable ?? true }), o?.id),
+    field('uid', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   uuid: <O extends BaseOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('uuid', clean({ nullable: o?.nullable ?? true }), o?.id),
+    field('uuid', clean({ nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   enum: <const V extends readonly string[], O extends BaseOpts = {}>(values: V, o?: O): FieldBuilder<Nullable<V[number], O>> =>
-    field('enumeration', clean({ values: [...values], nullable: o?.nullable ?? true }), o?.id),
+    field('enumeration', clean({ values: [...values], nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   integer: <O extends NumOpts = {}>(o?: O): FieldBuilder<Nullable<number, O>> =>
-    field('integer', clean({ nullable: o?.nullable ?? true, default: o?.default }), o?.id),
+    field('integer', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   biginteger: <O extends BaseOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> => // i64 serializes as string
-    field('biginteger', clean({ nullable: o?.nullable ?? true }), o?.id),
+    field('biginteger', clean({ nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   float: <O extends NumOpts = {}>(o?: O): FieldBuilder<Nullable<number, O>> =>
-    field('float', clean({ nullable: o?.nullable ?? true, default: o?.default }), o?.id),
+    field('float', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   decimal: <O extends DecimalOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> => // numeric serializes as string
-    field('decimal', clean({ precision: o?.precision, scale: o?.scale, nullable: o?.nullable ?? true }), o?.id),
+    field('decimal', clean({ precision: o?.precision, scale: o?.scale, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   boolean: <O extends BaseOpts & { default?: boolean } = {}>(o?: O): FieldBuilder<Nullable<boolean, O>> =>
-    field('boolean', clean({ nullable: o?.nullable ?? true, default: o?.default }), o?.id),
+    field('boolean', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   date: <O extends BaseOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('date', clean({ nullable: o?.nullable ?? true }), o?.id),
+    field('date', clean({ nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   datetime: <O extends BaseOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('datetime', clean({ nullable: o?.nullable ?? true }), o?.id),
+    field('datetime', clean({ nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   json: <O extends BaseOpts = {}>(o?: O): FieldBuilder<Nullable<unknown, O>> =>
-    field('json', clean({ nullable: o?.nullable ?? true }), o?.id),
+    field('json', clean({ nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   media: <O extends MediaOpts = {}>(o?: O): FieldBuilder<Nullable<O extends { multiple: true } ? number[] : number, O>> =>
-    field('media', clean({ multiple: o?.multiple ?? false, nullable: o?.nullable ?? true }), o?.id),
+    field('media', clean({ multiple: o?.multiple ?? false, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   component: <O extends BaseOpts = {}>(name: string, o?: O): FieldBuilder<Nullable<unknown, O>> =>
-    field('component', clean({ component: name, nullable: o?.nullable ?? true }), o?.id),
+    field('component', clean({ component: name, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   dynamiczone: (names: readonly string[], o?: { id?: string }): FieldBuilder<unknown[]> =>
     field('dynamiczone', clean({ components: [...names] }), o?.id),
   relation: <const O extends RelOpts>(target: string, o: O): RelationBuilder<O['kind'] extends 'oneToMany' | 'manyToMany' ? number[] : number | null> => {
-    const b: RelationBuilder<never> = o.inverse !== undefined
-      ? { __kind: 'relation', relKind: o.kind, target, inverse: o.inverse, ...(o.id !== undefined ? { id: o.id } : {}) }
-      : { __kind: 'relation', relKind: o.kind, target, ...(o.id !== undefined ? { id: o.id } : {}) };
+    const b: RelationBuilder<never> = {
+      __kind: 'relation',
+      relKind: o.kind,
+      target,
+      ...(o.inverse !== undefined ? { inverse: o.inverse } : {}),
+      ...(o.displayField !== undefined ? { displayField: o.displayField } : {}),
+      ...(o.id !== undefined ? { id: o.id } : {}),
+    };
     return b as never;
   },
 };
@@ -202,11 +216,10 @@ export function defToSchema(def: TypeDef, moduleName: string): Schema {
   const relations: RelationSchema[] = [];
   for (const [name, b] of Object.entries(def.fields)) {
     if (b.__kind === 'relation') {
-      relations.push(
-        b.inverse !== undefined
-          ? { id: b.id ?? name, field: name, kind: b.relKind, target: b.target, inverseField: b.inverse }
-          : { id: b.id ?? name, field: name, kind: b.relKind, target: b.target },
-      );
+      const rel: RelationSchema = { id: b.id ?? name, field: name, kind: b.relKind, target: b.target };
+      if (b.inverse !== undefined) rel.inverseField = b.inverse;
+      if (b.displayField !== undefined) rel.displayField = b.displayField;
+      relations.push(rel);
     } else {
       fields.push({ id: b.id ?? name, name, type: b.type, options: b.options });
     }

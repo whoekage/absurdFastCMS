@@ -87,6 +87,20 @@ export interface FieldOptions {
    * exist (checked at component-type definition). Distinct from a top-level (be-01) link-table relation.
    */
   target?: string;
+  /** minimum char length (string/email/uid) — write-time lower bound (pairs with `length` as max). */
+  min?: number;
+  /** admin editor layout width: 'full' (default) or 'half'. Metadata only. */
+  editorWidth?: 'full' | 'half';
+  /** admin conditional visibility ("show/hide when …"). Metadata only. */
+  condition?: FieldCondition;
+}
+
+/** A field's admin conditional-visibility rule. Metadata only (mirrors the api's FieldCondition). */
+export interface FieldCondition {
+  field: string;
+  op: 'eq' | 'ne';
+  value: string | number | boolean;
+  action: 'show' | 'hide';
 }
 
 /**
@@ -188,6 +202,8 @@ export interface RelationDefinition {
   owner: boolean;
   /** The partner field on the target — present only for a two-way relation. */
   inverseField?: string;
+  /** Which target field the relation picker shows/searches (admin metadata, read-side only). */
+  displayField?: string;
 }
 
 /**

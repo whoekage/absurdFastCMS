@@ -108,23 +108,29 @@ function fieldBuilderCall(f: FieldSchema): string {
   const nul = o.nullable === false ? ', nullable: false' : ''; // nullable defaults true ⇒ omit when true
   const def = o.default !== undefined ? `, default: ${lit(o.default)}` : '';
   const max = o.length !== undefined ? `, max: ${o.length}` : '';
+  const min = o.min !== undefined ? `, min: ${o.min}` : '';
+  // Common per-field metadata every type carries (editor layout + conditional visibility) — emit so it
+  // round-trips through the file (the `info`/`label` lesson: an un-emitted option is silently lost on boot).
+  const cm =
+    (o.editorWidth !== undefined ? `, editorWidth: ${lit(o.editorWidth)}` : '') +
+    (o.condition !== undefined ? `, condition: ${lit(o.condition)}` : '');
   switch (f.type) {
-    case 'string': return `c.string({ ${id}${max}${nul}${def} })`;
-    case 'text': return `c.text({ ${id}${nul}${def} })`;
-    case 'email': return `c.email({ ${id}${max}${nul} })`;
-    case 'uid': return `c.uid({ ${id}${max}${nul} })`;
-    case 'uuid': return `c.uuid({ ${id}${nul} })`;
-    case 'enumeration': return `c.enum(${lit(o.values ?? [])} as const, { ${id}${nul} })`;
-    case 'integer': return `c.integer({ ${id}${nul}${def} })`;
-    case 'biginteger': return `c.biginteger({ ${id}${nul} })`;
-    case 'float': return `c.float({ ${id}${nul}${def} })`;
-    case 'decimal': return `c.decimal({ ${id}${o.precision !== undefined ? `, precision: ${o.precision}` : ''}${o.scale !== undefined ? `, scale: ${o.scale}` : ''}${nul} })`;
-    case 'boolean': return `c.boolean({ ${id}${nul}${def} })`;
-    case 'date': return `c.date({ ${id}${nul} })`;
-    case 'datetime': return `c.datetime({ ${id}${nul} })`;
-    case 'json': return `c.json({ ${id}${nul} })`;
-    case 'media': return `c.media({ ${id}${o.multiple ? ', multiple: true' : ''}${nul} })`;
-    case 'component': return `c.component(${lit(o.component ?? '')}, { ${id}${nul} })`;
+    case 'string': return `c.string({ ${id}${max}${min}${nul}${def}${cm} })`;
+    case 'text': return `c.text({ ${id}${nul}${def}${cm} })`;
+    case 'email': return `c.email({ ${id}${max}${min}${nul}${cm} })`;
+    case 'uid': return `c.uid({ ${id}${max}${min}${nul}${cm} })`;
+    case 'uuid': return `c.uuid({ ${id}${nul}${cm} })`;
+    case 'enumeration': return `c.enum(${lit(o.values ?? [])} as const, { ${id}${nul}${cm} })`;
+    case 'integer': return `c.integer({ ${id}${nul}${def}${cm} })`;
+    case 'biginteger': return `c.biginteger({ ${id}${nul}${cm} })`;
+    case 'float': return `c.float({ ${id}${nul}${def}${cm} })`;
+    case 'decimal': return `c.decimal({ ${id}${o.precision !== undefined ? `, precision: ${o.precision}` : ''}${o.scale !== undefined ? `, scale: ${o.scale}` : ''}${nul}${cm} })`;
+    case 'boolean': return `c.boolean({ ${id}${nul}${def}${cm} })`;
+    case 'date': return `c.date({ ${id}${nul}${cm} })`;
+    case 'datetime': return `c.datetime({ ${id}${nul}${cm} })`;
+    case 'json': return `c.json({ ${id}${nul}${cm} })`;
+    case 'media': return `c.media({ ${id}${o.multiple ? ', multiple: true' : ''}${nul}${cm} })`;
+    case 'component': return `c.component(${lit(o.component ?? '')}, { ${id}${nul}${cm} })`;
     case 'dynamiczone': return `c.dynamiczone(${lit(o.components ?? [])}, { ${id} })`;
     default:
       throw new BuilderCodegenError(`field "${f.name}": type "${f.type}" is not yet expressible by the Builder codegen`);
@@ -134,7 +140,8 @@ function fieldBuilderCall(f: FieldSchema): string {
 /** The `c.relation(...)` call for an owner relation. */
 function relationBuilderCall(r: RelationSchema): string {
   const inv = r.inverseField !== undefined ? `, inverse: ${lit(r.inverseField)}` : '';
-  return `c.relation(${lit(r.target)}, { id: ${lit(r.id)}, kind: ${lit(r.kind)}${inv} })`;
+  const disp = r.displayField !== undefined ? `, displayField: ${lit(r.displayField)}` : '';
+  return `c.relation(${lit(r.target)}, { id: ${lit(r.id)}, kind: ${lit(r.kind)}${inv}${disp} })`;
 }
 
 /**

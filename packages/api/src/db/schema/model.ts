@@ -53,6 +53,17 @@ const fieldOptionsSchema = z
     component: z.string().optional(),
     components: z.array(z.string()).optional(),
     target: z.string().optional(),
+    min: z.number().int().min(0).optional(),
+    editorWidth: z.enum(['full', 'half']).optional(),
+    condition: z
+      .object({
+        field: z.string().min(1),
+        op: z.enum(['eq', 'ne']),
+        value: z.union([z.string(), z.number(), z.boolean()]),
+        action: z.enum(['show', 'hide']),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -74,6 +85,7 @@ const relationSchemaZ = z
     kind: z.enum(RELATION_KIND_LITERALS),
     target: z.string().min(1),
     inverseField: z.string().min(1).optional(),
+    displayField: z.string().min(1).optional(),
   })
   .strict();
 
@@ -125,6 +137,8 @@ export interface RelationSchema {
   kind: RelationKind;
   target: string;
   inverseField?: string;
+  /** Read-side display: which target field the relation picker shows/searches (admin metadata). */
+  displayField?: string;
 }
 
 /**
