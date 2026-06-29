@@ -24,11 +24,13 @@
     "db:down": "npm run db:down --workspace @conti/core",
     "db:migrate": "npm run db:migrate --workspace @conti/core",
     "lint": "biome lint",
-    "lint:layers": "biome lint packages/api/src"
+    "lint:layers": "biome lint packages/api/src",
+    "knip": "knip"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.1",
     "@conti/cli": "*",
-    "@testcontainers/postgresql": "^12.0.2"
+    "@testcontainers/postgresql": "^12.0.2",
+    "knip": "^6.23.0"
   }
 }

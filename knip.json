@@ -1,0 +1,43 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": ["**/routeTree.gen.ts"],
+  "ignoreBinaries": ["open", "tsup", "tsc"],
+  "workspaces": {
+    "packages/api": {
+      "entry": [
+        "src/index.ts",
+        "src/**/*.cli.ts",
+        "modules/**/schema.ts",
+        "modules/**/*.hooks.ts",
+        "tools/**/*.{ts,js,mjs}",
+        "bench/**/*.{ts,mjs}",
+        "experiments/**/*.ts",
+        "tsup.config.ts",
+        "test/global-setup.ts",
+        "test/**/*.test.ts"
+      ],
+      "project": ["src/**", "test/**"]
+    },
+    "packages/cli": {
+      "entry": ["src/cli.ts", "tsup.config.ts"],
+      "project": ["src/**"]
+    },
+    "packages/sdk": {
+      "entry": ["src/index.ts", "examples/**/*.ts", "test/global-setup.ts", "test/**/*.test.ts"],
+      "project": ["src/**", "test/**"],
+      "ignoreDependencies": ["postgres"]
+    },
+    "apps/admin": {
+      "entry": [
+        "src/main.tsx",
+        "src/routes/**/*.tsx",
+        "vite.config.ts",
+        "playwright.config.ts",
+        "e2e/**/*.ts",
+        "scripts/**/*.mjs"
+      ],
+      "project": ["src/**"],
+      "ignore": ["src/components/ui/**"]
+    }
+  }
+}
