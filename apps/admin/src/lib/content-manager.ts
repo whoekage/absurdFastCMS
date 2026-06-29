@@ -25,11 +25,6 @@ export const contentKeys = {
   detail: (name: string, id: string) => ['content', name, 'detail', id] as const,
 };
 
-/** System columns are loaded + materialized but never writable — they lead the projected field list. */
-export function systemFields(def: ModuleDefinition): FieldDefinition[] {
-  return def.fields.filter((f) => f.system);
-}
-
 /**
  * Derive the ORDERED list-table columns for a type from its definition.
  *
@@ -47,9 +42,4 @@ export function listColumns(def: ModuleDefinition, maxUserColumns = 5): string[]
 /** Index a definition's fields by name for O(1) lookup when rendering cells. */
 export function fieldMap(def: ModuleDefinition): Map<string, FieldDefinition> {
   return new Map(def.fields.map((f) => [f.name, f]));
-}
-
-/** A human-ish singular noun for a type's entries (used in headings / buttons / dialogs). */
-export function typeLabel(name: string): string {
-  return name;
 }

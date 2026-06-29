@@ -30,7 +30,7 @@ import type { TeamView } from './team.view.ts';
  * `RbacRegistry.checkPermission(principal, perm)` (which reads ONLY `principal.userId`) authorizes a key
  * request. The '!' chars are illegal in a base64url session token, so it can never collide with one.
  */
-export const SYNTHETIC_KEY_TOKEN = '!api-key!';
+const SYNTHETIC_KEY_TOKEN = '!api-key!';
 
 /** The result of a successful key resolution: the owner Principal + the key's effective scope set. */
 export interface KeyResolution {
@@ -45,7 +45,7 @@ export interface KeyResolution {
  * `Set{'content.read'}`. We also tolerate actions stored under ANY resource key (flatten every bucket), so
  * a hand-written scope is never silently dropped.
  */
-export const KEY_SCOPE_RESOURCE = 'cms';
+const KEY_SCOPE_RESOURCE = 'cms';
 
 /**
  * Flatten better-auth's parsed permissions object (`Record<resource, action[]>`, or null/undefined) into a
@@ -53,7 +53,7 @@ export const KEY_SCOPE_RESOURCE = 'cms';
  * `*`). Non-string entries are ignored defensively. The set is the token's SCOPE: the runtime rule
  * (effective = owner RBAC ∩ scope) can only NARROW the owner's authority.
  */
-export function parseScope(permissions: unknown): ReadonlySet<string> {
+function parseScope(permissions: unknown): ReadonlySet<string> {
   const out = new Set<string>();
   if (permissions === null || typeof permissions !== 'object') return out;
   for (const value of Object.values(permissions as Record<string, unknown>)) {

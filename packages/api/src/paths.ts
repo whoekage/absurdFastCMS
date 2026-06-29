@@ -14,7 +14,7 @@ import path from 'node:path';
  * plumbing or self-referencing, and it sidesteps the `require.resolve('@pkg/...')`-by-name pitfalls that
  * bite other CMSes under pnpm / non-hoisted layouts (e.g. directus/directus#14706).
  */
-export function packageRoot(): string {
+function packageRoot(): string {
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (;;) {
     if (existsSync(path.join(dir, 'package.json'))) return dir;

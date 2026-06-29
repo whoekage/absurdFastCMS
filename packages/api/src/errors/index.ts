@@ -4,8 +4,8 @@
  * {@link interpolate} primitives + {@link LOCALES} / {@link Locale}, and the two boundary helpers
  * {@link toErrorResponse} + {@link localeFromAcceptLanguage}.
  */
-export { AppError } from './app-error.ts';
-export { CATALOG, type ErrorCode } from './catalog.ts';
-export { LOCALES, render, interpolate, type Locale } from './render.ts';
+;
+export {  type ErrorCode } from './catalog.ts';
+export {    type Locale } from './render.ts';
 export { toErrorResponse } from './http.ts';
 export { localeFromAcceptLanguage } from './locale.ts';

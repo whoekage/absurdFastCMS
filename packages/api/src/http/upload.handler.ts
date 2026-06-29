@@ -126,4 +126,4 @@ export async function handleDeleteFile(ctx: FileContext, id: number): Promise<Co
   return single(200, deleted ?? asset);
 }
 
-export { ObjectNotFoundError };
+;

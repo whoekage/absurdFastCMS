@@ -454,7 +454,7 @@ function isAssetLike(v: unknown): v is AssetLike {
 }
 
 /** A 28px thumbnail (image) or a mime badge (non-image), with the filename as a tooltip. */
-export function MediaThumb({ asset }: { asset: AssetLike }): ReactNode {
+function MediaThumb({ asset }: { asset: AssetLike }): ReactNode {
   const isImage = asset.mime.startsWith('image/') && asset.url;
   if (isImage) {
     return (
@@ -514,7 +514,7 @@ export function getFieldHandler(cmsType: CmsType | ComponentFieldKind): FieldTyp
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Every CmsType, in a stable display order. Derived from the registry keys (the closed set). */
-export const CMS_TYPES: readonly CmsType[] = Object.keys(registry) as CmsType[];
+const CMS_TYPES: readonly CmsType[] = Object.keys(registry) as CmsType[];
 
 /**
  * cmsTypes the API genuinely supports end-to-end, hence offerable in the module builder.

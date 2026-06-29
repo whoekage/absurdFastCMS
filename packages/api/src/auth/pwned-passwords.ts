@@ -13,11 +13,11 @@ import { createHash } from 'node:crypto';
  */
 
 /** The HIBP k-anonymity range endpoint. The full hash / password NEVER leaves this process. */
-export const PWNED_RANGE_ENDPOINT = 'https://api.pwnedpasswords.com/range';
+const PWNED_RANGE_ENDPOINT = 'https://api.pwnedpasswords.com/range';
 /** HIBP returns HTTP 403 for a missing/abusive User-Agent — identify THIS consumer (their explicit ask). */
-export const PWNED_USER_AGENT = 'conti-cms-pwned-check';
+const PWNED_USER_AGENT = 'conti-cms-pwned-check';
 /** A HIBP call sits in the sign-up critical path; cap it so a slow HIBP can't hang auth (we fail open). */
-export const PWNED_TIMEOUT_MS = 2500;
+const PWNED_TIMEOUT_MS = 2500;
 
 export interface PwnedQueryOptions {
   /** Override the range endpoint (tests point this at an unreachable host to exercise the fail-open path). */

@@ -20,7 +20,7 @@ let _sql: Sql | undefined;
 let _owned = false;
 
 /** The dedicated postgres.js handle for auth traffic (lazily opened; reused thereafter). */
-export function authSql(): Sql {
+function authSql(): Sql {
   if (_sql === undefined) {
     _sql = createSql();
     _owned = true;

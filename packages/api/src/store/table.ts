@@ -110,7 +110,7 @@ export interface KeysetResult {
 }
 
 /** A typed error for a keyset request the table can't seek (no `id` field, or a json sort key). */
-export class KeysetUnsupportedError extends AppError {
+class KeysetUnsupportedError extends AppError {
   constructor(message: string) {
     super('store.keyset_unsupported', { detail: message });
   }

@@ -22,7 +22,7 @@ import { AppError } from '../errors/app-error.ts';
  * lower-`[a-z0-9]` extension. e.g. `ab/cd/abcd…<64 hex>.png`. NOTHING outside this alphabet is allowed,
  * so a key is structurally incapable of path traversal.
  */
-export const STORAGE_KEY_RE = /^[a-f0-9]{2}\/[a-f0-9]{2}\/[a-f0-9]{64}(\.[a-z0-9]+)?$/;
+const STORAGE_KEY_RE = /^[a-f0-9]{2}\/[a-f0-9]{2}\/[a-f0-9]{64}(\.[a-z0-9]+)?$/;
 
 /** The two backends a {@link StorageProvider} can be. Recorded in `files.provider`. */
 export type ProviderName = 'local' | 's3';

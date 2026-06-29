@@ -38,7 +38,7 @@
  */
 
 /** Minimum needle length that yields a trigram; shorter needles fall back to the brute scan. */
-export const MIN_TRIGRAM_LEN = 3;
+const MIN_TRIGRAM_LEN = 3;
 
 /**
  * How many of the rarest needle trigrams to intersect. Intersecting the rarest postings first

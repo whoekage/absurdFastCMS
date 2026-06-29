@@ -20,7 +20,7 @@ import { AppError } from '../../errors/app-error.ts';
  * IR directly (never re-imports).
  */
 
-export class SchemaLoadError extends AppError {
+class SchemaLoadError extends AppError {
   readonly file: string;
   constructor(file: string, reason: string) {
     super('db.schema.load', { file: JSON.stringify(file), reason });

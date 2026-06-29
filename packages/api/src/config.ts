@@ -413,6 +413,6 @@ export const config = {
  * Helper functions for environment checks.
  * Safe to call anywhere as they just check the cached NODE_ENV value.
  */
-export const isDevelopment = (): boolean => config.nodeEnv === 'development';
-export const isTest = (): boolean => config.nodeEnv === 'test';
-export const isProduction = (): boolean => config.nodeEnv === 'production';
+const isDevelopment = (): boolean => config.nodeEnv === 'development';
+const isTest = (): boolean => config.nodeEnv === 'test';
+const isProduction = (): boolean => config.nodeEnv === 'production';

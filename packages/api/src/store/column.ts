@@ -223,7 +223,7 @@ function toNumberSet(value: unknown): Set<number> {
 }
 
 /** Boolean column packed one byte per row (0/1). Only eq/ne are meaningful. */
-export class BoolColumn implements Column {
+class BoolColumn implements Column {
   readonly type = 'bool';
   private data = new Uint8Array(INITIAL_CAPACITY);
   length = 0;
@@ -396,7 +396,7 @@ export function coerceDate(value: unknown): number {
  * poison the radix key. A NULL row stores the dense sentinel 0 (a real instant, harmless because the
  * null bit excludes it from every comparison result) and its bit is set in the Table's null plane.
  */
-export class DateColumn implements Column {
+class DateColumn implements Column {
   readonly type = 'date';
   private data = new Float64Array(INITIAL_CAPACITY);
   length = 0;

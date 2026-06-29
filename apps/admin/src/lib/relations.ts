@@ -29,7 +29,7 @@ export type RelationCardinality = 'toOne' | 'toMany';
  * The picker only cares whether THIS side holds one related row or many: `manyToOne`/`oneToOne` are
  * to-ONE (this owner points at a single target row); `oneToMany`/`manyToMany` are to-MANY.
  */
-export function cardinalityOf(kind: RelationKind): RelationCardinality {
+function cardinalityOf(kind: RelationKind): RelationCardinality {
   return kind === 'manyToOne' || kind === 'oneToOne' ? 'toOne' : 'toMany';
 }
 
@@ -79,7 +79,7 @@ export interface RelationFieldConfig {
 const MAX_INT4 = 2147483647;
 
 /** True when `n` is a valid related-row id (positive int4 integer). */
-export function isValidRelationId(n: number): n is RelationId {
+function isValidRelationId(n: number): n is RelationId {
   return Number.isInteger(n) && n > 0 && n <= MAX_INT4;
 }
 
@@ -114,27 +114,6 @@ export function buildSetOp(ids: readonly RelationId[], cardinality: RelationCard
     return { set: deduped.length > 0 ? [deduped[0] as RelationId] : [] };
   }
   return { set: deduped };
-}
-
-/**
- * Build a `{ connect, disconnect }` op (ADD / REMOVE edges) — the surgical alternative to `set`.
- * `connect` adds, `disconnect` removes; combinable (server applies disconnect-THEN-connect). Mutually
- * exclusive with `set`. Empty arrays are omitted. For a to-one relation `connect` keeps at most one id.
- * Returns `null` when there is nothing to do (both empty).
- */
-export function buildConnectDisconnectOp(
-  connect: readonly RelationId[],
-  disconnect: readonly RelationId[],
-  cardinality: RelationCardinality,
-): RelationInput | null {
-  let conn = dedupe(connect);
-  if (cardinality === 'toOne' && conn.length > 1) conn = [conn[0] as RelationId];
-  const disc = dedupe(disconnect);
-  if (conn.length === 0 && disc.length === 0) return null;
-  const op: { connect?: RelationId[]; disconnect?: RelationId[] } = {};
-  if (conn.length > 0) op.connect = conn;
-  if (disc.length > 0) op.disconnect = disc;
-  return op;
 }
 
 // ── populate display helpers ──────────────────────────────────────────────────────────────────

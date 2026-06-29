@@ -60,7 +60,7 @@ export interface RecentEntry {
  */
 const TITLE_FIELD_CANDIDATES = ['title', 'name', 'label', 'heading', 'slug'] as const;
 
-export function entryTitle(entry: Entry, def: ModuleDefinition): string {
+function entryTitle(entry: Entry, def: ModuleDefinition): string {
   for (const key of TITLE_FIELD_CANDIDATES) {
     const v = entry[key];
     if (typeof v === 'string' && v.trim() !== '') return v;

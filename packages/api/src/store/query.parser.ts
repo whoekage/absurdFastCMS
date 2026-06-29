@@ -181,7 +181,7 @@ export type QuerySchema = Map<string, SchemaEntry>;
 /** Relations Slice 4: max RELATION HOPS in a single filter chain (`a.b.c`). A deeper chain -> 400.
  * Counts relation hops ONLY, NOT `$and`/`$or`/`$not` nesting. The sole terminator for a self-
  * referential / cyclic relation filter (resolveTarget returns the same-shaped context each hop). */
-export const MAX_RELATION_HOPS = 3;
+const MAX_RELATION_HOPS = 3;
 
 /**
  * Relations Slice 5: max literal `[populate]` NESTING levels in a populate query key. INDEPENDENT of
@@ -190,7 +190,7 @@ export const MAX_RELATION_HOPS = 3;
  * a clean 400 (QueryParseError) instead of blowing the call stack (RangeError -> unhandled 500 / DoS).
  * Set above the execution cap so any query that COULD be expanded still parses; anything deeper is junk.
  */
-export const MAX_POPULATE_NESTING = 8;
+const MAX_POPULATE_NESTING = 8;
 
 /**
  * Relations Slice 4 — the parse-time context the Engine supplies so the parser can (i) tell a

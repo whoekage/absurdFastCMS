@@ -14,7 +14,7 @@ export type Locale = (typeof LOCALES)[number];
  * pass — a replacement value that itself contains `{...}` is NEVER re-scanned, so a freeform `{detail}`
  * whose message happens to contain braces stays byte-identical.
  */
-export function interpolate(tpl: string, params: Record<string, unknown>): string {
+function interpolate(tpl: string, params: Record<string, unknown>): string {
   return tpl.replace(/\{(\w+)\}/g, (match: string, name: string) =>
     Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match,
   );

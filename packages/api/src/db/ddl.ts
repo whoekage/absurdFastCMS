@@ -38,11 +38,11 @@ const compiler: Kysely<Record<string, never>> = new Kysely<Record<string, never>
 // --- identifier-safety constants ---------------------------------------------------------------
 
 /** ASCII-only allowlist: first char a letter/underscore, rest letters/digits/underscore/`$`. No `u`/`i`. */
-export const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 /** PG truncates identifiers at 63 BYTES (not chars) -> a longer name silently collides; reject it. */
-export const MAX_IDENTIFIER_BYTES = 63;
+const MAX_IDENTIFIER_BYTES = 63;
 /** The reserved per-type table prefix. A user name may not start with it (we add it ourselves). */
-export const TABLE_PREFIX = 'ct_';
+const TABLE_PREFIX = 'ct_';
 /** System columns the generator injects; a user cannot define a field with one of these names. */
 // `published_at` (snake_case) is the Draft & Publish system column — reserved on EVERY type (D&P or
 // not), cheap + uniform, so a non-D&P type cannot declare a column that would collide if it later opted
@@ -50,9 +50,9 @@ export const TABLE_PREFIX = 'ct_';
 // NOT reserved — only the snake_case underscore form is, so the seed field keeps working byte-identically.
 // `locale` (snake_case) is the i18n system column — reserved on EVERY type (i18n or not), so a non-i18n
 // type cannot declare a column that would collide if it later opted in, and a client cannot spoof one.
-export const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(['id', 'document_id', 'created_at', 'updated_at', 'published_at', 'locale']);
+const RESERVED_FIELD_NAMES: ReadonlySet<string> = new Set(['id', 'document_id', 'created_at', 'updated_at', 'published_at', 'locale']);
 /** Tables/api_ids a user type may not collide with. */
-export const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['content_types', 'content_type_fields', 'content_type_relations', 'component_types', 'component_type_fields', 'files', '_migrations', '_schema_applied']);
+const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set(['content_types', 'content_type_fields', 'content_type_relations', 'component_types', 'component_type_fields', 'files', '_migrations', '_schema_applied']);
 
 // --- typed error classes (deterministic; never leak a raw PG error) ----------------------------
 
@@ -96,7 +96,7 @@ export class DuplicateFieldError extends AppError {
     this.value = value;
   }
 }
-export class ModuleExistsError extends AppError {
+class ModuleExistsError extends AppError {
   readonly module: string;
   constructor(module: string) {
     super('db.ddl.module_exists', { name: JSON.stringify(module) });
@@ -104,7 +104,7 @@ export class ModuleExistsError extends AppError {
     this.module = module;
   }
 }
-export class FieldExistsError extends AppError {
+class FieldExistsError extends AppError {
   readonly value: string;
   constructor(value: string) {
     super('db.ddl.field_exists', { value: JSON.stringify(value) });
@@ -118,7 +118,7 @@ export class DefaultTypeError extends AppError {
     this.name = 'DefaultTypeError';
   }
 }
-export class TypeChangeFailedError extends AppError {
+class TypeChangeFailedError extends AppError {
   constructor(message: string) {
     super('db.ddl.type_change_failed', { detail: message });
     this.name = 'TypeChangeFailedError';
@@ -130,7 +130,7 @@ export class SchemaChangeConflictError extends AppError {
     this.name = 'SchemaChangeConflictError';
   }
 }
-export class UnknownRelationKindError extends AppError {
+class UnknownRelationKindError extends AppError {
   readonly value: unknown;
   constructor(value: unknown) {
     super('db.ddl.unknown_relation_kind', { value: JSON.stringify(value) });
@@ -541,7 +541,7 @@ export function compileCreateLinkTable(linkTable: string, ownerTable: string, ta
 // --- the single atomic transactional applier ---------------------------------------------------
 
 /** Advisory-lock key derived from a table name (stable 31-bit hash). Serializes changes per type. */
-export function advisoryKey(tableName: string): number {
+function advisoryKey(tableName: string): number {
   let h = 0;
   for (let i = 0; i < tableName.length; i++) h = (Math.imul(h, 31) + tableName.charCodeAt(i)) | 0;
   return h & 0x7fffffff;
@@ -570,7 +570,7 @@ function extractConstraint(detail: string | undefined): string | undefined {
  * typed errors OUTSIDE the transaction (never try/catch-and-continue inside — that poisons the tx).
  * The advisory lock serializes concurrent schema changes on the same table (queue, not deadlock).
  */
-export async function runSchemaTx<T>(sql: Sql, tableName: string, work: (tx: Sql) => Promise<T>): Promise<T> {
+async function runSchemaTx<T>(sql: Sql, tableName: string, work: (tx: Sql) => Promise<T>): Promise<T> {
   try {
     return await sql.begin(async (tx) => {
       await tx`SET LOCAL lock_timeout = '5s'`;

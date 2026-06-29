@@ -134,7 +134,7 @@ const NUMERIC_MAX_PRECISION = 1000;
  * rejected in Step 2 — only CONSTANT defaults are allowed. Matched case-insensitively against the
  * function name, with or without a trailing `()`.
  */
-export const VOLATILE_DEFAULT_NAMES: ReadonlySet<string> = new Set(['now', 'current_timestamp', 'gen_random_uuid', 'uuid_generate_v4', 'random', 'nextval', 'clock_timestamp', 'statement_timestamp', 'transaction_timestamp']);
+const VOLATILE_DEFAULT_NAMES: ReadonlySet<string> = new Set(['now', 'current_timestamp', 'gen_random_uuid', 'uuid_generate_v4', 'random', 'nextval', 'clock_timestamp', 'statement_timestamp', 'transaction_timestamp']);
 
 /** Validate a positive integer option in `[min, max]`, else throw {@link TypeOptionError}. */
 function intOption(value: unknown, name: string, min: number, max: number, fallback: number): number {
@@ -238,7 +238,7 @@ export function resolveType(cmsType: CmsType, options?: FieldOptions): ResolvedT
  *                          link table, no CSR, no inverse side, not independently queryable).
  */
 export type ComponentFieldKind = 'component' | 'component-repeatable' | 'dynamiczone' | 'relation';
-export const COMPONENT_FIELD_KINDS: ReadonlySet<string> = new Set<ComponentFieldKind>(['component', 'component-repeatable', 'dynamiczone', 'relation']);
+const COMPONENT_FIELD_KINDS: ReadonlySet<string> = new Set<ComponentFieldKind>(['component', 'component-repeatable', 'dynamiczone', 'relation']);
 
 /** Closed-set test: is this cms_type one of the structured-content component kinds? */
 export function isComponentFieldKind(value: unknown): value is ComponentFieldKind {

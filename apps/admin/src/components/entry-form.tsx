@@ -36,7 +36,7 @@ import {
  * <MediaPicker> and their value is merged into the body separately (mirroring how relations are handled
  * out-of-band). Excluding them here keeps buildInitialValues / toWriteBody on the scalar path only.
  */
-export function editableFields(def: ModuleDefinition): FieldDefinition[] {
+function editableFields(def: ModuleDefinition): FieldDefinition[] {
   return def.fields.filter((f) => !f.system && !isMediaField(f));
 }
 
@@ -110,7 +110,7 @@ export function buildInitialRelationRows(
 }
 
 /** Lower the controlled form values back into a flat write body (wire-shaped scalars). */
-export function toWriteBody(def: ModuleDefinition, values: EntryFormValues): WriteBody {
+function toWriteBody(def: ModuleDefinition, values: EntryFormValues): WriteBody {
   const body: WriteBody = {};
   for (const field of editableFields(def)) {
     const handler = getFieldHandler(field.cmsType);
@@ -127,7 +127,7 @@ export function toWriteBody(def: ModuleDefinition, values: EntryFormValues): Wri
  * emit a `{ set }` op REPLACING the related set: the picker always presents the full desired set, so a
  * `set` matches its semantics exactly (to-one → `{ set: [id] }` / `{ set: [] }`; to-many → `{ set: ids }`).
  */
-export function applyRelationOps(
+function applyRelationOps(
   body: WriteBody,
   relationFields: RelationFieldConfig[],
   selections: RelationSelections,

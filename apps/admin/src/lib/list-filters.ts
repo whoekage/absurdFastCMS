@@ -27,7 +27,7 @@ import type {
 export type FilterKind = 'text' | 'numeric' | 'date' | 'enum' | 'boolean';
 
 /** Map a cmsType to its {@link FilterKind}. The closed CmsType set means this `switch` is exhaustive. */
-export function filterKind(cmsType: CmsType): FilterKind {
+function filterKind(cmsType: CmsType): FilterKind {
   switch (cmsType) {
     case 'string':
     case 'text':
@@ -165,7 +165,7 @@ export const RANGE_OPERATORS: ReadonlySet<FilterOperator> = new Set<FilterOperat
  * Keeping values as STRINGS is deliberate — bigint/decimal precision is preserved (never coerced to
  * a JS number) and the whole row serializes straight into the URL.
  */
-export const filterRowSchema = z.object({
+const filterRowSchema = z.object({
   field: z.string().min(1),
   op: z.string().min(1),
   value: z.array(z.string()).default([]),
@@ -173,11 +173,11 @@ export const filterRowSchema = z.object({
 export type FilterRow = z.infer<typeof filterRowSchema>;
 
 /** Sort direction. */
-export const sortDirSchema = z.enum(['asc', 'desc']);
+const sortDirSchema = z.enum(['asc', 'desc']);
 export type SortDir = z.infer<typeof sortDirSchema>;
 
 /** One sort key (field + direction). Multi-key sort is an ordered list of these. */
-export const sortKeySchema = z.object({
+const sortKeySchema = z.object({
   field: z.string().min(1),
   dir: sortDirSchema,
 });
@@ -287,7 +287,7 @@ function rowCondition(row: FilterRow, field: FieldDefinition): FilterCondition |
  * a schema change) or whose value is empty are dropped. Returns `undefined` when there is nothing to
  * filter (so the SDK omits `filters` entirely).
  */
-export function buildFilters(
+function buildFilters(
   search: ListSearch,
   def: ModuleDefinition,
   byName: Map<string, FieldDefinition>,
@@ -317,7 +317,7 @@ export function buildFilters(
 }
 
 /** Map the sort-key list to the SDK `sort` param (`['field:dir', ...]`). Empty → `undefined`. */
-export function buildSort(search: ListSearch): string[] | undefined {
+function buildSort(search: ListSearch): string[] | undefined {
   if (search.sort.length === 0) return undefined;
   return search.sort.map((k) => `${k.field}:${k.dir}`);
 }

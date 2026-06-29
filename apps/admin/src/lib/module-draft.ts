@@ -25,7 +25,7 @@ const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 const MAX_IDENTIFIER_LENGTH = 63;
 
 /** Validate an name / field name / relation field; returns an error message or null when valid. */
-export function validateIdentifier(value: string, label = 'Name'): string | null {
+function validateIdentifier(value: string, label = 'Name'): string | null {
   if (value.length === 0) return `${label} is required`;
   if (value.length > MAX_IDENTIFIER_LENGTH) return `${label} must be ≤ ${MAX_IDENTIFIER_LENGTH} characters`;
   if (!IDENTIFIER_RE.test(value)) {
@@ -89,7 +89,7 @@ export function emptyFieldDraft(): FieldDraft {
 }
 
 /** Is this field type editable by the builder form (vs. authored-in-code components/inline-relations)? */
-export function isAuthorableField(type: FieldSchema['type']): type is CmsType {
+function isAuthorableField(type: FieldSchema['type']): type is CmsType {
   return (BUILDER_CMS_TYPES as readonly string[]).includes(type);
 }
 
@@ -102,7 +102,7 @@ function defaultToString(value: unknown): string {
 }
 
 /** Seed a draft from a loaded {@link FieldSchema} (the edit form). Preserves `id`; round-trips non-authorable. */
-export function draftFromField(field: FieldSchema): FieldDraft {
+function draftFromField(field: FieldSchema): FieldDraft {
   const base: FieldDraft = {
     key: nextKey('field'),
     id: field.id,
@@ -122,7 +122,7 @@ export function draftFromField(field: FieldSchema): FieldDraft {
 }
 
 /** Validate a single field draft; returns an error message or null. (Raw/authored-in-code fields skip.) */
-export function validateFieldDraft(draft: FieldDraft): string | null {
+function validateFieldDraft(draft: FieldDraft): string | null {
   if (draft.raw) return null;
   const nameError = validateIdentifier(draft.name, 'Field name');
   if (nameError) return nameError;
@@ -168,7 +168,7 @@ function draftOptions(draft: FieldDraft): FieldOptions {
 }
 
 /** Lower a draft to a wire field. A non-authorable field round-trips its `raw` verbatim (id + options kept). */
-export function draftToField(draft: FieldDraft): Omit<FieldSchema, 'id'> & { id?: string } {
+function draftToField(draft: FieldDraft): Omit<FieldSchema, 'id'> & { id?: string } {
   if (draft.raw) return draft.raw;
   return {
     ...(draft.id !== undefined ? { id: draft.id } : {}),
@@ -204,9 +204,6 @@ function parseDefault(draft: FieldDraft): unknown {
 
 // ── relation drafts ──────────────────────────────────────────────────────────────────────────────
 
-/** The 4 relation cardinalities, in display order. */
-export const RELATION_KINDS: readonly RelationKind[] = ['oneToOne', 'oneToMany', 'manyToOne', 'manyToMany'];
-
 /** The editable draft for one top-level relation. */
 export interface RelationDraft {
   key: string;
@@ -223,7 +220,7 @@ export function emptyRelationDraft(target = ''): RelationDraft {
 }
 
 /** Seed a relation draft from a loaded {@link RelationSchema}. Preserves `id`. */
-export function relationFromSchema(rel: RelationSchema): RelationDraft {
+function relationFromSchema(rel: RelationSchema): RelationDraft {
   return {
     key: nextKey('rel'),
     id: rel.id,
@@ -235,7 +232,7 @@ export function relationFromSchema(rel: RelationSchema): RelationDraft {
 }
 
 /** Validate a relation draft against the available module moduleNames; returns an error or null. */
-export function validateRelationDraft(draft: RelationDraft, targets: readonly string[]): string | null {
+function validateRelationDraft(draft: RelationDraft, targets: readonly string[]): string | null {
   const fieldError = validateIdentifier(draft.field, 'Relation field');
   if (fieldError) return fieldError;
   if (draft.target.trim() === '') return 'Relation needs a target module';
@@ -249,7 +246,7 @@ export function validateRelationDraft(draft: RelationDraft, targets: readonly st
 }
 
 /** Lower a relation draft to the wire shape. */
-export function draftToRelation(draft: RelationDraft): Omit<RelationSchema, 'id'> & { id?: string } {
+function draftToRelation(draft: RelationDraft): Omit<RelationSchema, 'id'> & { id?: string } {
   const inverse = draft.inverseField.trim();
   return {
     ...(draft.id !== undefined ? { id: draft.id } : {}),

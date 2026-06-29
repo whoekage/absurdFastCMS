@@ -23,7 +23,7 @@ export type Theme = 'light' | 'dark' | 'system';
 export type ResolvedTheme = 'light' | 'dark';
 
 /** localStorage key — MUST match the bootstrap script in index.html. */
-export const THEME_STORAGE_KEY = 'absurd-admin-theme';
+const THEME_STORAGE_KEY = 'absurd-admin-theme';
 
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 

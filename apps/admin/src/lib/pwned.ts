@@ -7,7 +7,7 @@
  * browser sends its own User-Agent (HIBP needs one) and crypto.subtle works on https + http://localhost.
  */
 
-export const PWNED_RANGE_ENDPOINT = 'https://api.pwnedpasswords.com/range';
+const PWNED_RANGE_ENDPOINT = 'https://api.pwnedpasswords.com/range';
 const PWNED_TIMEOUT_MS = 2500;
 
 export type PwnedVerdict = 'ok' | 'compromised' | 'unavailable';

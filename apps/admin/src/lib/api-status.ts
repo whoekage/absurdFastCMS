@@ -20,11 +20,11 @@ import { api } from '@/lib/api';
 export type ApiStatus = 'online' | 'offline' | 'checking';
 
 /** Is a thrown value a transport/network failure (as opposed to a server HTTP error)? */
-export function isNetworkError(err: unknown): boolean {
+function isNetworkError(err: unknown): boolean {
   return err != null && !(err instanceof ApiError);
 }
 
-export const apiHealthKey = ['api-health'] as const;
+const apiHealthKey = ['api-health'] as const;
 
 const HEALTH_REFETCH_MS = 30_000;
 

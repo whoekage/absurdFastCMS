@@ -54,7 +54,7 @@ function idsFromValue(value: unknown): number[] {
 }
 
 /** Coerce a populated media value into the FileAsset record(s) (to seed the picker thumbnails). */
-export function assetsFromValue(value: unknown): FileAsset[] {
+function assetsFromValue(value: unknown): FileAsset[] {
   if (value === null || value === undefined) return [];
   const list = Array.isArray(value) ? value : [value];
   return list.filter((v): v is FileAsset => v !== null && typeof v === 'object' && 'id' in v && 'mime' in v);

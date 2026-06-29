@@ -48,7 +48,7 @@ export function fieldSchemaToSpec(f: FieldSchema): FieldSpec {
   return spec;
 }
 
-export function schemaToFieldSpecs(schema: Schema): FieldSpec[] {
+function schemaToFieldSpecs(schema: Schema): FieldSpec[] {
   return schema.fields.map(fieldSchemaToSpec);
 }
 

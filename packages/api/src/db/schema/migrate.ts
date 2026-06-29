@@ -67,7 +67,7 @@ export class MigrationBlockedError extends AppError {
 }
 
 /** Raised for a change-set op whose apply is not yet implemented (draft&publish / i18n toggle). */
-export class MigrationUnsupportedError extends AppError {
+class MigrationUnsupportedError extends AppError {
   constructor(message: string) {
     super('db.migration.unsupported', { detail: message });
     this.name = 'MigrationUnsupportedError';
@@ -127,7 +127,7 @@ export function describeChange(c: Change): string {
  * Pure lint gate: the changes that BLOCK the migration. `forbidden` always blocks; `destructive` and
  * `data-dependent` block unless `allowDestructive`. Exposed for the `conti migrate lint` command path.
  */
-export function lint(cs: ChangeSet, allowDestructive: boolean): readonly Change[] {
+function lint(cs: ChangeSet, allowDestructive: boolean): readonly Change[] {
   return cs.changes.filter(
     (c) => c.risk === 'forbidden' || (!allowDestructive && (c.risk === 'destructive' || c.risk === 'data-dependent')),
   );
@@ -322,7 +322,7 @@ interface RenameStep {
  *     its old name for the predecessor; the cycle then unwinds as a chain and the temp lands last.
  * This is the temp-name staging that makes a swap lossless inside the ONE migrate transaction.
  */
-export function planRenameSteps(renames: readonly { from: string; to: string; fieldId: string }[]): RenameStep[] {
+function planRenameSteps(renames: readonly { from: string; to: string; fieldId: string }[]): RenameStep[] {
   const steps: RenameStep[] = [];
   const occupied = new Set(renames.map((r) => r.from)); // names still held by a not-yet-applied source column
   const universe = new Set<string>(); // every name in play — keeps a generated temp from colliding

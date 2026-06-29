@@ -30,4 +30,4 @@ export function resetStorageProvider(): void {
 }
 
 export type { StorageProvider, ProviderName } from './provider.ts';
-export { ObjectNotFoundError } from './provider.ts';
+;

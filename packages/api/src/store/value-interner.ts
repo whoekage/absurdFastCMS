@@ -199,7 +199,7 @@ const DENSE_SPAN_RATIO = 4;
  * columns (i64 / decimal) get their OWN exact-64-bit {@link BigIntInterner} — they NEVER route here, so
  * there is no lossy `Number(bigint)` projection in the dictionary (which would conflate >2^53 values).
  */
-export class DenseIntInterner implements ValueInterner {
+class DenseIntInterner implements ValueInterner {
   // ── collect phase ────────────────────────────────────────────────────────────────────────────
   private collected: Float64Array = new Float64Array(1024);
   private collectCount = 0;
@@ -313,7 +313,7 @@ export class DenseIntInterner implements ValueInterner {
  * Codes are assigned in first-seen order (matching the old `Map<unknown,number>` exactly). This is the
  * monomorphic interner for the `i64` and `decimal` column types; it never touches the f64 dense path.
  */
-export class BigIntInterner implements ValueInterner {
+class BigIntInterner implements ValueInterner {
   private slots: Int32Array; // slot -> code+1 (>=1 occupied) or SLOT_EMPTY
   private slotMask: number;
   private keys: BigInt64Array; // code -> exact 64-bit value
@@ -405,7 +405,7 @@ export class BigIntInterner implements ValueInterner {
  * only narrows the `unknown` value to `string` at the boundary (EqIndex's string column only ever feeds
  * strings — including the '' null sentinel, which interns to a real code, never confused with NULL).
  */
-export class StringValueInterner implements ValueInterner {
+class StringValueInterner implements ValueInterner {
   private readonly inner = new OffHeapStringInterner();
   intern(v: unknown): number {
     return this.inner.intern(v as string);
@@ -426,7 +426,7 @@ export class StringValueInterner implements ValueInterner {
  * tier (cardinality <= 2), so there is zero memory pressure; codes are assigned in first-seen order to
  * match the old Map exactly. `size()` reports the distinct count actually seen (0, 1, or 2).
  */
-export class BoolInterner implements ValueInterner {
+class BoolInterner implements ValueInterner {
   private sawFalse = false;
   private sawTrue = false;
   private codeFalse = -1;
