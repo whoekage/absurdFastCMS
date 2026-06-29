@@ -96,28 +96,28 @@ function normalizeIntString(s: string): string {
 
 /**
  * Index a definition's fields by name once, so decode/encode are O(keys) not O(keys × fields). A be-05
- * component / dynamic-zone field's cmsType is one of the structured-content kinds (not a scalar
+ * component / dynamic-zone field's type is one of the structured-content kinds (not a scalar
  * {@link CmsType}); it is skipped here so its value passes through {@link decodeValue}'s unknown-type
  * passthrough verbatim (the inline component tree is already-parsed JSON — no scalar decode applies).
  */
 function fieldTypeIndex(def: ModuleDefinition): Map<string, CmsType> {
   const idx = new Map<string, CmsType>();
   const scalar = new Set<string>(['string', 'text', 'email', 'uid', 'enumeration', 'integer', 'biginteger', 'float', 'decimal', 'boolean', 'date', 'datetime', 'time', 'json', 'array', 'uuid', 'media']);
-  for (const f of def.fields) if (scalar.has(f.cmsType)) idx.set(f.name, f.cmsType as CmsType);
+  for (const f of def.fields) if (scalar.has(f.type)) idx.set(f.name, f.type as CmsType);
   return idx;
 }
 
 /**
- * Decode ONE wire value for a known `cmsType`, honoring {@link DecodeOptions}. Pure, total: a `null`
+ * Decode ONE wire value for a known `type`, honoring {@link DecodeOptions}. Pure, total: a `null`
  * (nullable field, absent value) passes straight through; an unknown/unmapped type is returned as-is.
  *
  * INVARIANT: biginteger/decimal are never sent through `Number()`. The only richer form offered is
  * `BigInt(string)` for biginteger when `opts.bigints` — `decimal` is never widened (stays the string).
  */
-export function decodeValue(cmsType: CmsType, value: unknown, opts: DecodeOptions = {}): unknown {
+export function decodeValue(type: CmsType, value: unknown, opts: DecodeOptions = {}): unknown {
   if (value === null || value === undefined) return value;
 
-  switch (cmsType) {
+  switch (type) {
     case 'biginteger':
       // Wire = quoted string. Keep it a string unless explicitly asked for an EXACT bigint.
       if (opts.bigints === true && typeof value === 'string') return BigInt(value);
@@ -162,8 +162,8 @@ export function decodeEntry<T extends Entry = Entry>(
   const types = fieldTypeIndex(def);
   const out: Entry = {};
   for (const key in raw) {
-    const cmsType = types.get(key);
-    out[key] = cmsType === undefined ? raw[key] : decodeValue(cmsType, raw[key], opts);
+    const type = types.get(key);
+    out[key] = type === undefined ? raw[key] : decodeValue(type, raw[key], opts);
   }
   return out as T;
 }
@@ -177,7 +177,7 @@ export function decodeEntry<T extends Entry = Entry>(
  *   • a `bigint` → its decimal string (the api accepts the quoted integer-string form for biginteger);
  *
  * everything else passes through verbatim (strings, numbers, booleans, nested json, arrays, `null`).
- * Pure; does not depend on `cmsType` for the universal `Date`/`bigint` lowering (it is value-driven so
+ * Pure; does not depend on `type` for the universal `Date`/`bigint` lowering (it is value-driven so
  * it stays correct even when a caller omits the field from the definition).
  */
 export function encodeValue(value: unknown): unknown {

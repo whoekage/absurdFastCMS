@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { startTestServer, withType } from './server.ts';
 import { createClient, BadRequestError, NotFoundError } from '../src/index.ts';
 
-const POST_FIELDS = [{ name: 'title', cmsType: 'string' as const, options: { nullable: false } }];
+const POST_FIELDS = [{ name: 'title', type: 'string' as const, options: { nullable: false } }];
 
 test('create → draft (hidden by default), status=draft shows it, publish → visible, unpublish → hidden', async () => {
   const server = await startTestServer('dp-lifecycle');

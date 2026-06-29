@@ -9,8 +9,8 @@ import { createClient, BadRequestError, NotFoundError } from '../src/index.ts';
 
 // A localized title + a SHARED slug, so the fan-out + copy semantics are both exercised.
 const PAGE_FIELDS = [
-  { name: 'title', cmsType: 'string' as const, options: { nullable: false }, localized: true },
-  { name: 'slug', cmsType: 'string' as const, options: { nullable: true }, localized: false },
+  { name: 'title', type: 'string' as const, options: { nullable: false }, localized: true },
+  { name: 'slug', type: 'string' as const, options: { nullable: true }, localized: false },
 ];
 
 const DEFAULT_LOCALE = process.env.DEFAULT_LOCALE?.trim() || 'en';
@@ -89,7 +89,7 @@ test('createVariant errors: duplicate locale → 400, missing sibling → 404, n
     });
 
     // Variant create + locale param on a NON-i18n type.
-    await withType(server, { name: 'plain', fields: [{ name: 'title', cmsType: 'string' as const }] }, async (name) => {
+    await withType(server, { name: 'plain', fields: [{ name: 'title', type: 'string' as const }] }, async (name) => {
       const client = server.mkClient();
       const row = await client.create(name, { title: 'x' });
       await assert.rejects(client.createVariant(name, row.data.id as number, 'fr'), BadRequestError);

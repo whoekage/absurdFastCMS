@@ -167,13 +167,13 @@ export type TypeDef = SchemaSpec;
  * 'article', fields: ARTICLE_FIELDS }, ...)`. Mirrors `ARTICLE_SCHEMA` in the api test helpers.
  */
 export const ARTICLE_FIELDS: FieldSpec[] = [
-  { name: 'title', cmsType: 'string', options: { length: 512, nullable: true } },
-  { name: 'body', cmsType: 'text', options: { nullable: false } },
-  { name: 'status', cmsType: 'enumeration', options: { values: ['draft', 'published', 'archived'], nullable: false } },
-  { name: 'views', cmsType: 'integer', options: { nullable: true } },
-  { name: 'rating', cmsType: 'float', options: { nullable: true } },
-  { name: 'active', cmsType: 'boolean', options: { nullable: false } },
-  { name: 'publishedAt', cmsType: 'datetime', options: { nullable: false } },
+  { name: 'title', type: 'string', options: { length: 512, nullable: true } },
+  { name: 'body', type: 'text', options: { nullable: false } },
+  { name: 'status', type: 'enumeration', options: { values: ['draft', 'published', 'archived'], nullable: false } },
+  { name: 'views', type: 'integer', options: { nullable: true } },
+  { name: 'rating', type: 'float', options: { nullable: true } },
+  { name: 'active', type: 'boolean', options: { nullable: false } },
+  { name: 'publishedAt', type: 'datetime', options: { nullable: false } },
 ];
 
 /**
@@ -185,7 +185,7 @@ export const ARTICLE_FIELDS: FieldSpec[] = [
  * migrated each step).
  *
  * Usage:
- *   await withType(server, { name: 'widget', fields: [{ name: 'title', cmsType: 'string' }] }, async () => {
+ *   await withType(server, { name: 'widget', fields: [{ name: 'title', type: 'string' }] }, async () => {
  *     // ... hit server.baseUrl/widget with the SDK ...
  *   });
  */

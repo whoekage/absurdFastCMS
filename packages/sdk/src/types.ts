@@ -8,7 +8,7 @@
 // source (type.catalog.ts, module.controller.ts#projectDef, engine.ts pagination meta), not by
 // importing it. When the api contract changes, update these here.
 
-// === 1.1 — cms_type, field options, field spec =================================================
+// === 1.1 — type, field options, field spec =================================================
 
 /**
  * The closed set of CMS field types a user may define on a module field. Mirror of
@@ -56,7 +56,7 @@ export type CmsType =
 export type ComponentFieldKind = 'component' | 'component-repeatable' | 'dynamiczone' | 'relation';
 
 /**
- * Per-field options the caller may supply when defining a field; each `cmsType` validates only the
+ * Per-field options the caller may supply when defining a field; each `type` validates only the
  * keys it cares about (server-side). Mirror of `FieldOptions` in the api type catalog.
  */
 export interface FieldOptions {
@@ -90,14 +90,14 @@ export interface FieldOptions {
 }
 
 /**
- * A field the caller wants to define: the user name, its cms_type, and per-type options. Mirror of
+ * A field the caller wants to define: the user name, its type, and per-type options. Mirror of
  * `FieldSpec` in the api module repository — the body shape for create / add-field requests. A
- * `cmsType` may be a scalar {@link CmsType} OR a be-05 {@link ComponentFieldKind} (in which case
+ * `type` may be a scalar {@link CmsType} OR a be-05 {@link ComponentFieldKind} (in which case
  * `options.component` / `options.components` names the referenced component-type(s)).
  */
 export interface FieldSpec {
   name: string;
-  cmsType: CmsType | ComponentFieldKind;
+  type: CmsType | ComponentFieldKind;
   options?: FieldOptions;
   /**
    * i18n: whether this field is LOCALIZED (per-locale-variant value) or SHARED across the document's
@@ -119,7 +119,7 @@ export interface FieldSpec {
 export interface FieldDefinition {
   name: string;
   /** A scalar {@link CmsType} OR a be-05 {@link ComponentFieldKind} for a component / dynamic-zone field. */
-  cmsType: CmsType | ComponentFieldKind;
+  type: CmsType | ComponentFieldKind;
   nullable: boolean;
   /** id/created_at/updated_at → true: loaded + materialized, NEVER writable. */
   system: boolean;
@@ -139,7 +139,7 @@ export interface FieldDefinition {
    */
   default?: unknown;
   /**
-   * be-04 MEDIA: the cardinality of a `cmsType: 'media'` field — `false` = single asset reference,
+   * be-04 MEDIA: the cardinality of a `type: 'media'` field — `false` = single asset reference,
    * `true` = multiple. PROJECTED only for a media field (a conditional wire key; every non-media field
    * omits it). The admin reads it to pick a single-asset picker vs a multi-asset gallery widget.
    */

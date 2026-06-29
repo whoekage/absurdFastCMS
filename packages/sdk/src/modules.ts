@@ -78,10 +78,10 @@ function invertKind(kind: RelationKind): RelationKind {
 }
 
 /** A synthesized system field (id/created_at/updated_at/document_id/published_at/locale). */
-function systemField(name: string, cmsType: CmsType, nullable: boolean, i18n: boolean): FieldDefinition {
+function systemField(name: string, type: CmsType, nullable: boolean, i18n: boolean): FieldDefinition {
   // For an i18n type EVERY field carries the conditional `localized` key (system fields are shared → false);
   // a non-i18n type omits the key entirely (a conditional wire key, matching the api projection).
-  return { name, cmsType, nullable, system: true, ...(i18n ? { localized: false } : {}) };
+  return { name, type, nullable, system: true, ...(i18n ? { localized: false } : {}) };
 }
 
 /** Project ONE module's own (system + user) fields, in the byte-identical order id/created_at/updated_at/[document_id]/[published_at]/[locale]/…user. */
@@ -102,7 +102,7 @@ function projectFields(schema: ModuleSchema): FieldDefinition[] {
     const o: FieldOptions = f.options ?? {};
     const def: FieldDefinition = {
       name: f.name,
-      cmsType: f.type,
+      type: f.type,
       nullable: o.nullable ?? true, // files-first default: nullable unless explicitly NOT NULL
       system: false,
     };

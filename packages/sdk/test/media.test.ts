@@ -66,8 +66,8 @@ test('SINGLE media field: write an id, read raw, read populated to a FileAsset o
   await withType(
     server,
     { name: 'product', fields: [
-      { name: 'title', cmsType: 'string', options: { nullable: false } },
-      { name: 'cover', cmsType: 'media' },
+      { name: 'title', type: 'string', options: { nullable: false } },
+      { name: 'cover', type: 'media' },
     ] },
     async (name) => {
       const asset = await client.upload(pngBytes(30, 20), 'cover.png');
@@ -91,8 +91,8 @@ test('MULTIPLE media field: write an id array, populate to an ordered FileAsset[
   await withType(
     server,
     { name: 'gallery', fields: [
-      { name: 'name', cmsType: 'string', options: { nullable: false } },
-      { name: 'photos', cmsType: 'media', options: { multiple: true } },
+      { name: 'name', type: 'string', options: { nullable: false } },
+      { name: 'photos', type: 'media', options: { multiple: true } },
     ] },
     async (name) => {
       const a = await client.upload(pngBytes(10, 10), 'a.png');
@@ -117,8 +117,8 @@ test('VALIDATION: a non-existent / non-positive media id is a 400', async () => 
   await withType(
     server,
     { name: 'doc', fields: [
-      { name: 'title', cmsType: 'string', options: { nullable: false } },
-      { name: 'cover', cmsType: 'media' },
+      { name: 'title', type: 'string', options: { nullable: false } },
+      { name: 'cover', type: 'media' },
     ] },
     async (name) => {
       await assert.rejects(() => client.create(name, { title: 'x', cover: 99999999 }), BadRequestError);
@@ -128,6 +128,6 @@ test('VALIDATION: a non-existent / non-positive media id is a 400', async () => 
   );
 });
 
-// NOTE (legacy-meta teardown): the test 'media field is projected with cmsType + multiple flag' was
+// NOTE (legacy-meta teardown): the test 'media field is projected with type + multiple flag' was
 // dropped — it asserted the wire projection returned by the Builder route GET /modules/:name, which
 // was removed. Media write/read behaviour stays covered by the tests above (real wire, real Postgres).

@@ -24,24 +24,24 @@ import type {
 } from '@conti/sdk';
 import { isKeysetPagination } from '@conti/sdk';
 
-test('ModuleDefinition constructs (cmsType + field options + projected fields)', () => {
-  const cmsType: CmsType = 'enumeration';
+test('ModuleDefinition constructs (type + field options + projected fields)', () => {
+  const type: CmsType = 'enumeration';
   const options: FieldOptions = { length: 64, values: ['draft', 'published'], nullable: false };
-  const spec: FieldSpec = { name: 'status', cmsType, options };
+  const spec: FieldSpec = { name: 'status', type, options };
 
   const def: ModuleDefinition = {
     name: 'article',
     fields: [
-      { name: 'id', cmsType: 'integer', nullable: false, system: true },
-      { name: 'createdAt', cmsType: 'datetime', nullable: false, system: true },
+      { name: 'id', type: 'integer', nullable: false, system: true },
+      { name: 'createdAt', type: 'datetime', nullable: false, system: true },
       {
         name: 'status',
-        cmsType: 'enumeration',
+        type: 'enumeration',
         nullable: false,
         system: false,
         enumValues: ['draft', 'published'] as const,
       },
-      { name: 'price', cmsType: 'decimal', nullable: true, system: false, precision: 10, scale: 2 },
+      { name: 'price', type: 'decimal', nullable: true, system: false, precision: 10, scale: 2 },
     ],
     relations: [
       { field: 'author', kind: 'manyToOne', target: 'user', owner: true, inverseField: 'articles' },

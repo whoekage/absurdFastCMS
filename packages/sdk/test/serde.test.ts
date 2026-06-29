@@ -24,12 +24,12 @@ import {
 
 /** A module exercising every lossy-prone wire type. */
 const WIRE_FIELDS = [
-  { name: 'big', cmsType: 'biginteger' as const },
-  { name: 'price', cmsType: 'decimal' as const, options: { precision: 12, scale: 2 } },
-  { name: 'payload', cmsType: 'json' as const },
-  { name: 'day', cmsType: 'date' as const },
-  { name: 'at', cmsType: 'datetime' as const },
-  { name: 'count', cmsType: 'integer' as const },
+  { name: 'big', type: 'biginteger' as const },
+  { name: 'price', type: 'decimal' as const, options: { precision: 12, scale: 2 } },
+  { name: 'payload', type: 'json' as const },
+  { name: 'day', type: 'date' as const },
+  { name: 'at', type: 'datetime' as const },
+  { name: 'count', type: 'integer' as const },
 ];
 
 /** A biginteger well above 2^53 (Number would round it) and a fixed-scale decimal. */
@@ -39,9 +39,9 @@ const PRICE = '1234567890.55';
 
 // NOTE (legacy-meta teardown): the Builder route GET /modules/:name (which returned the projected
 // def) was removed — the SDK no longer fetches defs over the wire. decodeEntry only needs each field's
-// { name, cmsType }, so we build the decode def locally from WIRE_FIELDS (system fields prepended).
+// { name, type }, so we build the decode def locally from WIRE_FIELDS (system fields prepended).
 function wireDef(name: string): ModuleDefinition {
-  const sys = (name: string, cmsType: FieldDefinition['cmsType']): FieldDefinition => ({ name, cmsType, nullable: name !== 'id', system: true });
+  const sys = (name: string, type: FieldDefinition['type']): FieldDefinition => ({ name, type, nullable: name !== 'id', system: true });
   return {
     name,
     relations: [],
@@ -49,7 +49,7 @@ function wireDef(name: string): ModuleDefinition {
       sys('id', 'integer'), sys('created_at', 'datetime'), sys('updated_at', 'datetime'),
       ...WIRE_FIELDS.map((f): FieldDefinition => ({
         name: f.name,
-        cmsType: f.cmsType,
+        type: f.type,
         nullable: (f as { options?: { nullable?: boolean } }).options?.nullable ?? true,
         system: false,
         ...((f as { options?: { scale?: number } }).options?.scale !== undefined ? { scale: (f as { options: { scale: number } }).options.scale } : {}),

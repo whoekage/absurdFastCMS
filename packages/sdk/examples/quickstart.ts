@@ -31,10 +31,10 @@ async function main(): Promise<void> {
     const def = await client.contentTypes.create({
       name: 'product',
       fields: [
-        { name: 'name', cmsType: 'string', options: { length: 200 } },
-        { name: 'price', cmsType: 'decimal', options: { precision: 12, scale: 2 } },
-        { name: 'inStock', cmsType: 'boolean', options: { default: true } },
-        { name: 'sku', cmsType: 'uid' },
+        { name: 'name', type: 'string', options: { length: 200 } },
+        { name: 'price', type: 'decimal', options: { precision: 12, scale: 2 } },
+        { name: 'inStock', type: 'boolean', options: { default: true } },
+        { name: 'sku', type: 'uid' },
       ],
     });
     console.log('created type:', def.name, def.fields.map((f) => f.name).join(', '));

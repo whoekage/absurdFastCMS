@@ -159,7 +159,7 @@ test('relation ops: shorthand set, connect, disconnect, and {set:[]} clear', asy
   const server = await startTestServer('write-relations');
   try {
     // `article` owns a manyToMany `tags` relation to a `tag` type.
-    await withType(server, { name: 'tag', fields: [{ name: 'name', cmsType: 'string' }] }, async (tagId) => {
+    await withType(server, { name: 'tag', fields: [{ name: 'name', type: 'string' }] }, async (tagId) => {
       await withType(
         server,
         {
@@ -206,7 +206,7 @@ test('relation ops: shorthand set, connect, disconnect, and {set:[]} clear', asy
 test('relation op with a nonexistent FK throws BadRequestError (400)', async () => {
   const server = await startTestServer('write-relations-fk');
   try {
-    await withType(server, { name: 'tag', fields: [{ name: 'name', cmsType: 'string' }] }, async (tagId) => {
+    await withType(server, { name: 'tag', fields: [{ name: 'name', type: 'string' }] }, async (tagId) => {
       await withType(
         server,
         {
