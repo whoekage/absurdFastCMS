@@ -28,6 +28,19 @@
     --input: 43 16% 89%;
     --ring: 239 84% 67%;
     --radius: 0.625rem; /* 10px — cards round to xl, controls to md */
+
+    /* Module-builder design palette (HEX, used via color-mix in the full-screen builder). Extends the
+       shadcn tokens above with the extra hues the Lua builder prototype uses. Shared tokens (bg/fg/card/
+       muted/border/primary/destructive) reuse the shadcn vars via hsl(); these are the additive ones. */
+    --faint: #9a9aa4;
+    --fill: #edece6;
+    --success: #0e9f6e;
+    --warning: #d97706;
+    --info: #3b6fe0;
+    --violet: #8b5cf6;
+    --pink: #d6457f;
+    --teal: #0f9d8f;
+    --code-bg: #fbfaf8;
   }
 
   .dark {
@@ -50,6 +63,17 @@
     --border: 255 8% 20%;
     --input: 255 8% 20%;
     --ring: 241 86% 72%;
+
+    /* Module-builder design palette — dark variant. */
+    --faint: #6c6b76;
+    --fill: #262430;
+    --success: #34d399;
+    --warning: #f5b14b;
+    --info: #5b8cff;
+    --violet: #a78bfa;
+    --pink: #f472b6;
+    --teal: #2dd4bf;
+    --code-bg: #141319;
   }
 }
 

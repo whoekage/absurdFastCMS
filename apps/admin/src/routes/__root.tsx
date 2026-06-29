@@ -55,7 +55,17 @@ function RootLayout() {
   }
   if (!session.data) return <Navigate to="/sign-in" />;
 
+  // The module BUILDER (/modules/new + /modules/:name) is a full-viewport app with its own header —
+  // it renders OUTSIDE the sidebar shell but still INSIDE the auth gate. The list (/modules) stays in
+  // the shell. The builder component supplies its own height:100vh layout.
+  if (isBuilderRoute(pathname)) return <Outlet />;
+
   return <AppShell />;
+}
+
+/** The full-screen builder routes: create + edit a module. `/modules` (the list) stays in the shell. */
+function isBuilderRoute(pathname: string): boolean {
+  return pathname === '/modules/new' || (pathname.startsWith('/modules/') && pathname !== '/modules');
 }
 
 function AppShell() {

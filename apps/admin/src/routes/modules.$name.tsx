@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, Trash2, AlertTriangle } from 'lucide-react';
+import { Trash2, AlertTriangle } from 'lucide-react';
 import { deleteModule, listModules, BuilderError } from '@/lib/builder-client';
 import { builderKeys, errorMessage, moduleToForm } from '@/lib/module-draft';
 import { moduleKeys } from '@/lib/modules';
 import { ModuleForm } from '@/components/builder/module-form';
+import { BuilderShell } from '@/components/builder/builder-shell';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/toast';
@@ -25,14 +26,7 @@ function EditModulePage() {
   const schema = query.data?.schemas.find((s) => s.name === name);
 
   return (
-    <section className="mx-auto max-w-3xl space-y-6">
-      <Button asChild variant="ghost" size="sm" className="-ml-2">
-        <Link to="/modules">
-          <ChevronLeft className="h-4 w-4" />
-          Back to modules
-        </Link>
-      </Button>
-
+    <BuilderShell mode="edit" name={name} label={schema?.label}>
       {query.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {query.isError && <p className="text-sm text-destructive">Failed to load the schema catalog.</p>}
       {query.data && !schema && (
@@ -40,27 +34,19 @@ function EditModulePage() {
       )}
 
       {query.data && schema && (
-        <>
-          <Card>
-            <CardHeader>
-              <CardTitle>Edit module: {schema.label || schema.name}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ModuleForm
-                mode="edit"
-                initial={moduleToForm(schema)}
-                version={query.data.version}
-                allModuleNames={query.data.schemas.map((s) => s.name).filter((id) => id !== name)}
-                moduleLabels={Object.fromEntries(query.data.schemas.map((s) => [s.name, s.label ?? s.name]))}
-                onSaved={() => void navigate({ to: '/modules' })}
-              />
-            </CardContent>
-          </Card>
-
+        <div className="space-y-6">
+          <ModuleForm
+            mode="edit"
+            initial={moduleToForm(schema)}
+            version={query.data.version}
+            allModuleNames={query.data.schemas.map((s) => s.name).filter((id) => id !== name)}
+            moduleLabels={Object.fromEntries(query.data.schemas.map((s) => [s.name, s.label ?? s.name]))}
+            onSaved={() => void navigate({ to: '/modules' })}
+          />
           <DeleteModuleCard name={name} version={query.data.version} />
-        </>
+        </div>
       )}
-    </section>
+    </BuilderShell>
   );
 }
 
