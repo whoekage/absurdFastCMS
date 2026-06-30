@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Plus, Eye, ChevronLeft, LayoutGrid } from 'lucide-react';
+import { Plus, Eye, LayoutGrid } from 'lucide-react';
 import type { CmsType } from '@conti/sdk';
 import {
   type ModuleFormState,
@@ -27,7 +27,7 @@ import { ModeSwitcher, type BuilderMode } from '@/components/builder/mode-switch
 import { PreviewMode } from '@/components/builder/preview-mode';
 import { CodeMode } from '@/components/builder/code-mode';
 import { generateSchemaSourceMirror } from '@/lib/schema-codegen-mirror';
-import { DiffPreview, hasForbidden } from '@/components/builder/diff-preview';
+import { ReviewModal } from '@/components/builder/review-modal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -161,33 +161,24 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
   const liveAuthorable = authorable.filter((f) => !f.deleted);
   const fieldCountLabel = `${liveAuthorable.length} ${liveAuthorable.length === 1 ? 'field' : 'fields'}`;
 
-  if (phase === 'reviewing' && preview) {
-    const blockedUnacked = preview.blocked.some((c) => c.risk !== 'forbidden') && !allowDestructive;
-    const cannotApply = hasForbidden(preview) || blockedUnacked;
-    return (
-      <div className="space-y-6">
-        <Button variant="ghost" size="sm" className="-ml-2" onClick={() => setPhase('editing')} disabled={busy}>
-          <ChevronLeft className="h-4 w-4" />
-          Back to editing
-        </Button>
-        <DiffPreview
-          preview={preview}
-          name={state.name.trim()}
-          allowDestructive={allowDestructive}
-          onAllowDestructiveChange={setAllowDestructive}
-        />
-        {error && <p className="text-sm text-destructive">{error}</p>}
-        <div className="flex items-center gap-2">
-          <Button onClick={() => void apply()} disabled={busy || cannotApply}>
-            {busy ? 'Applying…' : isEdit ? 'Apply changes' : 'Create module'}
-          </Button>
-          <Button variant="outline" onClick={() => setPhase('editing')} disabled={busy}>
-            Back
-          </Button>
-        </div>
-      </div>
-    );
-  }
+  // The migration review is a modal overlay (rendered from the build return below), not a separate page.
+  const reviewModal =
+    phase === 'reviewing' && preview ? (
+      <ReviewModal
+        preview={preview}
+        name={state.name.trim()}
+        isEdit={isEdit}
+        allowDestructive={allowDestructive}
+        onAllowDestructiveChange={setAllowDestructive}
+        busy={busy}
+        error={error}
+        onCancel={() => {
+          setPhase('editing');
+          setError(null);
+        }}
+        onApply={() => void apply()}
+      />
+    ) : null;
 
   // Preview / Code canvas modes render from the live draft; Review stays in Build mode.
   if (canvasMode !== 'build') {
@@ -207,6 +198,7 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
           <CodeMode source={generateSchemaSourceMirror(formToModuleDraft(state))} filename={`${state.name.trim() || 'untitled'}/schema.ts`} />
         )}
         <ModeSwitcher mode={canvasMode} onChange={setCanvasMode} />
+        {reviewModal}
       </>
     );
   }
@@ -363,6 +355,7 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
       </div>
     </form>
       <ModeSwitcher mode={canvasMode} onChange={setCanvasMode} />
+      {reviewModal}
     </>
   );
 }
