@@ -182,6 +182,11 @@ green-suite checkpoint.
 - ✅ **C — `/builder/components` resource** (GET/PUT/DELETE/preview, version+idempotency, module→
   component existence preflight, migrate-free file-write + registry swap). Tested:
   `builder-components.e2e`. No regressions across builder/version/component suites.
-- ⏳ **D — SDK + admin wire** (next): `api.components.list`, admin `builder-client` component fns,
-  `module-draft` component fields authorable (not `raw`).
-- ⏳ **E — admin component editor UI** (frame 11): replace the read-only "Authored in code" zone.
+- ✅ **D — admin wire**: `builder-client` component fns (`listComponents`/`previewComponent`/
+  `saveComponent`/`deleteComponent`) + the `ComponentFormState` draft model (reuses `FieldDraft`).
+- 🟡 **E — admin component editor**: ✅ **E1** standalone Components editor (sidebar + `/components`
+  hub / new / edit, reusing the field cards/config). ⏳ **E2** attach a component on a MODULE field
+  (needs `FieldDraft.type` widened to component kinds + a component picker in field-config) — this is
+  also ⏳ **E3** (replaces the read-only "Authored in code" zone for component fields).
+
+  > Admin UI is verified visually in the running dev server (no admin unit runner); typecheck + biome lint are clean.
