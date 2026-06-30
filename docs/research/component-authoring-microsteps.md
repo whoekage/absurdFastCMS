@@ -172,3 +172,16 @@ Milestones land in order; **A is independently shippable** (closes the latent pr
 Ship **A** first (fixes the latent prod bug, fully tested, no UI). Then **B+C** (the backend
 authoring resource, fully e2e-tested). Then **D+E** (the visible editor). Each microstep is a
 green-suite checkpoint.
+
+## Progress (branch `feat/component-definitions-from-files`)
+- ✅ **A — code-authored components load & work** (DSL `defineComponent` + repeatable/min-max;
+  `loadComponents`; boot + reload/swap wiring). Tested: `schema-define`, `load-components`,
+  `component-load-boot.e2e`.
+- ✅ **B — component codegen** (`generateComponentSource` + `component-repeatable`/inline-relation
+  emission). Tested: `schema-codegen`, `load-components` round-trip.
+- ✅ **C — `/builder/components` resource** (GET/PUT/DELETE/preview, version+idempotency, module→
+  component existence preflight, migrate-free file-write + registry swap). Tested:
+  `builder-components.e2e`. No regressions across builder/version/component suites.
+- ⏳ **D — SDK + admin wire** (next): `api.components.list`, admin `builder-client` component fns,
+  `module-draft` component fields authorable (not `raw`).
+- ⏳ **E — admin component editor UI** (frame 11): replace the read-only "Authored in code" zone.
