@@ -281,6 +281,24 @@ test('T19 string numeric bounds (biginteger/decimal) + array item guards', () =>
   assert.throws(() => resolveType('array', { minItems: -1 }), TypeOptionError);
 });
 
+// T20 — date/datetime VALUE bounds: absolute ISO-8601 OR relative `$now(±N unit)`, stored verbatim as strings.
+test('T20 date/datetime min/max bounds (ISO + $now tokens)', () => {
+  // Absolute ISO bounds round-trip verbatim for both date (calendar) and datetime (instant).
+  assert.deepEqual(resolveType('date', { min: '2020-01-01', max: '2030-12-31' }).params, { min: '2020-01-01', max: '2030-12-31' });
+  assert.deepEqual(resolveType('datetime', { min: '2020-01-01T00:00:00Z', max: '$now' }).params, { min: '2020-01-01T00:00:00Z', max: '$now' });
+  // Relative $now tokens (sign required; singular or plural unit) are accepted + stored verbatim.
+  assert.equal(resolveType('date', { min: '$now(-7 days)' }).params['min'], '$now(-7 days)');
+  assert.equal(resolveType('datetime', { max: '$now(+1 year)' }).params['max'], '$now(+1 year)');
+  // Bad bounds throw at resolve.
+  assert.throws(() => resolveType('date', { min: 'not-a-date' }), TypeOptionError);
+  assert.throws(() => resolveType('date', { min: '$now(7 days)' }), TypeOptionError); // missing sign
+  assert.throws(() => resolveType('date', { min: '$now(+1 fortnight)' }), TypeOptionError); // bad unit
+  assert.throws(() => resolveType('date', { min: 1234 }), TypeOptionError); // non-string bound
+  // Two ABSOLUTE bounds are order-checked; a relative bound can't be statically ordered (no throw).
+  assert.throws(() => resolveType('datetime', { min: '2030-01-01', max: '2020-01-01' }), TypeOptionError);
+  assert.doesNotThrow(() => resolveType('datetime', { min: '$now(+1 year)', max: '2020-01-01' }));
+});
+
 // T18 — `unique` emits an inline UNIQUE column constraint via columnSpec; applicability-gated in resolveFields.
 test('T18 unique column constraint + applicability guard', () => {
   const fields = resolveFields([

@@ -75,7 +75,7 @@ type NumOpts = BaseOpts & { min?: number; max?: number; default?: number };
 type DecimalOpts = BaseOpts & { precision?: number; scale?: number; min?: string | number; max?: string | number; default?: string | number };
 type MediaOpts = BaseOpts & { multiple?: boolean };
 type BigIntOpts = BaseOpts & { min?: string | number; max?: string | number; default?: string | number }; // i64 bounds/default may be strings
-type DateOpts = BaseOpts & { default?: string };
+type DateOpts = BaseOpts & { min?: string; max?: string; default?: string }; // min/max: absolute ISO or a `$now` token
 type JsonOpts = BaseOpts & { default?: unknown };
 type UuidOpts = BaseOpts & { default?: string };
 type ArrayOpts = BaseOpts & { uniqueItems?: boolean; minItems?: number; maxItems?: number; default?: unknown[] };
@@ -106,9 +106,9 @@ export const c = {
   boolean: <O extends BaseOpts & { default?: boolean } = {}>(o?: O): FieldBuilder<Nullable<boolean, O>> =>
     field('boolean', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   date: <O extends DateOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('date', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+    field('date', clean({ nullable: o?.nullable ?? true, min: o?.min, max: o?.max, default: o?.default, ...common(o) }), o?.id),
   datetime: <O extends DateOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('datetime', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+    field('datetime', clean({ nullable: o?.nullable ?? true, min: o?.min, max: o?.max, default: o?.default, ...common(o) }), o?.id),
   json: <O extends JsonOpts = {}>(o?: O): FieldBuilder<Nullable<unknown, O>> =>
     field('json', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   array: <O extends ArrayOpts = {}>(o?: O): FieldBuilder<Nullable<unknown[], O>> =>

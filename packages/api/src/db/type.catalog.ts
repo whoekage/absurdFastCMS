@@ -74,10 +74,11 @@ export interface FieldOptions {
   /**
    * lower bound — CONTEXTUAL: min char-length for string/email/uid (number); min VALUE for integer/float
    * (number, ≤2^53 safe); min VALUE for biginteger/decimal as a STRING (BigInt/scaled-BigInt compared, never
-   * coerced to a lossy JS number). Write-time guard.
+   * coerced to a lossy JS number); earliest date/datetime as an absolute ISO-8601 string OR a relative
+   * `$now(±N unit)` token (resolved per-request at write time). Write-time guard.
    */
   min?: number | string;
-  /** upper bound — VALUE max (mirrors {@link min}: number for integer/float, STRING for biginteger/decimal). */
+  /** upper bound — VALUE max (mirrors {@link min}: number for integer/float, STRING for biginteger/decimal, ISO/`$now` for date/datetime). */
   max?: number | string;
   /** `array` only: forbid duplicate items (scalar equality). Write-time guard. */
   uniqueItems?: boolean;
@@ -252,6 +253,41 @@ function decimalBounds(o: FieldOptions | undefined, precision: number, scale: nu
   return p;
 }
 
+/**
+ * A relative-date token: `$now`, `$now(-7 days)`, `$now(+1 year)`. The sign is REQUIRED so the offset is
+ * unambiguous; the unit may be singular or plural. Resolved against the request's `now` at write time
+ * (body.parser.resolveDateBound) — stored verbatim here so a relative bound stays relative across reboots.
+ */
+const NOW_TOKEN_RE = /^\$now(?:\(\s*([+-]\d+)\s+(second|minute|hour|day|week|month|year)s?\s*\))?$/;
+/** An absolute ISO-8601 date (`YYYY-MM-DD`) or datetime, with optional time/zone. Date.parse confirms validity. */
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+
+/** Validate one date/datetime bound: an absolute ISO-8601 string OR a `$now(±N unit)` token. Returns it verbatim. */
+function dateBound(v: number | string, label: string): string {
+  if (typeof v !== 'string') throw new TypeOptionError(`${label} must be an ISO-8601 date string or a $now token, got ${String(v)}`);
+  const s = v.trim();
+  if (NOW_TOKEN_RE.test(s)) return s;
+  if (ISO_DATE_RE.test(s) && !Number.isNaN(Date.parse(s))) return s;
+  throw new TypeOptionError(`${label} must be an ISO-8601 date string or a $now token, got ${JSON.stringify(v)}`);
+}
+
+/**
+ * date/datetime value bounds (min/max) — recorded as write-time guards (no DDL effect). Stored as verbatim
+ * strings (absolute ISO or relative `$now` token); resolved against the request instant at write time. Two
+ * ABSOLUTE bounds are order-checked here; a relative bound can't be statically ordered (resolved per-request).
+ */
+function dateBounds(o: FieldOptions | undefined): Record<string, unknown> {
+  const p: Record<string, unknown> = {};
+  if (o?.min !== undefined) p.min = dateBound(o.min, 'min');
+  if (o?.max !== undefined) p.max = dateBound(o.max, 'max');
+  const min = p.min as string | undefined;
+  const max = p.max as string | undefined;
+  if (min !== undefined && max !== undefined && !NOW_TOKEN_RE.test(min) && !NOW_TOKEN_RE.test(max) && Date.parse(max) < Date.parse(min)) {
+    throw new TypeOptionError(`max ${max} is before min ${min}`);
+  }
+  return p;
+}
+
 /** `array` item guards (uniqueItems / minItems / maxItems) — write-time only, recorded in params. */
 function arrayParams(o: FieldOptions | undefined): Record<string, unknown> {
   const p: Record<string, unknown> = {};
@@ -314,8 +350,8 @@ const RESOLVERS = {
     return { pgType: `numeric(${precision},${scale})`, engineType: 'decimal', params: { precision, scale, ...decimalBounds(o, precision, scale) } };
   },
   boolean: () => ({ pgType: 'boolean', engineType: 'bool', params: {} }),
-  date: () => ({ pgType: 'date', engineType: 'date', params: {} }),
-  datetime: () => ({ pgType: 'timestamptz', engineType: 'date', params: {} }),
+  date: (o) => ({ pgType: 'date', engineType: 'date', params: dateBounds(o) }),
+  datetime: (o) => ({ pgType: 'timestamptz', engineType: 'date', params: dateBounds(o) }),
   time: () => ({ pgType: 'time', engineType: 'i32', params: {} }),
   json: () => ({ pgType: 'jsonb', engineType: 'json', params: {} }),
   array: (o) => ({ pgType: 'jsonb', engineType: 'json', params: arrayParams(o) }),

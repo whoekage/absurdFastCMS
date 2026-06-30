@@ -79,6 +79,8 @@ export function validateBody(def: ModuleDef, raw: unknown, mode: WriteMode, regi
     throw new BodyParseError('request body must be a JSON object');
   }
   const obj = raw as Record<string, unknown>;
+  // One instant per write so every relative date bound (`$now`) resolves against the same `now` (no skew).
+  const now = new Date();
 
   const relationOps: RelationOp[] = [];
   for (const key of Object.keys(obj)) {
@@ -105,10 +107,10 @@ export function validateBody(def: ModuleDef, raw: unknown, mode: WriteMode, regi
     // recursive walk needs the registry to resolve nested {@link ComponentDef}s; a plain field falls through.
     if (f.component !== undefined) {
       if (registry === undefined) throw new BodyParseError(`field "${f.name}" requires the registry to validate a component value`);
-      out[f.name] = coerceComponent(registry, f.name, f.component, v, 0);
+      out[f.name] = coerceComponent(registry, f.name, f.component, v, 0, now);
       continue;
     }
-    out[f.name] = coerce(f, v);
+    out[f.name] = coerce(f, v, now);
   }
 
   if (mode === 'create') {
@@ -275,12 +277,13 @@ function coerceComponent(
   meta: { kind: ComponentFieldKind; component?: string; components?: readonly string[] },
   value: unknown,
   depth: number,
+  now: Date,
 ): unknown {
   const counter = { next: 1 };
-  return coerceComponentValue(registry, path, meta, value, depth, counter);
+  return coerceComponentValue(registry, path, meta, value, depth, counter, now);
 }
 
-/** The recursion-internal arm: shares the per-write instance-id `counter` across the whole tree. */
+/** The recursion-internal arm: shares the per-write instance-id `counter` (+ the request `now`) across the whole tree. */
 function coerceComponentValue(
   registry: Registry,
   path: string,
@@ -288,6 +291,7 @@ function coerceComponentValue(
   value: unknown,
   depth: number,
   counter: { next: number },
+  now: Date,
 ): unknown {
   // Depth cap: counts NESTING hops (component -> nested component -> ...). Checked on EVERY recursion arm
   // (not just the public entry) so a deep tree is bounded. depth 0 is the top-level field; the cap bites
@@ -297,13 +301,13 @@ function coerceComponentValue(
   }
   if (meta.kind === 'component') {
     if (!isPlainObject(value)) throw new BodyParseError(`component field "${path}" must be an object`);
-    return coerceComponentInstance(registry, path, meta.component!, value, depth, counter);
+    return coerceComponentInstance(registry, path, meta.component!, value, depth, counter, now);
   }
   if (meta.kind === 'component-repeatable') {
     if (!Array.isArray(value)) throw new BodyParseError(`component field "${path}" must be an array`);
     return value.map((entry, i) => {
       if (!isPlainObject(entry)) throw new BodyParseError(`component field "${path}[${i}]" must be an object`);
-      return coerceComponentInstance(registry, `${path}[${i}]`, meta.component!, entry, depth, counter);
+      return coerceComponentInstance(registry, `${path}[${i}]`, meta.component!, entry, depth, counter, now);
     });
   }
   // dynamiczone: each block names its own component via `__component`, drawn from the allowed-set.
@@ -315,7 +319,7 @@ function coerceComponentValue(
     const cmp = block['__component'];
     if (typeof cmp !== 'string') throw new BodyParseError(`dynamic-zone block "${at}" is missing a "__component" string`);
     if (!allowed.has(cmp)) throw new BodyParseError(`dynamic-zone block "${at}" names component "${cmp}" which is not allowed in this zone`);
-    const inst = coerceComponentInstance(registry, at, cmp, block, depth, counter, '__component');
+    const inst = coerceComponentInstance(registry, at, cmp, block, depth, counter, now, '__component');
     // Re-tag the block with its component name (after the assigned id, before its fields).
     return { __component: cmp, ...inst };
   });
@@ -341,6 +345,7 @@ function coerceComponentInstance(
   obj: Record<string, unknown>,
   depth: number,
   counter: { next: number },
+  now: Date,
   skipKey?: string,
 ): Record<string, unknown> {
   const cdef: ComponentDef | undefined = registry.getComponent(name);
@@ -364,12 +369,12 @@ function coerceComponentInstance(
     if (cf.relationRef !== undefined) {
       out[key] = coerceRelationRef(cf, cf.relationRef.multiple, v);
     } else if (cf.component !== undefined) {
-      out[key] = coerceComponentValue(registry, `${path}.${key}`, cf.component, v, depth + 1, counter);
+      out[key] = coerceComponentValue(registry, `${path}.${key}`, cf.component, v, depth + 1, counter, now);
     } else if (cf.media !== undefined) {
       out[key] = coerceMedia(cf, cf.media.multiple, v);
     } else {
       try {
-        out[key] = coerce(cf, v);
+        out[key] = coerce(cf, v, now);
       } catch (e) {
         // Re-scope the engine-type coerce message to the component path (it only knows the bare field name).
         throw new BodyParseError(e instanceof BodyParseError ? e.message.replace(`field "${key}"`, `field "${path}.${key}"`) : `field "${path}.${key}" is invalid`);
@@ -387,6 +392,47 @@ function checkNumericBounds(name: string, field: RegistryField, v: number): void
   // i32/f64 bounds are always numbers (string bounds are i64/decimal, handled in their own arms).
   if (typeof field.min === 'number' && v < field.min) throw new BodyParseError(`field "${name}" must be >= ${field.min}`);
   if (typeof field.max === 'number' && v > field.max) throw new BodyParseError(`field "${name}" must be <= ${field.max}`);
+}
+
+/**
+ * Resolve a date/datetime bound to a Date. An absolute ISO-8601 string parses directly; a `$now(±N unit)`
+ * token is offset from the request's `now` (so every relative bound in ONE write resolves against the same
+ * instant — no sub-second skew between two `$now` fields). Calendar units (month/year) use UTC setters.
+ */
+function resolveDateBound(bound: string, now: Date): Date {
+  const m = /^\$now(?:\(\s*([+-]\d+)\s+(second|minute|hour|day|week|month|year)s?\s*\))?$/.exec(bound);
+  if (m === null) return new Date(bound);
+  const d = new Date(now.getTime());
+  if (m[1] === undefined) return d;
+  const n = Number(m[1]);
+  switch (m[2]) {
+    case 'second': d.setUTCSeconds(d.getUTCSeconds() + n); break;
+    case 'minute': d.setUTCMinutes(d.getUTCMinutes() + n); break;
+    case 'hour': d.setUTCHours(d.getUTCHours() + n); break;
+    case 'day': d.setUTCDate(d.getUTCDate() + n); break;
+    case 'week': d.setUTCDate(d.getUTCDate() + n * 7); break;
+    case 'month': d.setUTCMonth(d.getUTCMonth() + n); break;
+    case 'year': d.setUTCFullYear(d.getUTCFullYear() + n); break;
+  }
+  return d;
+}
+
+/**
+ * Enforce a date/datetime field's min/max (inclusive). A `date` field compares the UTC CALENDAR day (both
+ * value and bound truncated to year/month/day) so a TZ offset never trips an off-by-one (the Directus
+ * date-only bug); a `datetime` field compares the full UTC instant. Bounds are verbatim strings from the
+ * catalog (absolute ISO or a `$now` token), resolved against the request's single `now`.
+ */
+function checkDateBounds(name: string, field: RegistryField, value: Date, now: Date): void {
+  const dateOnly = field.type === 'date';
+  const key = (d: Date): number => (dateOnly ? Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) : d.getTime());
+  const v = key(value);
+  if (field.min !== undefined && v < key(resolveDateBound(field.min as string, now))) {
+    throw new BodyParseError(`field "${name}" must be on or after ${field.min}`);
+  }
+  if (field.max !== undefined && v > key(resolveDateBound(field.max as string, now))) {
+    throw new BodyParseError(`field "${name}" must be on or before ${field.max}`);
+  }
 }
 
 /** `array` write guards: must BE an array, within minItems/maxItems, and (uniqueItems) no duplicate scalars. */
@@ -409,8 +455,12 @@ function checkArray(name: string, field: RegistryField, v: unknown): void {
   }
 }
 
-/** Type-check + coerce one non-null value against its engine field. Coerce throws become 400s here. */
-function coerce(field: RegistryField, v: unknown): unknown {
+/**
+ * Type-check + coerce one non-null value against its engine field. Coerce throws become 400s here. `now`
+ * is the request's single instant, threaded so every relative date bound (`$now`) in one write resolves
+ * identically (see {@link resolveDateBound}).
+ */
+function coerce(field: RegistryField, v: unknown, now: Date): unknown {
   const name = field.name;
   // be-04 MEDIA: a media field is a real scalar column (engine i32 single / json multiple) but its VALUE
   // is a file-id reference with cardinality + positive-int4 rules — coerce it HERE before the generic
@@ -451,6 +501,7 @@ function coerce(field: RegistryField, v: unknown): unknown {
       }
       const d = new Date(v);
       if (Number.isNaN(d.getTime())) throw new BodyParseError(`field "${name}" is not a valid date`);
+      if (field.min !== undefined || field.max !== undefined) checkDateBounds(name, field, d, now);
       return d;
     }
     case 'i64': {

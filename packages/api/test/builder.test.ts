@@ -116,6 +116,28 @@ test('biginteger/decimal string bounds + array item guards round-trip through th
   assert.deepStrictEqual(loaded, r.schema);
 });
 
+test('date/datetime min/max bounds round-trip through the written file', async () => {
+  // An un-emitted bound is silently lost on the next boot (the info/label lesson) — pin the codegen ⇄
+  // defToSchema round-trip for both an absolute ISO bound and a relative `$now` token.
+  const r = await applySchemaEdit(sql, genDir, {
+    name: 'dated',
+    fields: [
+      { name: 'born', type: 'date', options: { nullable: true, min: '1900-01-01', max: '$now' } },
+      { name: 'startsAt', type: 'datetime', options: { nullable: true, min: '$now(-1 day)', max: '2099-12-31T23:59:59Z' } },
+    ],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(await tableExists(sql, 'ct_dated'), true);
+
+  const loaded = (await loadTypes(genDir)).schemas.find((s) => s.name === 'dated')!;
+  const byName = new Map(loaded.fields.map((f) => [f.name, f]));
+  assert.equal(byName.get('born')!.options?.min, '1900-01-01');
+  assert.equal(byName.get('born')!.options?.max, '$now');
+  assert.equal(byName.get('startsAt')!.options?.min, '$now(-1 day)');
+  assert.equal(byName.get('startsAt')!.options?.max, '2099-12-31T23:59:59Z');
+  assert.deepStrictEqual(loaded, r.schema);
+});
+
 test('destructive edit is gated: blocked → nothing written/applied; allowDestructive → applied', async () => {
   await applySchemaEdit(sql, genDir, {
     name: 'widget',

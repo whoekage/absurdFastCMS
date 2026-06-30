@@ -45,3 +45,43 @@ test('array item guards: count bounds + uniqueItems + must be an array', () => {
   bad({ tags: ['a', 'a'] }); // duplicate (uniqueItems)
   bad({ tags: 'not-an-array' }); // array field must receive an array
 });
+
+// date/datetime min/max — absolute bounds + relative `$now` tokens resolved against the request instant.
+const dated = Registry.fromSchemas([
+  schema({
+    name: 'dated',
+    fields: [
+      { name: 'born', type: 'date', options: { nullable: true, min: '2000-01-01', max: '2020-12-31' } },
+      { name: 'at', type: 'datetime', options: { nullable: true, min: '2000-01-01T00:00:00Z' } },
+      { name: 'past', type: 'datetime', options: { nullable: true, max: '$now' } },
+      { name: 'recent', type: 'date', options: { nullable: true, min: '$now(-7 days)' } },
+    ],
+  }),
+]);
+const ddef = dated.get('dated')!;
+const dok = (raw: Record<string, unknown>) => assert.doesNotThrow(() => validateBody(ddef, raw, 'create', dated));
+const dbad = (raw: Record<string, unknown>) => assert.throws(() => validateBody(ddef, raw, 'create', dated), BodyParseError);
+
+test('date calendar bounds are inclusive + UTC-truncated', () => {
+  dok({ born: '2000-01-01' }); // == min
+  dok({ born: '2020-12-31' }); // == max
+  dok({ born: '2010-06-15' });
+  dbad({ born: '1999-12-31' }); // < min
+  dbad({ born: '2021-01-01' }); // > max
+});
+
+test('datetime instant bounds (inclusive)', () => {
+  dok({ at: '2000-01-01T00:00:00Z' }); // == min
+  dbad({ at: '1999-12-31T23:59:59Z' }); // < min
+});
+
+test('relative $now bounds resolve against the request instant', () => {
+  const yesterday = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const tomorrow = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+  dok({ past: yesterday }); // before $now → ok
+  dbad({ past: tomorrow }); // after $now → rejected
+  // recent: a date on/after $now(-7 days). 30 days ago is out; today is in.
+  const days = (n: number) => new Date(Date.now() + n * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  dok({ recent: days(0) });
+  dbad({ recent: days(-30) });
+});

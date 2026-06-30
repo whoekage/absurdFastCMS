@@ -134,8 +134,8 @@ function fieldBuilderCall(f: FieldSchema): string {
     case 'float': return `c.float({ ${id}${nul}${def}${min}${maxv}${cm} })`;
     case 'decimal': return `c.decimal({ ${id}${o.precision !== undefined ? `, precision: ${o.precision}` : ''}${o.scale !== undefined ? `, scale: ${o.scale}` : ''}${nul}${def}${min}${maxv}${cm} })`;
     case 'boolean': return `c.boolean({ ${id}${nul}${def}${cm} })`;
-    case 'date': return `c.date({ ${id}${nul}${def}${cm} })`;
-    case 'datetime': return `c.datetime({ ${id}${nul}${def}${cm} })`;
+    case 'date': return `c.date({ ${id}${nul}${def}${min}${maxv}${cm} })`;
+    case 'datetime': return `c.datetime({ ${id}${nul}${def}${min}${maxv}${cm} })`;
     case 'json': return `c.json({ ${id}${nul}${def}${cm} })`;
     case 'array': return `c.array({ ${id}${nul}${def}${ai}${cm} })`;
     case 'media': return `c.media({ ${id}${o.multiple ? ', multiple: true' : ''}${nul}${cm} })`;
