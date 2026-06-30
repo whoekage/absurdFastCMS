@@ -65,7 +65,9 @@ function RootLayout() {
 
 /** The full-screen builder routes: create + edit a module. `/modules` (the list) stays in the shell. */
 function isBuilderRoute(pathname: string): boolean {
-  return pathname === '/modules/new' || (pathname.startsWith('/modules/') && pathname !== '/modules');
+  // Normalize a trailing slash so `/modules/` (the list) isn't mistaken for a builder route.
+  const p = pathname !== '/' && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+  return p === '/modules/new' || (p.startsWith('/modules/') && p !== '/modules');
 }
 
 function AppShell() {

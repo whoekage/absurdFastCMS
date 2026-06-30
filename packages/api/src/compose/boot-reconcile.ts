@@ -65,9 +65,15 @@ function isReverseDestructive(c: Change): boolean {
  * codegen now, so it round-trips. The loud cases — a field type the codegen can't emit — throw
  * `BuilderCodegenError` and are handled separately.)
  */
+// Field types whose codegen builder cannot carry a constant `default` — a default on one of these would
+// be silently dropped by generateSchemaSource (so it must veto recover-forward). Every other type emits it.
+const DEFAULT_UNEMITTABLE_TYPES = new Set(['media', 'component', 'dynamiczone']);
+
 function isRoundTrippable(s: Schema): boolean {
   if (s.collectionName !== undefined) return false;
-  return s.fields.every((f) => f.localized === undefined);
+  return s.fields.every(
+    (f) => f.localized === undefined && !(f.options?.default !== undefined && DEFAULT_UNEMITTABLE_TYPES.has(f.type)),
+  );
 }
 
 /** Atomic same-dir flip (mirror of applySchemaEdit's temp→rename) so a crash mid-recovery never half-writes. */

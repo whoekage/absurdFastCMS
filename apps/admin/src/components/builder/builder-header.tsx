@@ -56,7 +56,7 @@ export function BuilderHeader({ mode, name, label, right }: BuilderHeaderProps) 
       {mode === 'edit' && (
         <span
           className="rounded-full px-2.5 py-0.5 font-mono text-[11px]"
-          style={{ background: 'color-mix(in srgb, hsl(var(--muted)) 70%, transparent)', color: 'var(--mutedfg, hsl(var(--muted-foreground)))' }}
+          style={{ background: 'color-mix(in srgb, hsl(var(--muted)) 70%, transparent)', color: 'hsl(var(--muted-foreground))' }}
         >
           Collection type
         </span>

@@ -72,8 +72,12 @@ function common(o?: BaseOpts): Record<string, unknown> {
 
 type StringOpts = BaseOpts & { max?: number; min?: number; default?: string };
 type NumOpts = BaseOpts & { min?: number; max?: number; default?: number };
-type DecimalOpts = BaseOpts & { precision?: number; scale?: number; default?: number };
+type DecimalOpts = BaseOpts & { precision?: number; scale?: number; default?: string | number };
 type MediaOpts = BaseOpts & { multiple?: boolean };
+type BigIntOpts = BaseOpts & { default?: string | number }; // i64 default may arrive as a string
+type DateOpts = BaseOpts & { default?: string };
+type JsonOpts = BaseOpts & { default?: unknown };
+type UuidOpts = BaseOpts & { default?: string };
 type RelOpts = { id?: string; kind: RelationKind; inverse?: string; displayField?: string };
 
 /** The conti field-builder namespace (`c.string(...)`, `c.relation(...)`, ...). */
@@ -83,29 +87,29 @@ export const c = {
   text: <O extends BaseOpts & { default?: string } = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
     field('text', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   email: <O extends StringOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('email', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
+    field('email', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   uid: <O extends StringOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('uid', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
-  uuid: <O extends BaseOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('uuid', clean({ nullable: o?.nullable ?? true, ...common(o) }), o?.id),
-  enum: <const V extends readonly string[], O extends BaseOpts = {}>(values: V, o?: O): FieldBuilder<Nullable<V[number], O>> =>
-    field('enumeration', clean({ values: [...values], nullable: o?.nullable ?? true, ...common(o) }), o?.id),
+    field('uid', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+  uuid: <O extends UuidOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
+    field('uuid', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+  enum: <const V extends readonly string[], O extends BaseOpts & { default?: V[number] } = {}>(values: V, o?: O): FieldBuilder<Nullable<V[number], O>> =>
+    field('enumeration', clean({ values: [...values], nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   integer: <O extends NumOpts = {}>(o?: O): FieldBuilder<Nullable<number, O>> =>
     field('integer', clean({ nullable: o?.nullable ?? true, min: o?.min, max: o?.max, default: o?.default, ...common(o) }), o?.id),
-  biginteger: <O extends BaseOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> => // i64 serializes as string
-    field('biginteger', clean({ nullable: o?.nullable ?? true, ...common(o) }), o?.id),
+  biginteger: <O extends BigIntOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> => // i64 serializes as string
+    field('biginteger', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   float: <O extends NumOpts = {}>(o?: O): FieldBuilder<Nullable<number, O>> =>
     field('float', clean({ nullable: o?.nullable ?? true, min: o?.min, max: o?.max, default: o?.default, ...common(o) }), o?.id),
   decimal: <O extends DecimalOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> => // numeric serializes as string
-    field('decimal', clean({ precision: o?.precision, scale: o?.scale, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
+    field('decimal', clean({ precision: o?.precision, scale: o?.scale, nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   boolean: <O extends BaseOpts & { default?: boolean } = {}>(o?: O): FieldBuilder<Nullable<boolean, O>> =>
     field('boolean', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
-  date: <O extends BaseOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('date', clean({ nullable: o?.nullable ?? true, ...common(o) }), o?.id),
-  datetime: <O extends BaseOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('datetime', clean({ nullable: o?.nullable ?? true, ...common(o) }), o?.id),
-  json: <O extends BaseOpts = {}>(o?: O): FieldBuilder<Nullable<unknown, O>> =>
-    field('json', clean({ nullable: o?.nullable ?? true, ...common(o) }), o?.id),
+  date: <O extends DateOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
+    field('date', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+  datetime: <O extends DateOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
+    field('datetime', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+  json: <O extends JsonOpts = {}>(o?: O): FieldBuilder<Nullable<unknown, O>> =>
+    field('json', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   media: <O extends MediaOpts = {}>(o?: O): FieldBuilder<Nullable<O extends { multiple: true } ? number[] : number, O>> =>
     field('media', clean({ multiple: o?.multiple ?? false, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   component: <O extends BaseOpts = {}>(name: string, o?: O): FieldBuilder<Nullable<unknown, O>> =>

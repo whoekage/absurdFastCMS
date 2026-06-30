@@ -59,16 +59,18 @@ export function FieldConfig({ draft, i18n, siblingNames, onChange, onDelete, onD
       className="border-t px-[15px] pb-[15px] pt-4"
       style={{ background: 'color-mix(in srgb, hsl(var(--muted)) 45%, transparent)', animation: 'lmbExpand .2s ease' }}
     >
-      {/* name + default */}
+      {/* name + default (media carries no constant default — the backend codegen can't express one) */}
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className={LABEL}>Name</label>
           <input className={MONO_INPUT} value={draft.name} onChange={(e) => set({ name: e.target.value })} placeholder="field_name" />
         </div>
-        <div>
-          <label className={LABEL}>Default value</label>
-          <input className={INPUT} value={draft.defaultValue} onChange={(e) => set({ defaultValue: e.target.value })} placeholder="—" />
-        </div>
+        {draft.type !== 'media' && (
+          <div>
+            <label className={LABEL}>Default value</label>
+            <input className={INPUT} value={draft.defaultValue} onChange={(e) => set({ defaultValue: e.target.value })} placeholder="—" />
+          </div>
+        )}
       </div>
 
       {/* type-specific */}

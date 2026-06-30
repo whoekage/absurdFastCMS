@@ -119,18 +119,18 @@ function fieldBuilderCall(f: FieldSchema): string {
   switch (f.type) {
     case 'string': return `c.string({ ${id}${max}${min}${nul}${def}${cm} })`;
     case 'text': return `c.text({ ${id}${nul}${def}${cm} })`;
-    case 'email': return `c.email({ ${id}${max}${min}${nul}${cm} })`;
-    case 'uid': return `c.uid({ ${id}${max}${min}${nul}${cm} })`;
-    case 'uuid': return `c.uuid({ ${id}${nul}${cm} })`;
-    case 'enumeration': return `c.enum(${lit(o.values ?? [])} as const, { ${id}${nul}${cm} })`;
+    case 'email': return `c.email({ ${id}${max}${min}${nul}${def}${cm} })`;
+    case 'uid': return `c.uid({ ${id}${max}${min}${nul}${def}${cm} })`;
+    case 'uuid': return `c.uuid({ ${id}${nul}${def}${cm} })`;
+    case 'enumeration': return `c.enum(${lit(o.values ?? [])} as const, { ${id}${nul}${def}${cm} })`;
     case 'integer': return `c.integer({ ${id}${nul}${def}${min}${maxv}${cm} })`;
-    case 'biginteger': return `c.biginteger({ ${id}${nul}${cm} })`;
+    case 'biginteger': return `c.biginteger({ ${id}${nul}${def}${cm} })`;
     case 'float': return `c.float({ ${id}${nul}${def}${min}${maxv}${cm} })`;
-    case 'decimal': return `c.decimal({ ${id}${o.precision !== undefined ? `, precision: ${o.precision}` : ''}${o.scale !== undefined ? `, scale: ${o.scale}` : ''}${nul}${cm} })`;
+    case 'decimal': return `c.decimal({ ${id}${o.precision !== undefined ? `, precision: ${o.precision}` : ''}${o.scale !== undefined ? `, scale: ${o.scale}` : ''}${nul}${def}${cm} })`;
     case 'boolean': return `c.boolean({ ${id}${nul}${def}${cm} })`;
-    case 'date': return `c.date({ ${id}${nul}${cm} })`;
-    case 'datetime': return `c.datetime({ ${id}${nul}${cm} })`;
-    case 'json': return `c.json({ ${id}${nul}${cm} })`;
+    case 'date': return `c.date({ ${id}${nul}${def}${cm} })`;
+    case 'datetime': return `c.datetime({ ${id}${nul}${def}${cm} })`;
+    case 'json': return `c.json({ ${id}${nul}${def}${cm} })`;
     case 'media': return `c.media({ ${id}${o.multiple ? ', multiple: true' : ''}${nul}${cm} })`;
     case 'component': return `c.component(${lit(o.component ?? '')}, { ${id}${nul}${cm} })`;
     case 'dynamiczone': return `c.dynamiczone(${lit(o.components ?? [])}, { ${id} })`;

@@ -214,7 +214,8 @@ function draftOptions(draft: FieldDraft): FieldOptions {
   // editorWidth defaults to 'full' on the backend — only emit when 'half' to keep the schema clean.
   if (draft.half) options.editorWidth = 'half';
   if (draft.condition) options.condition = draft.condition;
-  if (draft.defaultValue.trim() !== '') options.default = parseDefault(draft);
+  // media carries no constant default (the backend codegen can't express one — would be lost on reboot).
+  if (draft.type !== 'media' && draft.defaultValue.trim() !== '') options.default = parseDefault(draft);
   return options;
 }
 

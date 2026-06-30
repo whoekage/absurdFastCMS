@@ -45,10 +45,12 @@ export default {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
-        // Lua brand accents: the link/spark blue + status hues (tinted bg + colored text on pills).
-        info: '#5b8cff',
-        success: '#10b981',
-        warning: '#f59e0b',
+        // Lua brand accents: the link/spark blue + status hues. Single source of truth = the CSS vars in
+        // index.css (light + dark), so a `text-success` utility and a `var(--success)` inline render the
+        // SAME hue (they had drifted apart as separate hex literals).
+        info: 'var(--info)',
+        success: 'var(--success)',
+        warning: 'var(--warning)',
       },
       fontFamily: {
         sans: ['Manrope', 'ui-sans-serif', 'system-ui', 'sans-serif'],

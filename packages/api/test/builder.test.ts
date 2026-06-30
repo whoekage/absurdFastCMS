@@ -55,6 +55,40 @@ test('create: mints ids, migrates the DB, writes schema.ts that round-trips to t
   assert.deepStrictEqual(loaded, r.schema);
 });
 
+test('a constant `default` round-trips through the written file for EVERY type that can carry one', async () => {
+  // Regression: generateSchemaSource + the DSL builders silently dropped `default` for email/uid/uuid/
+  // enumeration/biginteger/decimal/date/datetime/json — set in the admin, gone on the next boot (the
+  // info/label lesson). This pins the codegen ⇄ defToSchema round-trip for the constant default on each.
+  const r = await applySchemaEdit(sql, genDir, {
+    name: 'defaulted',
+    fields: [
+      { name: 'em', type: 'email', options: { nullable: true, default: 'a@b.com' } },
+      { name: 'slug', type: 'uid', options: { nullable: true, default: 'home' } },
+      { name: 'ref', type: 'uuid', options: { nullable: true, default: '00000000-0000-4000-8000-000000000000' } },
+      { name: 'state', type: 'enumeration', options: { values: ['draft', 'live'], nullable: false, default: 'draft' } },
+      { name: 'big', type: 'biginteger', options: { nullable: true, default: '9007199254740993' } },
+      { name: 'price', type: 'decimal', options: { precision: 10, scale: 2, nullable: true, default: '9.99' } },
+      { name: 'd', type: 'date', options: { nullable: true, default: '2026-01-01' } },
+      { name: 'meta', type: 'json', options: { nullable: true, default: { k: 1 } } },
+    ],
+  });
+  assert.equal(r.ok, true);
+
+  // Each field's default survives the codegen → file → defToSchema reload (no silent loss).
+  const loaded = (await loadTypes(genDir)).schemas.find((s) => s.name === 'defaulted')!;
+  const byName = new Map(loaded.fields.map((f) => [f.name, f]));
+  assert.equal(byName.get('em')!.options?.default, 'a@b.com');
+  assert.equal(byName.get('slug')!.options?.default, 'home');
+  assert.equal(byName.get('ref')!.options?.default, '00000000-0000-4000-8000-000000000000');
+  assert.equal(byName.get('state')!.options?.default, 'draft');
+  assert.equal(byName.get('big')!.options?.default, '9007199254740993');
+  assert.equal(byName.get('price')!.options?.default, '9.99');
+  assert.equal(byName.get('d')!.options?.default, '2026-01-01');
+  assert.deepEqual(byName.get('meta')!.options?.default, { k: 1 });
+  // the whole loaded IR equals what apply returned (full round-trip, defaults included).
+  assert.deepStrictEqual(loaded, r.schema);
+});
+
 test('destructive edit is gated: blocked → nothing written/applied; allowDestructive → applied', async () => {
   await applySchemaEdit(sql, genDir, {
     name: 'widget',
