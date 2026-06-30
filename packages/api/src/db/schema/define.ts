@@ -69,8 +69,14 @@ function field<T>(type: CmsType | ComponentFieldKind, options: FieldOptions, id?
 function common(o?: BaseOpts): Record<string, unknown> {
   return { editorWidth: o?.editorWidth, condition: o?.condition, unique: o?.unique };
 }
+/** The regex-pattern options string/email/uid/text carry (undefined-dropped by clean()). */
+function pat(o?: PatternOpts): Record<string, unknown> {
+  return { pattern: o?.pattern, patternFlags: o?.patternFlags, patternMessage: o?.patternMessage };
+}
 
-type StringOpts = BaseOpts & { max?: number; min?: number; default?: string };
+type PatternOpts = { pattern?: string; patternFlags?: string; patternMessage?: string };
+type StringOpts = BaseOpts & PatternOpts & { max?: number; min?: number; default?: string };
+type TextOpts = BaseOpts & PatternOpts & { default?: string };
 type NumOpts = BaseOpts & { min?: number; max?: number; default?: number };
 type DecimalOpts = BaseOpts & { precision?: number; scale?: number; min?: string | number; max?: string | number; default?: string | number };
 type MediaOpts = BaseOpts & { multiple?: boolean; allowedTypes?: string[]; minItems?: number; maxItems?: number };
@@ -84,13 +90,13 @@ type RelOpts = { id?: string; kind: RelationKind; inverse?: string; displayField
 /** The conti field-builder namespace (`c.string(...)`, `c.relation(...)`, ...). */
 export const c = {
   string: <O extends StringOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('string', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
-  text: <O extends BaseOpts & { default?: string } = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('text', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+    field('string', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, default: o?.default, ...pat(o), ...common(o) }), o?.id),
+  text: <O extends TextOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
+    field('text', clean({ nullable: o?.nullable ?? true, default: o?.default, ...pat(o), ...common(o) }), o?.id),
   email: <O extends StringOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('email', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+    field('email', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, default: o?.default, ...pat(o), ...common(o) }), o?.id),
   uid: <O extends StringOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
-    field('uid', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+    field('uid', clean({ length: o?.max, min: o?.min, nullable: o?.nullable ?? true, default: o?.default, ...pat(o), ...common(o) }), o?.id),
   uuid: <O extends UuidOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
     field('uuid', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   enum: <const V extends readonly string[], O extends BaseOpts & { default?: V[number] } = {}>(values: V, o?: O): FieldBuilder<Nullable<V[number], O>> =>

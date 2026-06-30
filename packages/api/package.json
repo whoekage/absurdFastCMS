@@ -13,7 +13,10 @@
     }
   },
   "//files": "Ships the source (no-build native TS) PLUS the prebuilt admin SPA (run `npm run build:admin`), which createConti serves at the root.",
-  "files": ["src", "admin"],
+  "files": [
+    "src",
+    "admin"
+  ],
   "engines": {
     "node": ">=24"
   },
@@ -39,6 +42,7 @@
     "kysely": "^0.29.2",
     "kysely-postgres-js": "3.0.0",
     "postgres": "^3.4.9",
+    "re2": "^1.24.1",
     "set-cookie-parser": "3.1.0",
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0",
     "zod": "^3.25.76"

@@ -108,6 +108,11 @@ function fieldBuilderCall(f: FieldSchema): string {
   const nul = o.nullable === false ? ', nullable: false' : ''; // nullable defaults true ⇒ omit when true
   const def = o.default !== undefined ? `, default: ${lit(o.default)}` : '';
   const max = o.length !== undefined ? `, max: ${o.length}` : ''; // string char-max (number)
+  // string/email/uid/text regex pattern (source + optional flags + message). Emit so it survives the boot.
+  const pat =
+    (o.pattern !== undefined ? `, pattern: ${lit(o.pattern)}` : '') +
+    (o.patternFlags !== undefined ? `, patternFlags: ${lit(o.patternFlags)}` : '') +
+    (o.patternMessage !== undefined ? `, patternMessage: ${lit(o.patternMessage)}` : '');
   // value bounds via lit() so a number emits bare and an i64/decimal STRING bound emits quoted.
   const min = o.min !== undefined ? `, min: ${lit(o.min)}` : '';
   const maxv = o.max !== undefined ? `, max: ${lit(o.max)}` : '';
@@ -128,10 +133,10 @@ function fieldBuilderCall(f: FieldSchema): string {
     (o.condition !== undefined ? `, condition: ${lit(o.condition)}` : '') +
     (o.unique ? `, unique: true` : '');
   switch (f.type) {
-    case 'string': return `c.string({ ${id}${max}${min}${nul}${def}${cm} })`;
-    case 'text': return `c.text({ ${id}${nul}${def}${cm} })`;
-    case 'email': return `c.email({ ${id}${max}${min}${nul}${def}${cm} })`;
-    case 'uid': return `c.uid({ ${id}${max}${min}${nul}${def}${cm} })`;
+    case 'string': return `c.string({ ${id}${max}${min}${pat}${nul}${def}${cm} })`;
+    case 'text': return `c.text({ ${id}${pat}${nul}${def}${cm} })`;
+    case 'email': return `c.email({ ${id}${max}${min}${pat}${nul}${def}${cm} })`;
+    case 'uid': return `c.uid({ ${id}${max}${min}${pat}${nul}${def}${cm} })`;
     case 'uuid': return `c.uuid({ ${id}${nul}${def}${cm} })`;
     case 'enumeration': return `c.enum(${lit(o.values ?? [])} as const, { ${id}${nul}${def}${cm} })`;
     case 'integer': return `c.integer({ ${id}${nul}${def}${min}${maxv}${cm} })`;

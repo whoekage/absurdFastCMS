@@ -1,3 +1,4 @@
+import RE2 from 're2';
 import type { ColumnType } from '../store/column.ts';
 import { DECIMAL_MAX_SAFE_PRECISION } from '../store/decimal.const.ts';
 import { isValidAllowedType } from './media.types.ts';
@@ -72,6 +73,16 @@ export interface FieldCondition {
 export interface FieldOptions {
   /** varchar length (char count) for string/email/uid/enumeration sizing. */
   length?: number;
+  /**
+   * string/email/uid/text only: a regex the value must FULLY match. Compiled + enforced through RE2 (a
+   * linear-time engine — built-in `RegExp` has no per-regex timeout, so a crafted pattern+input would ReDoS
+   * the single instance). Source only, NO slashes. Lookaround/backreferences are rejected (RE2 can't do them).
+   */
+  pattern?: string;
+  /** allowed flags for {@link pattern}: any subset of `i m s u`. `g`/`y` are rejected (stateful lastIndex). */
+  patternFlags?: string;
+  /** custom 400 message when {@link pattern} fails (falls back to a generic format message). */
+  patternMessage?: string;
   /**
    * lower bound — CONTEXTUAL: min char-length for string/email/uid (number); min VALUE for integer/float
    * (number, ≤2^53 safe); min VALUE for biginteger/decimal as a STRING (BigInt/scaled-BigInt compared, never
@@ -188,6 +199,40 @@ function intOption(value: unknown, name: string, min: number, max: number, fallb
 function varcharParams(o: FieldOptions | undefined, length: number): Record<string, unknown> {
   const params: Record<string, unknown> = { length };
   if (o?.min !== undefined) params.min = intOption(o.min, 'min', 0, length, 0);
+  return params;
+}
+
+/** The only regex flags we accept on a `pattern` — `g`/`y` are rejected (a stateful lastIndex corrupts a cached regex). */
+const ALLOWED_PATTERN_FLAGS: ReadonlySet<string> = new Set(['i', 'm', 's', 'u']);
+
+/**
+ * Validate a `pattern` option (string-ish types only): allow-list the flags, then COMPILE through RE2 with
+ * full-match wrapping (`^(?:…)$`) to (a) reject a malformed regex and (b) reject lookaround/backreferences
+ * RE2 structurally can't do — both surface as a clean schema-author {@link TypeOptionError}. Stores the raw
+ * source/flags/message in params (the registry re-compiles the matcher for the hot path). No `pattern` -> {}.
+ */
+function patternParams(o: FieldOptions | undefined): Record<string, unknown> {
+  if (o?.pattern === undefined) return {};
+  if (typeof o.pattern !== 'string' || o.pattern.length === 0) throw new TypeOptionError('pattern must be a non-empty string');
+  let flags = '';
+  if (o.patternFlags !== undefined) {
+    if (typeof o.patternFlags !== 'string') throw new TypeOptionError('patternFlags must be a string');
+    for (const f of o.patternFlags) {
+      if (!ALLOWED_PATTERN_FLAGS.has(f)) throw new TypeOptionError(`patternFlags "${o.patternFlags}" contains an unsupported flag "${f}" (allowed: i m s u)`);
+    }
+    flags = o.patternFlags;
+  }
+  try {
+    new RE2(`^(?:${o.pattern})$`, flags); // compile-to-validate (rejects lookaround/backref + bad flag combos).
+  } catch (e) {
+    throw new TypeOptionError(`pattern is not a valid RE2 regex: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const params: Record<string, unknown> = { pattern: o.pattern };
+  if (flags !== '') params.patternFlags = flags;
+  if (o.patternMessage !== undefined) {
+    if (typeof o.patternMessage !== 'string') throw new TypeOptionError('patternMessage must be a string');
+    params.patternMessage = o.patternMessage;
+  }
   return params;
 }
 
@@ -371,10 +416,10 @@ function resolveEnum(options: FieldOptions | undefined): { values: string[]; max
  * throws {@link UnknownCmsTypeError} before any DDL string is built.
  */
 const RESOLVERS = {
-  string: (o) => { const length = intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_STRING_LENGTH); return { pgType: `varchar(${length})`, engineType: 'string', params: varcharParams(o, length) }; },
-  text: () => ({ pgType: 'text', engineType: 'text', params: {} }),
-  email: (o) => { const length = intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_EMAIL_LENGTH); return { pgType: `varchar(${length})`, engineType: 'string', params: varcharParams(o, length) }; },
-  uid: (o) => { const length = intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_UID_LENGTH); return { pgType: `varchar(${length})`, engineType: 'string', params: varcharParams(o, length) }; },
+  string: (o) => { const length = intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_STRING_LENGTH); return { pgType: `varchar(${length})`, engineType: 'string', params: { ...varcharParams(o, length), ...patternParams(o) } }; },
+  text: (o) => ({ pgType: 'text', engineType: 'text', params: patternParams(o) }),
+  email: (o) => { const length = intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_EMAIL_LENGTH); return { pgType: `varchar(${length})`, engineType: 'string', params: { ...varcharParams(o, length), ...patternParams(o) } }; },
+  uid: (o) => { const length = intOption(o?.length, 'length', 1, VARCHAR_MAX, DEFAULT_UID_LENGTH); return { pgType: `varchar(${length})`, engineType: 'string', params: { ...varcharParams(o, length), ...patternParams(o) } }; },
   enumeration: (o) => {
     const { values, maxLen } = resolveEnum(o);
     // varchar sized >= the longest value char length (so a member never trips 22001), CHECK added by ddl.

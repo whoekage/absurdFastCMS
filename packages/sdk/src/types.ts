@@ -104,6 +104,12 @@ export interface FieldOptions {
   /** `array` only: item-count bounds. */
   minItems?: number;
   maxItems?: number;
+  /** string/email/uid/text only: a regex the value must FULLY match (RE2, ReDoS-safe; no slashes). */
+  pattern?: string;
+  /** allowed flags for {@link pattern}: a subset of `i m s u` (`g`/`y` rejected). */
+  patternFlags?: string;
+  /** custom validation message when {@link pattern} fails. */
+  patternMessage?: string;
 }
 
 /** A field's admin conditional-visibility rule. Metadata only (mirrors the api's FieldCondition). */

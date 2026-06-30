@@ -316,6 +316,29 @@ test('T21 media allowedTypes + count range', () => {
   assert.throws(() => resolveType('media', { multiple: true, minItems: 3, maxItems: 1 }), TypeOptionError); // max<min
 });
 
+// T22 — string/email/uid/text regex `pattern`: compiled-to-validate through RE2 at resolve; flags allow-listed.
+test('T22 string pattern resolve + validation (RE2)', () => {
+  // a valid pattern + allowed flags + message round-trips into params verbatim.
+  assert.deepEqual(resolveType('string', { pattern: '\\d{3}', patternFlags: 'i', patternMessage: 'three digits' }).params, {
+    length: 255,
+    pattern: '\\d{3}',
+    patternFlags: 'i',
+    patternMessage: 'three digits',
+  });
+  // applies to email/uid/text too.
+  assert.equal(resolveType('text', { pattern: '[a-z]+' }).params['pattern'], '[a-z]+');
+  assert.equal(resolveType('uid', { pattern: '[a-z-]+' }).params['pattern'], '[a-z-]+');
+  // g / y flags rejected (stateful lastIndex); only i m s u allowed.
+  assert.throws(() => resolveType('string', { pattern: 'a', patternFlags: 'g' }), TypeOptionError);
+  assert.throws(() => resolveType('string', { pattern: 'a', patternFlags: 'y' }), TypeOptionError);
+  // lookaround + backreferences are rejected by RE2 (surfaced as a TypeOptionError at resolve).
+  assert.throws(() => resolveType('string', { pattern: '(?=foo)' }), TypeOptionError);
+  assert.throws(() => resolveType('string', { pattern: '(a)\\1' }), TypeOptionError);
+  // a malformed regex + an empty pattern throw.
+  assert.throws(() => resolveType('string', { pattern: '(' }), TypeOptionError);
+  assert.throws(() => resolveType('string', { pattern: '' }), TypeOptionError);
+});
+
 // T18 — `unique` emits an inline UNIQUE column constraint via columnSpec; applicability-gated in resolveFields.
 test('T18 unique column constraint + applicability guard', () => {
   const fields = resolveFields([

@@ -162,6 +162,27 @@ test('media allowedTypes + count round-trip through the written file', async () 
   // allowedTypes-orthogonal asymmetry). The per-option checks above pin the codegen ⇄ loadTypes round-trip.
 });
 
+test('string/text regex pattern round-trips through the written file', async () => {
+  // An un-emitted pattern is silently lost on the next boot (the info/label lesson) — pin the round-trip.
+  const r = await applySchemaEdit(sql, genDir, {
+    name: 'patterned',
+    fields: [
+      { name: 'sku', type: 'string', options: { nullable: true, pattern: '\\d{3}-[A-Z]{2}', patternFlags: 'i', patternMessage: 'like 123-AB' } },
+      { name: 'slug', type: 'text', options: { nullable: true, pattern: '[a-z0-9-]+' } },
+    ],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(await tableExists(sql, 'ct_patterned'), true);
+
+  const loaded = (await loadTypes(genDir)).schemas.find((s) => s.name === 'patterned')!;
+  const byName = new Map(loaded.fields.map((f) => [f.name, f]));
+  assert.equal(byName.get('sku')!.options?.pattern, '\\d{3}-[A-Z]{2}');
+  assert.equal(byName.get('sku')!.options?.patternFlags, 'i');
+  assert.equal(byName.get('sku')!.options?.patternMessage, 'like 123-AB');
+  assert.equal(byName.get('slug')!.options?.pattern, '[a-z0-9-]+');
+  assert.deepStrictEqual(loaded, r.schema);
+});
+
 test('destructive edit is gated: blocked → nothing written/applied; allowDestructive → applied', async () => {
   await applySchemaEdit(sql, genDir, {
     name: 'widget',

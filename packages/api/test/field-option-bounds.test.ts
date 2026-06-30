@@ -101,3 +101,39 @@ test('multiple-media count bounds are enforced (distinct ids)', () => {
   assert.throws(() => validateBody(gdef, { photos: [] }, 'create', galleries), BodyParseError); // < min
   assert.throws(() => validateBody(gdef, { photos: [10, 11, 12] }, 'create', galleries), BodyParseError); // > max
 });
+
+// string/text regex pattern — RE2 full-match enforcement (ReDoS-safe).
+const patterned = Registry.fromSchemas([
+  schema({
+    name: 'patterned',
+    fields: [
+      { name: 'sku', type: 'string', options: { nullable: true, pattern: '\\d{3}-[A-Z]{2}', patternMessage: 'must look like 123-AB' } },
+      { name: 'slug', type: 'text', options: { nullable: true, pattern: '[a-z0-9-]+' } },
+      { name: 'evil', type: 'text', options: { nullable: true, pattern: '(?:a+)+' } }, // catastrophic for a backtracking engine
+    ],
+  }),
+]);
+const pdef = patterned.get('patterned')!;
+
+test('regex pattern is FULL-match (anchored), not partial', () => {
+  assert.doesNotThrow(() => validateBody(pdef, { sku: '123-AB' }, 'create', patterned));
+  assert.throws(() => validateBody(pdef, { sku: '123-ABC' }, 'create', patterned), BodyParseError); // trailing char
+  assert.throws(() => validateBody(pdef, { sku: 'x123-AB' }, 'create', patterned), BodyParseError); // leading char
+  assert.throws(() => validateBody(pdef, { sku: '12-AB' }, 'create', patterned), BodyParseError); // too few digits
+  assert.doesNotThrow(() => validateBody(pdef, { slug: 'hello-world-2' }, 'create', patterned));
+  assert.throws(() => validateBody(pdef, { slug: 'Hello World' }, 'create', patterned), BodyParseError);
+});
+
+test('the custom patternMessage is surfaced on failure', () => {
+  assert.throws(
+    () => validateBody(pdef, { sku: 'nope' }, 'create', patterned),
+    (e: unknown) => e instanceof BodyParseError && /123-AB/.test(e.message),
+  );
+});
+
+test('a catastrophic pattern + long non-matching input returns FAST (RE2 is linear, no ReDoS)', () => {
+  const start = Date.now();
+  // A backtracking engine would hang on `(?:a+)+` with a long non-matching input; RE2 returns ~instantly.
+  assert.throws(() => validateBody(pdef, { evil: `${'a'.repeat(50)}!` }, 'create', patterned), BodyParseError);
+  assert.ok(Date.now() - start < 1000, 'pattern match must be linear-time');
+});

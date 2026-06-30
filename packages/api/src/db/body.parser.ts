@@ -19,6 +19,13 @@ const MAX_COMPONENT_DEPTH = 10;
 const MAX_COMPONENT_ENTRY_BYTES = 1 << 18; // 256 KiB per component instance
 
 /**
+ * Defense-in-depth cap on the length of a value run through a regex `pattern`. RE2 is linear-time (so this
+ * is NOT a ReDoS guard — it can't catastrophic-backtrack), but a multi-megabyte value still wastes CPU on a
+ * single instance; past this a clean 400 beats the work. A varchar column already caps far below this.
+ */
+const MAX_PATTERN_INPUT = 1 << 20; // 1 MiB
+
+/**
  * The WRITE-side counterpart to the query parser: validate + coerce a request body against a content-
  * type's REGISTRY def. Same doctrine as the read parser — strict, never a silent wrong write:
  *
@@ -443,6 +450,13 @@ function checkDateBounds(name: string, field: RegistryField, value: Date, now: D
   }
 }
 
+/** Enforce a string/text field's regex `pattern` (full-match, RE2). Length-capped first (defense-in-depth). */
+function checkPattern(name: string, field: RegistryField, v: string): void {
+  if (field.patternRe === undefined) return;
+  if (v.length > MAX_PATTERN_INPUT) throw new BodyParseError(`field "${name}" is too long to validate`);
+  if (!field.patternRe.test(v)) throw new BodyParseError(field.patternMessage ?? `field "${name}" has an invalid format`);
+}
+
 /** `array` write guards: must BE an array, within minItems/maxItems, and (uniqueItems) no duplicate scalars. */
 function checkArray(name: string, field: RegistryField, v: unknown): void {
   if (!Array.isArray(v)) throw new BodyParseError(`field "${name}" must be an array`);
@@ -498,10 +512,12 @@ function coerce(field: RegistryField, v: unknown, now: Date): unknown {
       if (typeof field.min === 'number' && v.length < field.min) {
         throw new BodyParseError(`field "${name}" must be at least ${field.min} character(s)`);
       }
+      checkPattern(name, field, v);
       return v;
     }
     case 'text':
       if (typeof v !== 'string') throw new BodyParseError(`field "${name}" must be a string`);
+      checkPattern(name, field, v);
       return v;
     case 'date': {
       if (typeof v !== 'string' && typeof v !== 'number') {

@@ -1,3 +1,4 @@
+import RE2 from 're2';
 import type { Sql } from 'postgres';
 import type { ColumnType } from '../store/column.ts';
 import type { FieldDef } from '../store/table.ts';
@@ -103,6 +104,14 @@ export interface RegistryField {
   enumValues?: readonly string[];
   /** varchar length (params.length), for the clean-400 length guard. */
   length?: number;
+  /** string/email/uid/text regex source (params.pattern), kept for codegen round-trip. */
+  pattern?: string;
+  /** allowed flags for {@link pattern} (params.patternFlags), kept for codegen. */
+  patternFlags?: string;
+  /** custom 400 message when {@link patternRe} fails (params.patternMessage). */
+  patternMessage?: string;
+  /** the COMPILED full-match RE2 matcher (built once at load) — the write-time hot path. Linear-time (ReDoS-safe). */
+  patternRe?: { test(s: string): boolean };
   /** lower bound (params.min) — char-length (string/email/uid) or VALUE; STRING for biginteger/decimal. Write-time guard. */
   min?: number | string;
   /** upper VALUE bound (params.max); STRING for biginteger/decimal. Write-time guard. */
@@ -317,6 +326,22 @@ function buildUserField(name: string, row: FieldRow): RegistryField {
       throw new RegistryError(name, row.name, 'length out of range');
     }
     field.length = length;
+  }
+  // string/email/uid/text regex: re-compile the full-match RE2 matcher once here (the write hot path); keep the
+  // raw source/flags/message for codegen. RE2 is linear-time, so a crafted value can never ReDoS the instance.
+  const pattern = params['pattern'];
+  if (typeof pattern === 'string' && pattern.length > 0) {
+    field.pattern = pattern;
+    const pf = params['patternFlags'];
+    const flags = typeof pf === 'string' ? pf : '';
+    if (flags !== '') field.patternFlags = flags;
+    const pm = params['patternMessage'];
+    if (typeof pm === 'string') field.patternMessage = pm;
+    try {
+      field.patternRe = new RE2(`^(?:${pattern})$`, flags);
+    } catch (e) {
+      throw new RegistryError(name, row.name, `invalid stored pattern: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
   // min/max are numbers for i32/f64 + string char-min, but STRINGS for i64/decimal value bounds — read either.
   const min = params['min'];
