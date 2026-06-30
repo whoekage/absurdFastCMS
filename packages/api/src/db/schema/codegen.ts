@@ -1,4 +1,4 @@
-import type { Schema, FieldSchema, RelationSchema } from './model.ts';
+import type { Schema, FieldSchema, RelationSchema, ComponentSchema } from './model.ts';
 import { AppError } from '../../errors/app-error.ts';
 
 /** Raised when the codegen meets a field kind the v1 DSL can't yet express (e.g. repeatable components). */
@@ -151,7 +151,16 @@ function fieldBuilderCall(f: FieldSchema): string {
     case 'array': return `c.array({ ${id}${nul}${def}${ai}${cm} })`;
     case 'media': return `c.media({ ${id}${o.multiple ? ', multiple: true' : ''}${mediaOpts}${nul}${cm} })`;
     case 'component': return `c.component(${lit(o.component ?? '')}, { ${id}${nul}${cm} })`;
+    case 'component-repeatable': {
+      // a list of component instances; min/max bound the count.
+      const bounds = (o.min !== undefined ? `, min: ${o.min}` : '') + (o.max !== undefined ? `, max: ${o.max}` : '');
+      return `c.component(${lit(o.component ?? '')}, { ${id}, repeatable: true${bounds}${nul}${cm} })`;
+    }
     case 'dynamiczone': return `c.dynamiczone(${lit(o.components ?? [])}, { ${id} })`;
+    case 'relation':
+      // an INLINE relation ref INSIDE a component (be-05b): stored by value in the component json. The
+      // component only distinguishes single vs many, so emit a kind that round-trips `multiple`.
+      return `c.relation(${lit(o.target ?? '')}, { ${id}, kind: ${lit(o.multiple ? 'oneToMany' : 'manyToOne')} })`;
     default:
       throw new BuilderCodegenError(`field "${f.name}": type "${f.type}" is not yet expressible by the Builder codegen`);
   }
@@ -178,11 +187,32 @@ export function generateSchemaSource(schema: Schema): string {
     const parts: string[] = [];
     if (schema.options.draftAndPublish !== undefined) parts.push(`draftAndPublish: ${schema.options.draftAndPublish}`);
     if (schema.options.i18n !== undefined) parts.push(`i18n: ${schema.options.i18n}`);
+    if (schema.options.single !== undefined) parts.push(`single: ${schema.options.single}`);
     if (parts.length > 0) lines.push(`  options: { ${parts.join(', ')} },`);
   }
   lines.push('  fields: {');
   for (const f of schema.fields) lines.push(`    ${f.name}: ${fieldBuilderCall(f)},`);
   for (const r of schema.relations ?? []) lines.push(`    ${r.field}: ${relationBuilderCall(r)},`);
   lines.push('  },', '});', '', `export default ${name};`, `export type ${name} = typeof ${name};`, '');
+  return lines.join('\n');
+}
+
+/**
+ * Generate the full `modules/components/<name>.ts` SOURCE from a {@link ComponentSchema} — the visual
+ * Builder's write artifact for a reusable component. Pure: IR in, source string out. Round-trips: loading
+ * the generated file (`loadComponents` → `defToComponentSchema`) yields an IR equal to the input. A
+ * component has no options / no top-level relations (an inline relation is a `relation` FIELD).
+ */
+export function generateComponentSource(component: ComponentSchema): string {
+  const name = pascalCase(component.name);
+  const lines: string[] = [
+    "import { defineComponent, c } from '@conti/core';",
+    '',
+    `const ${name} = defineComponent({`,
+    `  id: ${lit(component.id)},`,
+    '  fields: {',
+  ];
+  for (const f of component.fields) lines.push(`    ${f.name}: ${fieldBuilderCall(f)},`);
+  lines.push('  },', '});', '', `export default ${name};`, '');
   return lines.join('\n');
 }

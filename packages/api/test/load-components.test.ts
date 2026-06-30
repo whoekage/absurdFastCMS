@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { loadTypes } from '../src/db/schema/load.ts';
+import { generateComponentSource } from '../src/db/schema/codegen.ts';
+import type { ComponentSchema } from '../src/db/schema/model.ts';
 
 /**
  * The component-definition file loader: `modules/components/*.ts` (each `export default defineComponent(...)`)
@@ -47,4 +49,20 @@ test('loadTypes reads modules/components/*.ts into the ComponentSchema IR', asyn
       { id: 'f_og', name: 'og_image', type: 'media', options: { multiple: false, nullable: true } },
     ],
   });
+});
+
+test('generateComponentSource → loadComponents round-trips to the same IR', async () => {
+  const hero: ComponentSchema = {
+    id: 'cmp_hero',
+    name: 'hero',
+    fields: [
+      { id: 'f_h', name: 'heading', type: 'string', options: { nullable: false } },
+      { id: 'f_img', name: 'image', type: 'media', options: { multiple: false, nullable: true } },
+    ],
+  };
+  const dir = `${genDir}/roundtrip`;
+  await mkdir(`${dir}/components`, { recursive: true });
+  await writeFile(`${dir}/components/hero.ts`, generateComponentSource(hero));
+  const loaded = await loadTypes(dir);
+  assert.deepEqual(loaded.components[0], hero);
 });
