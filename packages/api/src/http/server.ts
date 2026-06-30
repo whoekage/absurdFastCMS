@@ -9,9 +9,10 @@ import { rebuildType } from '../db/engine.loader.ts';
 import { handleRequest, errorResponse, JSON_CT, type CoreResponse } from './read.router.ts';
 import { handleWrite, type WriteContext } from './write.handler.ts';
 import { HookRegistry } from '../db/schema/hooks.ts';
-import { applySchemaEdit, applySchemaDelete, previewSchemaEdit, BuilderBusyError, type ModuleDraft, type SchemaEditResult } from '../compose/builder.ts';
+import { applySchemaEdit, applySchemaDelete, previewSchemaEdit, BuilderBusyError, type ModuleDraft, type SchemaEditResult, applyComponentEdit, applyComponentDelete, previewComponentEdit, readComponents, type ComponentDraft } from '../compose/builder.ts';
 import { swapFromIR } from '../db/engine.swap.ts';
 import { loadTypes, loadTypesCacheBusted } from '../db/schema/load.ts';
+import type { ComponentSchema } from '../db/schema/model.ts';
 import { readAppliedSchemas, ensureAppliedTable, MigrationBlockedError } from '../db/schema/migrate.ts';
 import { SchemaChangeConflictError } from '../db/ddl.ts';
 import { toErrorResponse, localeFromAcceptLanguage, type Locale } from '../errors/index.ts';
@@ -937,6 +938,14 @@ export function createServer(deps: ServerDeps): Server {
     swapAfter(await applySchemaEdit(sql, dir, draft, opts ?? {}));
   const runDelete = async (name: string): Promise<SchemaEditResult> => swapAfter(await applySchemaDelete(sql, dir, name));
 
+  // Re-import the catalog (cache-busted) and swap the live registry/hooks/relations/components from disk —
+  // NO migrate. Shared by POST /builder/reload and the component routes (a component edit changes no table,
+  // so its only effect is a registry rebuild that picks up the new/edited/removed component file).
+  const reloadFromDisk = async (): Promise<void> => {
+    const { schemas, hooks, components } = await loadTypesCacheBusted(dir, `reload:${process.pid}:${Date.now()}`);
+    await swapFromIR(sql, live, schemas, [], new HookRegistry(hooks), components);
+  };
+
   // Programmatic entry (srv.applyEdit): serialize via the SAME mutex; a contended call THROWS (it cannot
   // return a CoreResponse). The HTTP path calls runEdit DIRECTLY from inside its own held mutex (no double-acquire).
   applyEditFn = async (draft, opts) => {
@@ -1004,6 +1013,56 @@ export function createServer(deps: ServerDeps): Server {
     })();
   };
 
+  // The component-edit concurrency wrapper — mirrors runMutation (busy mutex, idempotency replay, If-Match
+  // version precheck, version bump) but for the migrate-free component path: exec resolves+writes the
+  // component file and swaps the registry, then the catalog version advances (a component edit always
+  // changes the catalog). Success carries the resolved component + the new version.
+  const runComponentMutation = (
+    res: uWS.HttpResponse,
+    aborted: () => boolean,
+    pre: { ifMatch: string; bodyVersion: string | undefined; idemKey: string; requestHash: string },
+    exec: () => Promise<{ component?: ComponentSchema }>,
+    locale: Locale,
+  ): void => {
+    void (async () => {
+      if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
+      writerBusy = true;
+      try {
+        await ensureTables();
+        if (pre.idemKey !== '') {
+          await pruneIdempotency(sql).catch(() => {});
+          const hit = await idempotencyLookup(sql, pre.idemKey);
+          if (hit !== undefined) {
+            if (hit.requestHash !== pre.requestHash) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'idempotency key reused for a different request' }));
+            const etag = hit.status === 200 ? { ETag: String((hit.response as { version?: string }).version ?? '') } : undefined;
+            return corkSend(res, aborted, builderJson(hit.status, hit.response, etag));
+          }
+        }
+        await ensureVersion();
+        const expected = pre.ifMatch !== '' ? pre.ifMatch : pre.bodyVersion;
+        if (expected !== currentVersion) return corkSend(res, aborted, builderJson(412, { ok: false, error: 'stale version', currentVersion }, { ETag: currentVersion }));
+        let r: { component?: ComponentSchema };
+        try {
+          r = await exec();
+        } catch (e) {
+          if (pre.idemKey !== '') {
+            const { status, fields } = builderErrorFields(e, locale);
+            if (status >= 400 && status < 500 && !(e instanceof SchemaChangeConflictError)) await recordIdempotency(sql, pre.idemKey, pre.requestHash, status, fields).catch(() => {});
+          }
+          throw e;
+        }
+        currentVersion = await computeCatalogVersion(dir);
+        const fields = { ok: true as const, ...(r.component !== undefined ? { component: r.component } : {}), version: currentVersion };
+        if (pre.idemKey !== '') await recordIdempotency(sql, pre.idemKey, pre.requestHash, 200, fields).catch(() => {});
+        corkSend(res, aborted, builderJson(200, fields, { ETag: currentVersion }));
+      } catch (e) {
+        corkSend(res, aborted, builderError(e, locale));
+      } finally {
+        writerBusy = false;
+      }
+    })();
+  };
+
   // ---- BUILDER ROUTE SURFACE (design §1). GET reads are PUBLIC; mutations gated on builder.manage. ----
 
   // GET list — applied catalog (with ids) + ETag/304.
@@ -1050,7 +1109,7 @@ export function createServer(deps: ServerDeps): Server {
       void (async () => {
         let result: CoreResponse;
         try {
-          const p = await previewSchemaEdit(sql, body, { allowDestructive: body.allowDestructive === true });
+          const p = await previewSchemaEdit(sql, dir, body, { allowDestructive: body.allowDestructive === true });
           result = builderJson(200, { ok: p.ok, applied: p.changes, blocked: p.blocked, schema: p.schema, generatedSource: p.generatedSource });
         } catch (e) { result = builderError(e, locale); }
         corkSend(res, aborted, result);
@@ -1103,13 +1162,110 @@ export function createServer(deps: ServerDeps): Server {
         if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
         writerBusy = true;
         try {
-          const { schemas, hooks, components } = await loadTypesCacheBusted(dir, `reload:${process.pid}:${Date.now()}`);
-          await swapFromIR(sql, live, schemas, [], new HookRegistry(hooks), components); // applied=[] → swaps registry/hooks/relations/components, no per-type rebuild
+          await reloadFromDisk(); // applied=[] → swaps registry/hooks/relations/components, no per-type rebuild
           currentVersion = await computeCatalogVersion(dir);
           corkSend(res, aborted, builderJson(200, { ok: true, version: currentVersion }, { ETag: currentVersion }));
         } catch (e) { corkSend(res, aborted, builderError(e, locale)); }
         finally { writerBusy = false; }
       })();
+    });
+  });
+
+  // ---- COMPONENT-DEFINITION ROUTE SURFACE — reusable nested field groups (modules/components/*.ts). GET
+  //      reads are PUBLIC; mutations gated on builder.manage. Components have NO table, so writes never
+  //      migrate — they write the file + swap the registry. They share the catalog version/ETag with modules.
+
+  // GET list components — defined components (with ids) + ETag/304.
+  route.get('/builder/components', (res, req) => {
+    const inm = req.getHeader('if-none-match');
+    let aborted = false;
+    res.onAborted(() => { aborted = true; });
+    void (async () => {
+      try {
+        await ensureVersion();
+        if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
+        const components = await readComponents(dir);
+        corkSend(res, () => aborted, builderJson(200, { ok: true, components, version: currentVersion }, { ETag: currentVersion }));
+      } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
+    })();
+  });
+
+  // GET one component — 404 when absent; else the single component WITH ids + ETag/304.
+  route.get('/builder/components/:name', (res, req) => {
+    const name = req.getParameter(0) ?? '';
+    const inm = req.getHeader('if-none-match');
+    let aborted = false;
+    res.onAborted(() => { aborted = true; });
+    void (async () => {
+      try {
+        await ensureVersion();
+        const component = (await readComponents(dir)).find((c) => c.name === name);
+        if (component === undefined) return corkSend(res, () => aborted, builderJson(404, { ok: false, error: `component "${name}" does not exist` }));
+        if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
+        corkSend(res, () => aborted, builderJson(200, { ok: true, component, version: currentVersion }, { ETag: currentVersion }));
+      } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
+    })();
+  });
+
+  // POST preview component — dry-run (no write/swap), no mutex/version. GATED.
+  route.post('/builder/components/:name/preview', (res, req) => {
+    const name = req.getParameter(0) ?? '';
+    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
+    gate(res, req, 'builder.manage', true, (raw, aborted) => {
+      const parsed = parseBody(raw);
+      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+      const body = parsed.body as ComponentDraft;
+      if (body.name !== name) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.name must equal the path name' }));
+      void (async () => {
+        let result: CoreResponse;
+        try {
+          const p = await previewComponentEdit(dir, body);
+          result = builderJson(200, { ok: true, component: p.component, generatedSource: p.generatedSource });
+        } catch (e) { result = builderError(e, locale); }
+        corkSend(res, aborted, result);
+      })();
+    });
+  });
+
+  // PUT upsert a component — create / update. GATED + mutex + If-Match/version + idempotency. NO migrate.
+  route.put('/builder/components/:name', (res, req) => {
+    const name = req.getParameter(0) ?? '';
+    const ifMatch = req.getHeader('if-match');
+    const idemKey = req.getHeader('idempotency-key');
+    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
+    gate(res, req, 'builder.manage', true, (raw, aborted) => {
+      const parsed = parseBody(raw);
+      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+      const body = parsed.body as { version?: string } & ComponentDraft;
+      if (body.name !== name) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.name must equal the path name' }));
+      if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
+      const { version: _v, ...meaningful } = body;
+      const requestHash = hashRequest({ m: 'PUT-component', name, body: meaningful });
+      runComponentMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash }, async () => {
+        const component = await applyComponentEdit(dir, body);
+        await reloadFromDisk();
+        return { component };
+      }, locale);
+    });
+  });
+
+  // DELETE a component — blocked (422) while any field references it. GATED + same wrap. NO migrate.
+  route.del('/builder/components/:name', (res, req) => {
+    const name = req.getParameter(0) ?? '';
+    const ifMatch = req.getHeader('if-match');
+    const idemKey = req.getHeader('idempotency-key');
+    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
+    gate(res, req, 'builder.manage', true, (raw, aborted) => {
+      const parsed = parseBody(raw);
+      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
+      const body = parsed.body as { version?: string };
+      if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
+      const requestHash = hashRequest({ m: 'DELETE-component', name });
+      runComponentMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash }, async () => {
+        await applyComponentDelete(dir, name);
+        await reloadFromDisk();
+        return {};
+      }, locale);
     });
   });
 

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { loadTypesCacheBusted } from '../db/schema/load.ts';
-import type { Schema } from '../db/schema/model.ts';
+import type { Schema, ComponentSchema } from '../db/schema/model.ts';
 
 /**
  * S6 — the Builder catalog VERSION (optimistic-concurrency token). It hashes the catalog ON DISK (the source
@@ -22,9 +22,10 @@ function canon(v: unknown): string {
   return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canon(o[k])}`).join(',')}}`;
 }
 
+const byId = <T extends { id: string }>(a: T, b: T): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
 /** Canonicalize the catalog IR: types by id, fields/relations by id, then stable-key stringify. */
 function canonicalIR(schemas: Schema[]): string {
-  const byId = <T extends { id: string }>(a: T, b: T): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const sorted = [...schemas].sort(byId).map((s) => ({
     ...s,
     fields: [...s.fields].sort(byId),
@@ -33,10 +34,21 @@ function canonicalIR(schemas: Schema[]): string {
   return canon(sorted);
 }
 
-/** sha256 of the canonical on-disk catalog IR (cache-busted re-read so an out-of-band edit is reflected). */
+/** Canonicalize the component definitions: components by id, fields by id, then stable-key stringify. */
+function canonicalComponents(components: ComponentSchema[]): string {
+  const sorted = [...components].sort(byId).map((c) => ({ ...c, fields: [...c.fields].sort(byId) }));
+  return canon(sorted);
+}
+
+/**
+ * sha256 of the canonical on-disk catalog IR (cache-busted re-read so an out-of-band edit is reflected).
+ * Component definitions are folded in ONLY when present, so a project with no components keeps the exact
+ * module-only token it had before — while adding/editing/removing a component still advances the version.
+ */
 export async function computeCatalogVersion(modulesDir: string): Promise<string> {
-  const { schemas } = await loadTypesCacheBusted(modulesDir, `${process.pid}:${++bustSeq}`);
-  return createHash('sha256').update(canonicalIR(schemas)).digest('hex');
+  const { schemas, components } = await loadTypesCacheBusted(modulesDir, `${process.pid}:${++bustSeq}`);
+  const ir = components.length > 0 ? `${canonicalIR(schemas)}\x1ecomponents:${canonicalComponents(components)}` : canonicalIR(schemas);
+  return createHash('sha256').update(ir).digest('hex');
 }
 
 /** sha256 of an arbitrary value via the SAME canonicalization — the idempotency request_hash basis. */

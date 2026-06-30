@@ -1,10 +1,12 @@
 import { writeFile, mkdir, rename, unlink, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { Sql } from 'postgres';
-import { mintId, type Schema, type FieldSchema, type RelationSchema } from '../db/schema/model.ts';
-import { generateSchemaSource } from '../db/schema/codegen.ts';
+import { mintId, type Schema, type FieldSchema, type RelationSchema, type ComponentSchema } from '../db/schema/model.ts';
+import { generateSchemaSource, generateComponentSource } from '../db/schema/codegen.ts';
 import { validateFieldName, validateRelationKind, deriveTableName, SchemaChangeConflictError } from '../db/ddl.ts';
 import { migrate, migrateLint, readAppliedSchemas, ensureAppliedTable } from '../db/schema/migrate.ts';
+import { loadTypesCacheBusted } from '../db/schema/load.ts';
+import { Registry } from '../db/registry.ts';
 import type { Change } from '../db/schema/diff.ts';
 import { AppError } from '../errors/app-error.ts';
 
@@ -117,12 +119,12 @@ function resolveSchema(draft: ModuleDraft, appliedEntry: Schema | undefined): Sc
 }
 
 /**
- * Pre-flight every emitted identifier + relation target BEFORE the file is written. Each violation is a
- * {@link BuilderValidationError} (→ 422). Self-contained (validates against `schema` + the desired catalog
- * `next`); component-ref existence is left to the registry build. Reuses the same throwing identifier
+ * Pre-flight every emitted identifier + relation target + component reference BEFORE the file is written.
+ * Each violation is a {@link BuilderValidationError} (→ 422). Self-contained (validates against `schema`, the
+ * desired catalog `next`, and the set of defined component names). Reuses the same throwing identifier
  * validators the meta path uses, so an injection payload in a name can never reach codegen.
  */
-function preflightValidate(schema: Schema, next: Schema[]): void {
+function preflightValidate(schema: Schema, next: Schema[], componentNames: Set<string>): void {
   try {
     deriveTableName(schema.name); // identifier + reserved + ct_/_-leading + 63-byte assembly
     const names = new Set<string>();
@@ -134,6 +136,17 @@ function preflightValidate(schema: Schema, next: Schema[]): void {
       if (f.type === 'enumeration') {
         for (const v of f.options?.values ?? []) {
           if (/[\x00-\x1f]/.test(v)) throw new BuilderValidationError(`enumeration value ${JSON.stringify(v)} contains a control character`);
+        }
+      }
+      // A component / dynamic-zone field must reference a DEFINED component (one in modules/components/).
+      if (f.type === 'component' || f.type === 'component-repeatable') {
+        const ref = f.options?.component;
+        if (ref !== undefined && !componentNames.has(ref.toLowerCase())) {
+          throw new BuilderValidationError(`field "${f.name}" references unknown component "${ref}"`);
+        }
+      } else if (f.type === 'dynamiczone') {
+        for (const ref of f.options?.components ?? []) {
+          if (!componentNames.has(ref.toLowerCase())) throw new BuilderValidationError(`field "${f.name}" references unknown component "${ref}"`);
         }
       }
     }
@@ -224,13 +237,45 @@ async function readApplied(sql: Sql): Promise<Schema[]> {
   return readAppliedSchemas(sql);
 }
 
+let componentBustSeq = 0;
+/** Read the DEFINED component definitions fresh from disk (cache-busted so an out-of-band edit is seen). */
+async function loadDefinedComponents(modulesDir: string): Promise<ComponentSchema[]> {
+  return (await loadTypesCacheBusted(modulesDir, `cmp:${process.pid}:${++componentBustSeq}`)).components;
+}
+/** The set of component names (lowercased) a module field may reference. */
+function componentNameSet(components: ComponentSchema[]): Set<string> {
+  return new Set(components.map((c) => c.name.toLowerCase()));
+}
+
 /** Resolve a draft → (schema with ids, id-keyed next), shared by apply + preview. */
-function resolveEdit(draft: ModuleDraft, applied: Schema[]): { schema: Schema; next: Schema[] } {
+function resolveEdit(draft: ModuleDraft, applied: Schema[], componentNames: Set<string>): { schema: Schema; next: Schema[] } {
   const appliedEntry = (draft.id !== undefined ? applied.find((s) => s.id === draft.id) : undefined) ?? applied.find((s) => s.name === draft.name);
   const schema = resolveSchema(draft, appliedEntry);
   const next = [...applied.filter((s) => s.id !== schema.id), schema];
-  preflightValidate(schema, next);
+  preflightValidate(schema, next, componentNames);
   return { schema, next };
+}
+
+/**
+ * Guard a collection → single conversion: a single type allows exactly one entry, so flipping an existing
+ * type that already holds more than one is rejected (422) — the diff is pure (no row counts), so the
+ * row-count check lives here. i18n counts distinct documents (locale variants of one document still count
+ * as one). A brand-new type, an unchanged/already-single flag, or a single→collection flip skip the check.
+ */
+async function assertSingleFlipSafe(sql: Sql, applied: Schema[], schema: Schema): Promise<void> {
+  if (!(schema.options?.single ?? false)) return;
+  const prev = applied.find((s) => s.id === schema.id);
+  if (prev === undefined || (prev.options?.single ?? false)) return; // new type, or already single
+  const table = deriveTableName(schema.name);
+  const rows = (schema.options?.i18n ?? false)
+    ? await sql`SELECT count(DISTINCT document_id)::int AS n FROM ${sql(table)}`
+    : await sql`SELECT count(*)::int AS n FROM ${sql(table)}`;
+  const n = Number(rows[0]?.['n'] ?? 0);
+  if (n > 1) {
+    throw new BuilderValidationError(
+      `cannot convert "${schema.name}" to a single type: it has ${n} entries (a single type allows one) — delete the extras first`,
+    );
+  }
 }
 
 /**
@@ -245,7 +290,8 @@ export async function applySchemaEdit(
   opts: { allowDestructive?: boolean } = {},
 ): Promise<SchemaEditResult> {
   const applied = await readApplied(sql);
-  const { schema, next } = resolveEdit(draft, applied);
+  const { schema, next } = resolveEdit(draft, applied, componentNameSet(await loadDefinedComponents(modulesDir)));
+  await assertSingleFlipSafe(sql, applied, schema);
   const target = path.join(modulesDir, schema.name, 'schema.ts');
   return applyResolvedPlan(sql, { next, write: { target, source: generateSchemaSource(schema) }, schema }, opts);
 }
@@ -270,11 +316,127 @@ export async function applySchemaDelete(sql: Sql, modulesDir: string, name: stri
 /** Dry-run a CREATE/UPDATE: resolve + pre-flight + lint + codegen, writing NOTHING and migrating NOTHING. */
 export async function previewSchemaEdit(
   sql: Sql,
+  modulesDir: string,
   draft: ModuleDraft,
   opts: { allowDestructive?: boolean } = {},
 ): Promise<{ ok: boolean; blocked: readonly Change[]; changes: readonly Change[]; schema: Schema; generatedSource: string }> {
   const applied = await readApplied(sql);
-  const { schema, next } = resolveEdit(draft, applied);
+  const { schema, next } = resolveEdit(draft, applied, componentNameSet(await loadDefinedComponents(modulesDir)));
+  await assertSingleFlipSafe(sql, applied, schema);
   const { changes, blocked } = await migrateLint(sql, next, opts);
   return { ok: blocked.length === 0, blocked, changes, schema, generatedSource: generateSchemaSource(schema) };
+}
+
+// ── component definitions (a separate, migrate-free builder resource) ────────────────────────────
+
+/** A component edit from the SPA: ids OPTIONAL (present = existing, kept; absent = new, minted). */
+export interface ComponentDraft {
+  id?: string;
+  name: string;
+  fields: Draft<FieldSchema>[];
+}
+
+/** Resolve a component draft into a ComponentSchema with stable ids, ownership-guarded against `existing`. */
+function resolveComponent(draft: ComponentDraft, existing: ComponentSchema | undefined): ComponentSchema {
+  if (draft.id !== undefined && (existing === undefined || existing.id !== draft.id)) {
+    throw new BuilderValidationError(`unknown component id "${draft.id}"`);
+  }
+  const existingFieldIds = new Set((existing?.fields ?? []).map((f) => f.id));
+  const allIds = new Set<string>([existing?.id, ...existingFieldIds].filter(Boolean) as string[]);
+  const seen = new Set<string>();
+  const claimFieldId = (clientId: string | undefined, label: string): string => {
+    if (clientId !== undefined) {
+      if (!existingFieldIds.has(clientId)) throw new BuilderValidationError(`${label} id "${clientId}" is not owned by this component`);
+      if (seen.has(clientId)) throw new BuilderValidationError(`duplicate id "${clientId}" in the draft`);
+      seen.add(clientId);
+      return clientId;
+    }
+    let id = mintId('f');
+    while (allIds.has(id) || seen.has(id)) id = mintId('f');
+    seen.add(id);
+    allIds.add(id);
+    return id;
+  };
+  const id = existing?.id ?? draft.id ?? mintId('cmp');
+  const fields = draft.fields.map((f) => ({ ...f, id: claimFieldId(f.id, `field "${f.name}"`) }));
+  return { id, name: draft.name, fields };
+}
+
+/** Pre-flight a component: field identifiers, no duplicate names, and no `private` (unsupported in a component). */
+function preflightValidateComponent(component: ComponentSchema): void {
+  try {
+    validateFieldName(component.name); // a component name follows the same identifier rule as a field
+    const names = new Set<string>();
+    for (const f of component.fields) {
+      validateFieldName(f.name);
+      const lower = f.name.toLowerCase();
+      if (names.has(lower)) throw new BuilderValidationError(`duplicate field name "${f.name}"`);
+      names.add(lower);
+      if (f.options?.private) throw new BuilderValidationError(`field "${f.name}": private is not supported inside a component`);
+    }
+  } catch (e) {
+    if (e instanceof BuilderValidationError) throw e;
+    throw new BuilderValidationError(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/**
+ * Resolve + validate a component edit against the on-disk catalog (the shared core of preview + apply). A
+ * trial registry build catches bad field shapes / dangling nested-component or inline-relation refs BEFORE
+ * anything is written. Returns the resolved component + the full next component set.
+ */
+async function resolveComponentEdit(modulesDir: string, draft: ComponentDraft): Promise<{ component: ComponentSchema; components: ComponentSchema[] }> {
+  const { schemas, components } = await loadTypesCacheBusted(modulesDir, `cmp:${process.pid}:${++componentBustSeq}`);
+  const existing = (draft.id !== undefined ? components.find((c) => c.id === draft.id) : undefined) ?? components.find((c) => c.name === draft.name);
+  const component = resolveComponent(draft, existing);
+  preflightValidateComponent(component);
+  const next = [...components.filter((c) => c.id !== component.id), component];
+  try {
+    Registry.fromSchemas(schemas, next); // build the trial registry; throws on a bad/dangling component ref
+  } catch (e) {
+    throw new BuilderValidationError(e instanceof Error ? e.message : String(e));
+  }
+  return { component, components: next };
+}
+
+/** Dry-run a component CREATE/UPDATE: resolve + validate + codegen, writing NOTHING. */
+export async function previewComponentEdit(modulesDir: string, draft: ComponentDraft): Promise<{ ok: true; component: ComponentSchema; generatedSource: string }> {
+  const { component } = await resolveComponentEdit(modulesDir, draft);
+  return { ok: true, component, generatedSource: generateComponentSource(component) };
+}
+
+/** Apply a component CREATE/UPDATE: resolve + validate, then write modules/components/<name>.ts atomically. */
+export async function applyComponentEdit(modulesDir: string, draft: ComponentDraft): Promise<ComponentSchema> {
+  const { component } = await resolveComponentEdit(modulesDir, draft);
+  const dir = path.join(modulesDir, 'components');
+  await mkdir(dir, { recursive: true });
+  const target = path.join(dir, `${component.name}.ts`);
+  const tmp = `${target}.${process.pid}.tmp`;
+  await writeFile(tmp, generateComponentSource(component));
+  await rename(tmp, target);
+  return component;
+}
+
+/** Delete a component definition. Blocks (422) if any module or component field still references it. */
+export async function applyComponentDelete(modulesDir: string, name: string): Promise<void> {
+  const { schemas, components } = await loadTypesCacheBusted(modulesDir, `cmp:${process.pid}:${++componentBustSeq}`);
+  const target = components.find((c) => c.name === name);
+  if (target === undefined) throw new BuilderNotFoundError(`component "${name}" does not exist`);
+  const lower = name.toLowerCase();
+  const refs: string[] = [];
+  const fieldRefsComponent = (f: FieldSchema): boolean =>
+    (f.type === 'component' || f.type === 'component-repeatable') && f.options?.component?.toLowerCase() === lower;
+  const fieldRefsZone = (f: FieldSchema): boolean =>
+    f.type === 'dynamiczone' && (f.options?.components ?? []).some((c) => c.toLowerCase() === lower);
+  for (const s of schemas) for (const f of s.fields) if (fieldRefsComponent(f) || fieldRefsZone(f)) refs.push(`${s.name}.${f.name}`);
+  for (const c of components) if (c.id !== target.id) for (const f of c.fields) if (fieldRefsComponent(f) || fieldRefsZone(f)) refs.push(`${c.name}.${f.name}`);
+  if (refs.length > 0) {
+    throw new BuilderValidationError(`component "${name}" is referenced by ${refs.join(', ')}; remove the reference(s) first`);
+  }
+  await rm(path.join(modulesDir, 'components', `${name}.ts`), { force: true });
+}
+
+/** Read the defined components fresh from disk (the GET source — files are the truth, no DB snapshot). */
+export async function readComponents(modulesDir: string): Promise<ComponentSchema[]> {
+  return loadDefinedComponents(modulesDir);
 }

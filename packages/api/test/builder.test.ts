@@ -293,7 +293,7 @@ test('S5 preflight: a reserved/invalid identifier rejects with BuilderValidation
 });
 
 test('S5 previewSchemaEdit: returns the change-set + generated source but writes/migrates NOTHING', async () => {
-  const p = await previewSchemaEdit(sql, { name: 'delta', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
+  const p = await previewSchemaEdit(sql, genDir, { name: 'delta', fields: [{ name: 'a', type: 'string', options: { nullable: true } }] });
   assert.equal(p.ok, true);
   assert.ok(p.changes.some((c) => c.kind === 'addType'));
   assert.match(p.generatedSource, /defineSchema/);
