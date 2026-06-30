@@ -107,9 +107,15 @@ function fieldBuilderCall(f: FieldSchema): string {
   const id = `id: ${lit(f.id)}`;
   const nul = o.nullable === false ? ', nullable: false' : ''; // nullable defaults true ⇒ omit when true
   const def = o.default !== undefined ? `, default: ${lit(o.default)}` : '';
-  const max = o.length !== undefined ? `, max: ${o.length}` : '';
-  const min = o.min !== undefined ? `, min: ${o.min}` : '';
-  const maxv = o.max !== undefined ? `, max: ${o.max}` : '';
+  const max = o.length !== undefined ? `, max: ${o.length}` : ''; // string char-max (number)
+  // value bounds via lit() so a number emits bare and an i64/decimal STRING bound emits quoted.
+  const min = o.min !== undefined ? `, min: ${lit(o.min)}` : '';
+  const maxv = o.max !== undefined ? `, max: ${lit(o.max)}` : '';
+  // `array` item guards.
+  const ai =
+    (o.uniqueItems ? `, uniqueItems: true` : '') +
+    (o.minItems !== undefined ? `, minItems: ${o.minItems}` : '') +
+    (o.maxItems !== undefined ? `, maxItems: ${o.maxItems}` : '');
   // Common per-field metadata every type carries (editor layout + conditional visibility) — emit so it
   // round-trips through the file (the `info`/`label` lesson: an un-emitted option is silently lost on boot).
   const cm =
@@ -124,13 +130,14 @@ function fieldBuilderCall(f: FieldSchema): string {
     case 'uuid': return `c.uuid({ ${id}${nul}${def}${cm} })`;
     case 'enumeration': return `c.enum(${lit(o.values ?? [])} as const, { ${id}${nul}${def}${cm} })`;
     case 'integer': return `c.integer({ ${id}${nul}${def}${min}${maxv}${cm} })`;
-    case 'biginteger': return `c.biginteger({ ${id}${nul}${def}${cm} })`;
+    case 'biginteger': return `c.biginteger({ ${id}${nul}${def}${min}${maxv}${cm} })`;
     case 'float': return `c.float({ ${id}${nul}${def}${min}${maxv}${cm} })`;
-    case 'decimal': return `c.decimal({ ${id}${o.precision !== undefined ? `, precision: ${o.precision}` : ''}${o.scale !== undefined ? `, scale: ${o.scale}` : ''}${nul}${def}${cm} })`;
+    case 'decimal': return `c.decimal({ ${id}${o.precision !== undefined ? `, precision: ${o.precision}` : ''}${o.scale !== undefined ? `, scale: ${o.scale}` : ''}${nul}${def}${min}${maxv}${cm} })`;
     case 'boolean': return `c.boolean({ ${id}${nul}${def}${cm} })`;
     case 'date': return `c.date({ ${id}${nul}${def}${cm} })`;
     case 'datetime': return `c.datetime({ ${id}${nul}${def}${cm} })`;
     case 'json': return `c.json({ ${id}${nul}${def}${cm} })`;
+    case 'array': return `c.array({ ${id}${nul}${def}${ai}${cm} })`;
     case 'media': return `c.media({ ${id}${o.multiple ? ', multiple: true' : ''}${nul}${cm} })`;
     case 'component': return `c.component(${lit(o.component ?? '')}, { ${id}${nul}${cm} })`;
     case 'dynamiczone': return `c.dynamiczone(${lit(o.components ?? [])}, { ${id} })`;

@@ -91,10 +91,15 @@ export interface RegistryField {
   enumValues?: readonly string[];
   /** varchar length (params.length), for the clean-400 length guard. */
   length?: number;
-  /** lower bound (params.min) — char-length for string/email/uid, VALUE for integer/float. Write-time guard. */
-  min?: number;
-  /** upper VALUE bound (params.max) for integer/float — write-time guard. */
-  max?: number;
+  /** lower bound (params.min) — char-length (string/email/uid) or VALUE; STRING for biginteger/decimal. Write-time guard. */
+  min?: number | string;
+  /** upper VALUE bound (params.max); STRING for biginteger/decimal. Write-time guard. */
+  max?: number | string;
+  /** `array` only: forbid duplicate scalar items (params.uniqueItems). Write-time guard. */
+  uniqueItems?: boolean;
+  /** `array` only: item-count bounds (params.minItems / params.maxItems). Write-time guard. */
+  minItems?: number;
+  maxItems?: number;
   /** type === 'json' (drives the `::text` SELECT cast on both load and RETURNING). */
   json: boolean;
   /**
@@ -301,10 +306,18 @@ function buildUserField(name: string, row: FieldRow): RegistryField {
     }
     field.length = length;
   }
-  const min = numberParam(params, 'min');
-  if (min !== undefined) field.min = min;
-  const max = numberParam(params, 'max');
-  if (max !== undefined) field.max = max;
+  // min/max are numbers for i32/f64 + string char-min, but STRINGS for i64/decimal value bounds — read either.
+  const min = params['min'];
+  if (typeof min === 'number' || typeof min === 'string') field.min = min;
+  const max = params['max'];
+  if (typeof max === 'number' || typeof max === 'string') field.max = max;
+  // `array` item guards (write-time).
+  const uniqueItems = params['uniqueItems'];
+  if (uniqueItems === true) field.uniqueItems = true;
+  const minItems = numberParam(params, 'minItems');
+  if (minItems !== undefined) field.minItems = minItems;
+  const maxItems = numberParam(params, 'maxItems');
+  if (maxItems !== undefined) field.maxItems = maxItems;
   // be-04 MEDIA: tag the field as a media reference (single int4 / multiple jsonb) from its catalog
   // params. The engine_type already drove `type` (i32 or json) above — this only adds the cardinality
   // flag the body parser + populate post-step read. A multiple-media field IS a json column, so

@@ -71,10 +71,20 @@ export interface FieldCondition {
 export interface FieldOptions {
   /** varchar length (char count) for string/email/uid/enumeration sizing. */
   length?: number;
-  /** lower bound — CONTEXTUAL: min char-length for string/email/uid, min VALUE for integer/float (write-time). */
-  min?: number;
-  /** upper bound — VALUE max for integer/float (write-time). Strings use `length` for their char max. */
-  max?: number;
+  /**
+   * lower bound — CONTEXTUAL: min char-length for string/email/uid (number); min VALUE for integer/float
+   * (number, ≤2^53 safe); min VALUE for biginteger/decimal as a STRING (BigInt/scaled-BigInt compared, never
+   * coerced to a lossy JS number). Write-time guard.
+   */
+  min?: number | string;
+  /** upper bound — VALUE max (mirrors {@link min}: number for integer/float, STRING for biginteger/decimal). */
+  max?: number | string;
+  /** `array` only: forbid duplicate items (scalar equality). Write-time guard. */
+  uniqueItems?: boolean;
+  /** `array` only: minimum item count. */
+  minItems?: number;
+  /** `array` only: maximum item count. */
+  maxItems?: number;
   /** admin editor layout width: 'full' (default, own row) or 'half' (two fields side-by-side). Metadata only. */
   editorWidth?: 'full' | 'half';
   /** admin conditional visibility. Metadata only (see {@link FieldCondition}). */
@@ -188,6 +198,79 @@ function numBounds(o: FieldOptions | undefined): Record<string, unknown> {
   return p;
 }
 
+const INT64_MIN = -9223372036854775808n;
+const INT64_MAX = 9223372036854775807n;
+
+/** Parse a biginteger bound (number must be integer; string must be digits) → bigint, int8-range-checked. */
+function toI64Bound(v: number | string, label: string): bigint {
+  if (typeof v === 'number') {
+    if (!Number.isInteger(v)) throw new TypeOptionError(`${label} must be a whole number, got ${v}`);
+    return BigInt(v);
+  }
+  const s = v.trim();
+  if (!/^-?\d+$/.test(s)) throw new TypeOptionError(`${label} must be an integer string, got ${JSON.stringify(v)}`);
+  return BigInt(s);
+}
+
+/** biginteger value bounds — stored as canonical digit STRINGS (BigInt-compared at write, never as a JS number). */
+function i64Bounds(o: FieldOptions | undefined): Record<string, unknown> {
+  const p: Record<string, unknown> = {};
+  let min: bigint | undefined;
+  if (o?.min !== undefined) {
+    min = toI64Bound(o.min, 'min');
+    if (min < INT64_MIN || min > INT64_MAX) throw new TypeOptionError(`min ${min} is out of bigint range`);
+    p.min = min.toString();
+  }
+  if (o?.max !== undefined) {
+    const max = toI64Bound(o.max, 'max');
+    if (max < INT64_MIN || max > INT64_MAX) throw new TypeOptionError(`max ${max} is out of bigint range`);
+    if (min !== undefined && max < min) throw new TypeOptionError(`max ${max} is less than min ${min}`);
+    p.max = max.toString();
+  }
+  return p;
+}
+
+/** Validate one decimal bound fits the column's precision/scale; returns the canonical fixed-point string. */
+function decimalBound(v: number | string, precision: number, scale: number, label: string): string {
+  const text = typeof v === 'number' && Number.isFinite(v) ? String(v) : typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim()) ? v.trim() : null;
+  if (text === null) throw new TypeOptionError(`${label} must be a numeric string/number, got ${String(v)}`);
+  const frac = text.split('.')[1] ?? '';
+  if (frac.length > scale) throw new TypeOptionError(`${label} ${text} exceeds scale ${scale}`);
+  const intDigits = text.replace('-', '').split('.')[0]!.replace(/^0+(?=\d)/, '').length;
+  if (intDigits > precision - scale) throw new TypeOptionError(`${label} ${text} exceeds precision ${precision} (max ${precision - scale} integer digits)`);
+  return text;
+}
+
+/** decimal value bounds — stored as canonical strings (scaled-BigInt compared at write). */
+function decimalBounds(o: FieldOptions | undefined, precision: number, scale: number): Record<string, unknown> {
+  const p: Record<string, unknown> = {};
+  if (o?.min !== undefined) p.min = decimalBound(o.min, precision, scale, 'min');
+  if (o?.max !== undefined) {
+    p.max = decimalBound(o.max, precision, scale, 'max');
+    if (p.min !== undefined && Number(p.max) < Number(p.min)) throw new TypeOptionError(`max ${p.max} is less than min ${p.min}`);
+  }
+  return p;
+}
+
+/** `array` item guards (uniqueItems / minItems / maxItems) — write-time only, recorded in params. */
+function arrayParams(o: FieldOptions | undefined): Record<string, unknown> {
+  const p: Record<string, unknown> = {};
+  if (o?.uniqueItems === true) p.uniqueItems = true;
+  const item = (v: number | undefined, label: string): number | undefined => {
+    if (v === undefined) return undefined;
+    if (!Number.isInteger(v) || v < 0) throw new TypeOptionError(`${label} must be a non-negative integer, got ${String(v)}`);
+    return v;
+  };
+  const minItems = item(o?.minItems, 'minItems');
+  if (minItems !== undefined) p.minItems = minItems;
+  const maxItems = item(o?.maxItems, 'maxItems');
+  if (maxItems !== undefined) {
+    if (minItems !== undefined && maxItems < minItems) throw new TypeOptionError(`maxItems ${maxItems} is less than minItems ${minItems}`);
+    p.maxItems = maxItems;
+  }
+  return p;
+}
+
 /** Validate + dedup the `enumeration` value set; returns the distinct values and the longest length. */
 function resolveEnum(options: FieldOptions | undefined): { values: string[]; maxLen: number } {
   const values = options?.values;
@@ -221,21 +304,21 @@ const RESOLVERS = {
     return { pgType: `varchar(${length})`, engineType: 'string', params: { values, length } };
   },
   integer: (o) => ({ pgType: 'integer', engineType: 'i32', params: numBounds(o) }),
-  biginteger: () => ({ pgType: 'bigint', engineType: 'i64', params: {} }),
+  biginteger: (o) => ({ pgType: 'bigint', engineType: 'i64', params: i64Bounds(o) }),
   float: (o) => ({ pgType: 'double precision', engineType: 'f64', params: numBounds(o) }),
   decimal: (o) => {
     const precision = intOption(o?.precision, 'precision', 1, NUMERIC_MAX_PRECISION, 10);
     const scale = intOption(o?.scale, 'scale', 0, precision, 2);
     if (scale > precision) throw new TypeOptionError(`decimal scale ${scale} exceeds precision ${precision}`);
     if (precision > DECIMAL_MAX_SAFE_PRECISION) throw new TypeOptionError(`decimal precision ${precision} exceeds the scaled-i64 cap (${DECIMAL_MAX_SAFE_PRECISION})`);
-    return { pgType: `numeric(${precision},${scale})`, engineType: 'decimal', params: { precision, scale } };
+    return { pgType: `numeric(${precision},${scale})`, engineType: 'decimal', params: { precision, scale, ...decimalBounds(o, precision, scale) } };
   },
   boolean: () => ({ pgType: 'boolean', engineType: 'bool', params: {} }),
   date: () => ({ pgType: 'date', engineType: 'date', params: {} }),
   datetime: () => ({ pgType: 'timestamptz', engineType: 'date', params: {} }),
   time: () => ({ pgType: 'time', engineType: 'i32', params: {} }),
   json: () => ({ pgType: 'jsonb', engineType: 'json', params: {} }),
-  array: () => ({ pgType: 'jsonb', engineType: 'json', params: {} }),
+  array: (o) => ({ pgType: 'jsonb', engineType: 'json', params: arrayParams(o) }),
   uuid: () => ({ pgType: 'uuid', engineType: 'string', params: {} }),
   // be-04 MEDIA — a reference to the system `files` table, by id. SINGLE: a plain int4 column (engine
   // `i32`), holding ONE positive `files.id`; emitted as a bare number un-populated, exactly like a

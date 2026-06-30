@@ -384,8 +384,29 @@ function coerceComponentInstance(
 
 /** Enforce a number field's value bounds (integer/float `min`/`max`) — a clean 400, not a DB error. */
 function checkNumericBounds(name: string, field: RegistryField, v: number): void {
-  if (field.min !== undefined && v < field.min) throw new BodyParseError(`field "${name}" must be >= ${field.min}`);
-  if (field.max !== undefined && v > field.max) throw new BodyParseError(`field "${name}" must be <= ${field.max}`);
+  // i32/f64 bounds are always numbers (string bounds are i64/decimal, handled in their own arms).
+  if (typeof field.min === 'number' && v < field.min) throw new BodyParseError(`field "${name}" must be >= ${field.min}`);
+  if (typeof field.max === 'number' && v > field.max) throw new BodyParseError(`field "${name}" must be <= ${field.max}`);
+}
+
+/** `array` write guards: must BE an array, within minItems/maxItems, and (uniqueItems) no duplicate scalars. */
+function checkArray(name: string, field: RegistryField, v: unknown): void {
+  if (!Array.isArray(v)) throw new BodyParseError(`field "${name}" must be an array`);
+  if (field.minItems !== undefined && v.length < field.minItems) {
+    throw new BodyParseError(`field "${name}" must have at least ${field.minItems} item(s)`);
+  }
+  if (field.maxItems !== undefined && v.length > field.maxItems) {
+    throw new BodyParseError(`field "${name}" must have at most ${field.maxItems} item(s)`);
+  }
+  if (field.uniqueItems) {
+    const seen = new Set<unknown>();
+    for (const item of v) {
+      // `array` holds scalars; key non-scalars by their JSON so the guard is still total.
+      const key = item !== null && typeof item === 'object' ? JSON.stringify(item) : item;
+      if (seen.has(key)) throw new BodyParseError(`field "${name}" items must be unique`);
+      seen.add(key);
+    }
+  }
 }
 
 /** Type-check + coerce one non-null value against its engine field. Coerce throws become 400s here. */
@@ -416,7 +437,7 @@ function coerce(field: RegistryField, v: unknown): unknown {
       if (field.length !== undefined && v.length > field.length) {
         throw new BodyParseError(`field "${name}" exceeds the maximum length ${field.length}`);
       }
-      if (field.min !== undefined && v.length < field.min) {
+      if (typeof field.min === 'number' && v.length < field.min) {
         throw new BodyParseError(`field "${name}" must be at least ${field.min} character(s)`);
       }
       return v;
@@ -432,21 +453,36 @@ function coerce(field: RegistryField, v: unknown): unknown {
       if (Number.isNaN(d.getTime())) throw new BodyParseError(`field "${name}" is not a valid date`);
       return d;
     }
-    case 'i64':
+    case 'i64': {
       // Coerce to the exact bigint then return its digit STRING (the bound/wire form for int8).
+      let n: bigint;
       try {
-        return coerceI64(v).toString();
+        n = coerceI64(v);
       } catch {
         throw new BodyParseError(`field "${name}" must be a valid bigint (integer string or safe number)`);
       }
-    case 'decimal':
+      // Bounds are canonical digit strings — compare as BigInt (never as a lossy JS number).
+      if (field.min !== undefined && n < BigInt(field.min)) throw new BodyParseError(`field "${name}" must be >= ${field.min}`);
+      if (field.max !== undefined && n > BigInt(field.max)) throw new BodyParseError(`field "${name}" must be <= ${field.max}`);
+      return n.toString();
+    }
+    case 'decimal': {
       // Coerce to the scaled mantissa then format the canonical fixed-point STRING (the bound form).
+      let mantissa: bigint;
       try {
-        const mantissa = coerceDecimal(v, field.scale!, field.precision);
-        return formatDecimal(mantissa, field.scale!);
+        mantissa = coerceDecimal(v, field.scale!, field.precision);
       } catch {
         throw new BodyParseError(`field "${name}" must be a valid decimal within its precision/scale`);
       }
+      // Bounds are canonical strings within the same precision/scale → scale them identically + BigInt-compare.
+      if (field.min !== undefined && mantissa < coerceDecimal(field.min, field.scale!, field.precision)) {
+        throw new BodyParseError(`field "${name}" must be >= ${field.min}`);
+      }
+      if (field.max !== undefined && mantissa > coerceDecimal(field.max, field.scale!, field.precision)) {
+        throw new BodyParseError(`field "${name}" must be <= ${field.max}`);
+      }
+      return formatDecimal(mantissa, field.scale!);
+    }
     case 'json':
       // Return the PARSED JS value (object/array/scalar) bound straight to jsonb by postgres.js, which
       // serializes it to a real jsonb VALUE (NOT a quoted string scalar — binding a pre-stringified text
@@ -462,8 +498,11 @@ function coerce(field: RegistryField, v: unknown): unknown {
         const probe = JSON.stringify(parsed);
         if (typeof probe !== 'string') throw new Error('not serializable');
         if (probe.isWellFormed !== undefined && !probe.isWellFormed()) throw new Error('unpaired surrogate');
+        // `array` is a json column logically constrained to a list — enforce shape + item guards here.
+        if (field.type === 'array') checkArray(name, field, parsed);
         return parsed;
-      } catch {
+      } catch (e) {
+        if (e instanceof BodyParseError) throw e; // array-guard messages must survive the JSON catch-all
         throw new BodyParseError(`field "${name}" must be valid JSON`);
       }
     default:

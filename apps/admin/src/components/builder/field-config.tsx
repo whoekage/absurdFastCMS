@@ -129,6 +129,25 @@ export function FieldConfig({ draft, i18n, siblingNames, onChange, onDelete, onD
         </div>
       )}
 
+      {meta.arrayItems && (
+        <>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div>
+              <label className={LABEL}>Min items</label>
+              <input className={MONO_INPUT} value={draft.minItems} onChange={(e) => set({ minItems: e.target.value })} placeholder="0" inputMode="numeric" />
+            </div>
+            <div>
+              <label className={LABEL}>Max items</label>
+              <input className={MONO_INPUT} value={draft.maxItems} onChange={(e) => set({ maxItems: e.target.value })} placeholder="—" inputMode="numeric" />
+            </div>
+          </div>
+          <label className="mt-3 flex items-center gap-2">
+            <Switch checked={draft.uniqueItems} onCheckedChange={(v) => set({ uniqueItems: v })} />
+            <span className="text-[12.5px] font-medium text-foreground">Unique items</span>
+          </label>
+        </>
+      )}
+
       {/* toggles */}
       <div className="mt-[15px] flex flex-wrap items-center gap-x-[18px] gap-y-3 border-t pt-3.5">
         <label className="flex items-center gap-2">

@@ -261,6 +261,26 @@ test('T16 default value type validation', () => {
   assert.equal(validateDefault(resolveType('decimal', { precision: 4, scale: 2 }), '0.5').sqlLiteral, '0.5'); // leading zero not counted
 });
 
+// T19 — biginteger/decimal VALUE bounds are stored as canonical STRINGS (no JS-number precision loss);
+// array item guards resolve into params; bad bounds throw at resolve.
+test('T19 string numeric bounds (biginteger/decimal) + array item guards', () => {
+  // biginteger: string + number bounds normalize to canonical digit strings; int8 range + min<=max enforced.
+  assert.deepEqual(resolveType('biginteger', { min: '-100', max: '9007199254740993' }).params, { min: '-100', max: '9007199254740993' });
+  assert.equal(resolveType('biginteger', { min: 5 }).params['min'], '5');
+  assert.throws(() => resolveType('biginteger', { max: '99999999999999999999999' }), TypeOptionError); // out of int8 range
+  assert.throws(() => resolveType('biginteger', { min: '10', max: '5' }), TypeOptionError);
+  assert.throws(() => resolveType('biginteger', { min: '1.5' }), TypeOptionError); // not an integer string
+  // decimal: bounds must fit precision/scale, kept as canonical strings.
+  const d = resolveType('decimal', { precision: 10, scale: 2, min: '0', max: '100.00' });
+  assert.equal(d.params['min'], '0');
+  assert.equal(d.params['max'], '100.00');
+  assert.throws(() => resolveType('decimal', { precision: 4, scale: 2, max: '12345.6' }), TypeOptionError); // exceeds precision
+  // array: item guards stored; maxItems<minItems rejected.
+  assert.deepEqual(resolveType('array', { uniqueItems: true, minItems: 1, maxItems: 3 }).params, { uniqueItems: true, minItems: 1, maxItems: 3 });
+  assert.throws(() => resolveType('array', { minItems: 3, maxItems: 1 }), TypeOptionError);
+  assert.throws(() => resolveType('array', { minItems: -1 }), TypeOptionError);
+});
+
 // T18 — `unique` emits an inline UNIQUE column constraint via columnSpec; applicability-gated in resolveFields.
 test('T18 unique column constraint + applicability guard', () => {
   const fields = resolveFields([

@@ -89,6 +89,33 @@ test('a constant `default` round-trips through the written file for EVERY type t
   assert.deepStrictEqual(loaded, r.schema);
 });
 
+test('biginteger/decimal string bounds + array item guards round-trip through the written file', async () => {
+  // Also covers a latent gap: `array` had no c.array DSL builder / codegen case, so an array field was
+  // un-authorable until now. This pins the full codegen ⇄ defToSchema round-trip for all three.
+  const r = await applySchemaEdit(sql, genDir, {
+    name: 'bounded',
+    fields: [
+      { name: 'big', type: 'biginteger', options: { nullable: true, min: '-1000', max: '9007199254740993' } },
+      { name: 'price', type: 'decimal', options: { precision: 12, scale: 2, nullable: true, min: '0', max: '9999.99' } },
+      { name: 'tags', type: 'array', options: { nullable: true, uniqueItems: true, minItems: 1, maxItems: 5 } },
+    ],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(await tableExists(sql, 'ct_bounded'), true);
+
+  const loaded = (await loadTypes(genDir)).schemas.find((s) => s.name === 'bounded')!;
+  const byName = new Map(loaded.fields.map((f) => [f.name, f]));
+  // bigint/decimal bounds survive as STRINGS (the >2^53 value is intact, not rounded).
+  assert.equal(byName.get('big')!.options?.min, '-1000');
+  assert.equal(byName.get('big')!.options?.max, '9007199254740993');
+  assert.equal(byName.get('price')!.options?.min, '0');
+  assert.equal(byName.get('price')!.options?.max, '9999.99');
+  assert.equal(byName.get('tags')!.options?.uniqueItems, true);
+  assert.equal(byName.get('tags')!.options?.minItems, 1);
+  assert.equal(byName.get('tags')!.options?.maxItems, 5);
+  assert.deepStrictEqual(loaded, r.schema);
+});
+
 test('destructive edit is gated: blocked → nothing written/applied; allowDestructive → applied', async () => {
   await applySchemaEdit(sql, genDir, {
     name: 'widget',

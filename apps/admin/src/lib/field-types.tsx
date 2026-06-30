@@ -538,10 +538,12 @@ export interface CmsTypeOptionMeta {
   precisionScale: boolean;
   /** be-04 MEDIA: the `multiple` (single-vs-array) toggle applies. */
   multiple: boolean;
-  /** numeric VALUE bounds (`min`/`max`) apply — integer / float (Part A). */
+  /** numeric VALUE bounds (`min`/`max`) apply — integer/float (numbers) + biginteger/decimal (strings). */
   numericBounds: boolean;
   /** a UNIQUE constraint is offerable (everything but text/boolean/json/array/media). */
   unique: boolean;
+  /** `array` item guards (uniqueItems / minItems / maxItems) apply. */
+  arrayItems: boolean;
 }
 
 const NO_OPTIONS: CmsTypeOptionMeta = {
@@ -551,6 +553,7 @@ const NO_OPTIONS: CmsTypeOptionMeta = {
   multiple: false,
   numericBounds: false,
   unique: false,
+  arrayItems: false,
 };
 
 const optionMeta: Record<CmsType, CmsTypeOptionMeta> = {
@@ -560,15 +563,15 @@ const optionMeta: Record<CmsType, CmsTypeOptionMeta> = {
   uid: { ...NO_OPTIONS, length: true, unique: true },
   enumeration: { ...NO_OPTIONS, enumValues: true, unique: true },
   integer: { ...NO_OPTIONS, numericBounds: true, unique: true },
-  biginteger: { ...NO_OPTIONS, unique: true },
+  biginteger: { ...NO_OPTIONS, numericBounds: true, unique: true },
   float: { ...NO_OPTIONS, numericBounds: true, unique: true },
-  decimal: { ...NO_OPTIONS, precisionScale: true, unique: true },
+  decimal: { ...NO_OPTIONS, precisionScale: true, numericBounds: true, unique: true },
   boolean: NO_OPTIONS,
   date: { ...NO_OPTIONS, unique: true },
   datetime: { ...NO_OPTIONS, unique: true },
   time: NO_OPTIONS,
   json: NO_OPTIONS,
-  array: NO_OPTIONS,
+  array: { ...NO_OPTIONS, arrayItems: true },
   uuid: { ...NO_OPTIONS, unique: true },
   media: { ...NO_OPTIONS, multiple: true },
 };

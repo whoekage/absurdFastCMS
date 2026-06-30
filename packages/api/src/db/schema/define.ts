@@ -72,12 +72,13 @@ function common(o?: BaseOpts): Record<string, unknown> {
 
 type StringOpts = BaseOpts & { max?: number; min?: number; default?: string };
 type NumOpts = BaseOpts & { min?: number; max?: number; default?: number };
-type DecimalOpts = BaseOpts & { precision?: number; scale?: number; default?: string | number };
+type DecimalOpts = BaseOpts & { precision?: number; scale?: number; min?: string | number; max?: string | number; default?: string | number };
 type MediaOpts = BaseOpts & { multiple?: boolean };
-type BigIntOpts = BaseOpts & { default?: string | number }; // i64 default may arrive as a string
+type BigIntOpts = BaseOpts & { min?: string | number; max?: string | number; default?: string | number }; // i64 bounds/default may be strings
 type DateOpts = BaseOpts & { default?: string };
 type JsonOpts = BaseOpts & { default?: unknown };
 type UuidOpts = BaseOpts & { default?: string };
+type ArrayOpts = BaseOpts & { uniqueItems?: boolean; minItems?: number; maxItems?: number; default?: unknown[] };
 type RelOpts = { id?: string; kind: RelationKind; inverse?: string; displayField?: string };
 
 /** The conti field-builder namespace (`c.string(...)`, `c.relation(...)`, ...). */
@@ -97,11 +98,11 @@ export const c = {
   integer: <O extends NumOpts = {}>(o?: O): FieldBuilder<Nullable<number, O>> =>
     field('integer', clean({ nullable: o?.nullable ?? true, min: o?.min, max: o?.max, default: o?.default, ...common(o) }), o?.id),
   biginteger: <O extends BigIntOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> => // i64 serializes as string
-    field('biginteger', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+    field('biginteger', clean({ nullable: o?.nullable ?? true, min: o?.min, max: o?.max, default: o?.default, ...common(o) }), o?.id),
   float: <O extends NumOpts = {}>(o?: O): FieldBuilder<Nullable<number, O>> =>
     field('float', clean({ nullable: o?.nullable ?? true, min: o?.min, max: o?.max, default: o?.default, ...common(o) }), o?.id),
   decimal: <O extends DecimalOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> => // numeric serializes as string
-    field('decimal', clean({ precision: o?.precision, scale: o?.scale, nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+    field('decimal', clean({ precision: o?.precision, scale: o?.scale, min: o?.min, max: o?.max, nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   boolean: <O extends BaseOpts & { default?: boolean } = {}>(o?: O): FieldBuilder<Nullable<boolean, O>> =>
     field('boolean', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   date: <O extends DateOpts = {}>(o?: O): FieldBuilder<Nullable<string, O>> =>
@@ -110,6 +111,8 @@ export const c = {
     field('datetime', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
   json: <O extends JsonOpts = {}>(o?: O): FieldBuilder<Nullable<unknown, O>> =>
     field('json', clean({ nullable: o?.nullable ?? true, default: o?.default, ...common(o) }), o?.id),
+  array: <O extends ArrayOpts = {}>(o?: O): FieldBuilder<Nullable<unknown[], O>> =>
+    field('array', clean({ nullable: o?.nullable ?? true, default: o?.default, uniqueItems: o?.uniqueItems, minItems: o?.minItems, maxItems: o?.maxItems, ...common(o) }), o?.id),
   media: <O extends MediaOpts = {}>(o?: O): FieldBuilder<Nullable<O extends { multiple: true } ? number[] : number, O>> =>
     field('media', clean({ multiple: o?.multiple ?? false, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   component: <O extends BaseOpts = {}>(name: string, o?: O): FieldBuilder<Nullable<unknown, O>> =>

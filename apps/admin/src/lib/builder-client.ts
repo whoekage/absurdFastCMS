@@ -43,16 +43,21 @@ export interface FieldOptions {
   component?: string;
   components?: string[];
   target?: string;
-  /** lower bound — char-length (string/email/uid) or VALUE (integer/float). */
-  min?: number;
-  /** upper VALUE bound (integer/float). Strings use `length` for their char max. */
-  max?: number;
+  /** lower bound — char-length (string/email/uid) or VALUE; STRING for biginteger/decimal. */
+  min?: number | string;
+  /** upper VALUE bound; STRING for biginteger/decimal. Strings use `length` for their char max. */
+  max?: number | string;
   /** admin editor layout width: 'full' (default) or 'half'. */
   editorWidth?: 'full' | 'half';
   /** admin conditional visibility. */
   condition?: FieldCondition;
   /** emit a single-column UNIQUE constraint (not for text/boolean/json/array/media). */
   unique?: boolean;
+  /** `array` only: forbid duplicate items. */
+  uniqueItems?: boolean;
+  /** `array` only: item-count bounds. */
+  minItems?: number;
+  maxItems?: number;
 }
 
 /** A field as it lives in `modules/<name>/schema.ts` — `id` is stable identity, `name` is the renamable key. */

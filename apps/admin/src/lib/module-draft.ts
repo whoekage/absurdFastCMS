@@ -68,8 +68,13 @@ export interface FieldDraft {
   half: boolean;
   /** Lower bound — CONTEXTUAL: min char-length for string/email/uid, min VALUE for integer/float. */
   min: string;
-  /** Upper VALUE bound for integer/float (string types use `length` for their char max). */
+  /** Upper VALUE bound for integer/float/biginteger/decimal (string types use `length` for their char max). */
   max: string;
+  /** `array` only: forbid duplicate items. */
+  uniqueItems: boolean;
+  /** `array` only: item-count bounds (string-typed inputs). */
+  minItems: string;
+  maxItems: string;
   /** Conditional admin visibility ("show/hide when …"). Undefined = always visible. */
   condition?: FieldCondition;
   /** Soft-delete marker for a LOADED field (drops on apply, with a restore strip). New fields are removed outright. */
@@ -102,6 +107,9 @@ export function emptyFieldDraft(type: CmsType = 'string'): FieldDraft {
     half: false,
     min: '',
     max: '',
+    uniqueItems: false,
+    minItems: '',
+    maxItems: '',
     deleted: false,
   };
 }
@@ -138,6 +146,9 @@ function draftFromField(field: FieldSchema): FieldDraft {
     half: field.options?.editorWidth === 'half',
     min: field.options?.min !== undefined ? String(field.options.min) : '',
     max: field.options?.max !== undefined ? String(field.options.max) : '',
+    uniqueItems: field.options?.uniqueItems ?? false,
+    minItems: field.options?.minItems !== undefined ? String(field.options.minItems) : '',
+    maxItems: field.options?.maxItems !== undefined ? String(field.options.maxItems) : '',
     deleted: false,
   };
   if (field.options?.condition) base.condition = field.options.condition;
@@ -201,9 +212,15 @@ function draftOptions(draft: FieldDraft): FieldOptions {
     if (draft.min.trim() !== '') options.min = Number(draft.min);
   }
   if (meta.numericBounds) {
-    // integer/float: `min`/`max` are VALUE bounds.
-    if (draft.min.trim() !== '') options.min = Number(draft.min);
-    if (draft.max.trim() !== '') options.max = Number(draft.max);
+    // integer/float bounds are NUMBERS (≤2^53 safe); biginteger/decimal bounds stay STRINGS (no precision loss).
+    const asNumber = draft.type === 'integer' || draft.type === 'float';
+    if (draft.min.trim() !== '') options.min = asNumber ? Number(draft.min) : draft.min.trim();
+    if (draft.max.trim() !== '') options.max = asNumber ? Number(draft.max) : draft.max.trim();
+  }
+  if (meta.arrayItems) {
+    if (draft.uniqueItems) options.uniqueItems = true;
+    if (draft.minItems.trim() !== '') options.minItems = Number(draft.minItems);
+    if (draft.maxItems.trim() !== '') options.maxItems = Number(draft.maxItems);
   }
   if (meta.precisionScale) {
     if (draft.precision.trim() !== '') options.precision = Number(draft.precision);
