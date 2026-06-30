@@ -532,39 +532,116 @@ export const BUILDER_CMS_TYPES: readonly CmsType[] = CMS_TYPES.filter(
 export interface CmsTypeOptionMeta {
   /** editable enum `values` list applies. */
   enumValues: boolean;
-  /** varchar `length` applies. */
+  /** varchar `length` (max chars) + a min-chars input apply. */
   length: boolean;
   /** decimal `precision` + `scale` apply. */
   precisionScale: boolean;
   /** be-04 MEDIA: the `multiple` (single-vs-array) toggle applies. */
   multiple: boolean;
+  /** numeric VALUE bounds (`min`/`max`) apply — integer / float (Part A). */
+  numericBounds: boolean;
+  /** a UNIQUE constraint is offerable (everything but text/boolean/json/array/media). */
+  unique: boolean;
 }
 
-const NO_OPTIONS: CmsTypeOptionMeta = { enumValues: false, length: false, precisionScale: false, multiple: false };
+const NO_OPTIONS: CmsTypeOptionMeta = {
+  enumValues: false,
+  length: false,
+  precisionScale: false,
+  multiple: false,
+  numericBounds: false,
+  unique: false,
+};
 
 const optionMeta: Record<CmsType, CmsTypeOptionMeta> = {
-  string: { ...NO_OPTIONS, length: true },
+  string: { ...NO_OPTIONS, length: true, unique: true },
   text: NO_OPTIONS,
-  email: { ...NO_OPTIONS, length: true },
-  uid: { ...NO_OPTIONS, length: true },
-  enumeration: { ...NO_OPTIONS, enumValues: true },
-  integer: NO_OPTIONS,
-  biginteger: NO_OPTIONS,
-  float: NO_OPTIONS,
-  decimal: { ...NO_OPTIONS, precisionScale: true },
+  email: { ...NO_OPTIONS, length: true, unique: true },
+  uid: { ...NO_OPTIONS, length: true, unique: true },
+  enumeration: { ...NO_OPTIONS, enumValues: true, unique: true },
+  integer: { ...NO_OPTIONS, numericBounds: true, unique: true },
+  biginteger: { ...NO_OPTIONS, unique: true },
+  float: { ...NO_OPTIONS, numericBounds: true, unique: true },
+  decimal: { ...NO_OPTIONS, precisionScale: true, unique: true },
   boolean: NO_OPTIONS,
-  date: NO_OPTIONS,
-  datetime: NO_OPTIONS,
+  date: { ...NO_OPTIONS, unique: true },
+  datetime: { ...NO_OPTIONS, unique: true },
   time: NO_OPTIONS,
   json: NO_OPTIONS,
   array: NO_OPTIONS,
-  uuid: NO_OPTIONS,
+  uuid: { ...NO_OPTIONS, unique: true },
   media: { ...NO_OPTIONS, multiple: true },
 };
 
 /** Which conditional option inputs a type needs in the builder forms. */
 export function optionMetaFor(type: CmsType): CmsTypeOptionMeta {
   return optionMeta[type] ?? NO_OPTIONS;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+// Builder type CATALOG — the type-picker gallery (glyph / one-line desc / group / colour tone).
+// Mirrors the Lua design's `_TYPES()`. `soon` entries (rich text / blocks) render disabled — they
+// aren't real CmsTypes yet, so they're typed loosely as `string` ids and filtered out of creation.
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+
+/** A colour tone keyed to a design token (`--primary`, `--info`, …). */
+export type FieldTone = 'primary' | 'info' | 'success' | 'warning' | 'violet' | 'pink' | 'teal';
+
+/** tone → the CSS var the glyph chip / type pill paints with. */
+export const TONE_VAR: Record<FieldTone, string> = {
+  primary: 'hsl(var(--primary))',
+  info: 'var(--info)',
+  success: 'var(--success)',
+  warning: 'var(--warning)',
+  violet: 'var(--violet)',
+  pink: 'var(--pink)',
+  teal: 'var(--teal)',
+};
+
+/** One gallery entry. `soon` = previewed-but-not-creatable (no backend type). */
+export interface BuilderTypeEntry {
+  id: string;
+  name: string;
+  glyph: string;
+  desc: string;
+  group: string;
+  tone: FieldTone;
+  soon: boolean;
+}
+
+const T = (id: string, name: string, glyph: string, desc: string, group: string, tone: FieldTone, soon = false): BuilderTypeEntry => ({ id, name, glyph, desc, group, tone, soon });
+
+/** The full picker catalog, in display order; grouped by {@link BUILDER_TYPE_GROUP_ORDER}. */
+export const BUILDER_TYPE_CATALOG: readonly BuilderTypeEntry[] = [
+  T('string', 'String', 'T', 'Short text, one line', 'Text', 'primary'),
+  T('text', 'Text', '¶', 'Long text, multi-line', 'Text', 'primary'),
+  T('email', 'Email', '@', 'Validated email address', 'Text', 'primary'),
+  T('uid', 'UID', '/', 'Unique slug from a field', 'Text', 'primary'),
+  T('enumeration', 'Enumeration', '▾', 'A fixed list of values', 'Text', 'primary'),
+  T('uuid', 'UUID', 'id', 'Auto v4 identifier', 'Text', 'primary'),
+  T('integer', 'Integer', '1', 'Whole number', 'Number', 'info'),
+  T('float', 'Float', 'ƒ', 'Floating point', 'Number', 'info'),
+  T('biginteger', 'Big integer', '∞', '64-bit integer', 'Number', 'info'),
+  T('decimal', 'Decimal', '$', 'Fixed precision/scale', 'Number', 'info'),
+  T('boolean', 'Boolean', '✓', 'True or false', 'Boolean', 'success'),
+  T('date', 'Date', 'D', 'Calendar date', 'Date', 'warning'),
+  T('datetime', 'Datetime', 'DT', 'Date and time', 'Date', 'warning'),
+  T('json', 'JSON', '{}', 'Arbitrary JSON', 'Data', 'violet'),
+  T('array', 'Array', '[]', 'List of scalars', 'Data', 'violet'),
+  T('media', 'Media', '▣', 'Image, video or file', 'Media', 'pink'),
+  T('richtext', 'Rich text', 'R', 'WYSIWYG formatted body', 'Rich content', 'primary', true),
+  T('blocks', 'Blocks', '▦', 'Modular block editor', 'Rich content', 'pink', true),
+];
+
+/** The group headers, in picker order. */
+export const BUILDER_TYPE_GROUP_ORDER: readonly string[] = ['Text', 'Number', 'Boolean', 'Date', 'Data', 'Media', 'Rich content'];
+
+const TYPE_BY_ID = new Map(BUILDER_TYPE_CATALOG.map((t) => [t.id, t]));
+const STRING_ENTRY = TYPE_BY_ID.get('string') as BuilderTypeEntry;
+
+/** Resolve a type's gallery metadata (glyph / tone / desc); falls back to the string entry. */
+export function typeMetaFor(type: string): BuilderTypeEntry {
+  return TYPE_BY_ID.get(type) ?? STRING_ENTRY;
 }
 
 /** Format a wire value for display using the field's registered formatter. */

@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Plus, Eye, ChevronLeft } from 'lucide-react';
+import { Plus, Eye, ChevronLeft, LayoutGrid } from 'lucide-react';
+import type { CmsType } from '@conti/sdk';
 import {
   type ModuleFormState,
   type FieldDraft,
   emptyFieldDraft,
+  fieldStatus,
   formToModuleDraft,
   validateModuleForm,
   errorMessage,
@@ -18,7 +20,8 @@ import {
   saveModule,
 } from '@/lib/builder-client';
 import { moduleKeys } from '@/lib/modules';
-import { FieldRowEditor } from '@/components/field-row-editor';
+import { FieldCard } from '@/components/builder/field-card';
+import { TypePicker } from '@/components/builder/type-picker';
 import { RelationRowsEditor } from '@/components/relation-rows-editor';
 import { DiffPreview, hasForbidden } from '@/components/builder/diff-preview';
 import { Button } from '@/components/ui/button';
@@ -54,6 +57,9 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
   const [allowDestructive, setAllowDestructive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Which field card is expanded (by key), and whether the type picker is open. */
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const isEdit = mode === 'edit';
   // Relation targets: every module plus this one (self-ref); on create the name isn't saved yet.
@@ -67,9 +73,26 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
   const patch = (p: Partial<ModuleFormState>) => setState((s) => ({ ...s, ...p }));
   const setFieldAt = (key: string, next: FieldDraft) =>
     setState((s) => ({ ...s, fields: s.fields.map((f) => (f.key === key ? next : f)) }));
-  const removeField = (key: string) =>
-    setState((s) => ({ ...s, fields: s.fields.filter((f) => f.key !== key) }));
-  const addField = () => setState((s) => ({ ...s, fields: [...s.fields, emptyFieldDraft()] }));
+
+  /** Append a fresh field of the picked type, expand it, and close the picker. */
+  const pickType = (type: CmsType) => {
+    const draft = emptyFieldDraft(type);
+    setState((s) => ({ ...s, fields: [...s.fields, draft] }));
+    setExpandedKey(draft.key);
+    setPickerOpen(false);
+  };
+
+  /** New field (no backend id) → removed outright; a loaded field → soft-deleted (restorable). */
+  const deleteField = (key: string) =>
+    setState((s) => ({
+      ...s,
+      fields: s.fields.flatMap((f) => {
+        if (f.key !== key) return [f];
+        return f.id === undefined ? [] : [{ ...f, deleted: true }];
+      }),
+    }));
+  const restoreField = (key: string) => setFieldAt(key, { ...state.fields.find((f) => f.key === key)!, deleted: false });
+  const toggleExpand = (key: string) => setExpandedKey((cur) => (cur === key ? null : key));
 
   async function review(): Promise<void> {
     setError(null);
@@ -118,9 +141,12 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
     }
   }
 
-  // Split loaded fields: authorable (editable rows) vs. authored-in-code (component/dynamiczone/inline-relation).
+  // Split loaded fields: authorable (editable rows, incl. soft-deleted) vs. authored-in-code.
   const authorable = state.fields.filter((f) => !f.raw);
   const rawFields = state.fields.filter((f) => f.raw);
+  // Live = not soft-deleted; drives the empty state + the conditional-visibility sibling list.
+  const liveAuthorable = authorable.filter((f) => !f.deleted);
+  const fieldCountLabel = `${liveAuthorable.length} ${liveAuthorable.length === 1 ? 'field' : 'fields'}`;
 
   if (phase === 'reviewing' && preview) {
     const blockedUnacked = preview.blocked.some((c) => c.risk !== 'forbidden') && !allowDestructive;
@@ -212,24 +238,57 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
         <Switch id="i18n" checked={state.i18n} disabled={isEdit} onCheckedChange={(v) => patch({ i18n: v })} />
       </div>
 
-      <div className="space-y-4">
-        <h2 className="text-sm font-medium">Fields</h2>
-        {authorable.map((draft) => (
-          <FieldRowEditor
-            key={draft.key}
-            draft={draft}
-            i18n={state.i18n}
-            onChange={(next) => setFieldAt(draft.key, next)}
-            onRemove={authorable.length > 1 ? () => removeField(draft.key) : undefined}
-          />
-        ))}
-        <Button type="button" variant="outline" size="sm" onClick={addField}>
-          <Plus className="h-4 w-4" />
-          Add field
-        </Button>
+      <div data-builder>
+        {liveAuthorable.length === 0 && !pickerOpen ? (
+          <EmptyFieldsState moduleName={state.label.trim() || state.name.trim() || 'Untitled'} onAdd={() => setPickerOpen(true)} />
+        ) : (
+          <>
+            <div className="mx-1 mb-[11px] flex items-center justify-between">
+              <div className="flex items-baseline gap-2.5">
+                <h2 className="font-display text-[15px] font-semibold tracking-[-0.01em]">Fields</h2>
+                <span className="font-mono text-[12px]" style={{ color: 'var(--faint)' }}>
+                  {fieldCountLabel}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-[7px]">
+              {authorable.map((draft) => (
+                <FieldCard
+                  key={draft.key}
+                  draft={draft}
+                  status={fieldStatus(draft, state.baseline)}
+                  i18n={state.i18n}
+                  siblingNames={liveAuthorable.filter((f) => f.key !== draft.key).map((f) => f.name).filter((n) => n.trim() !== '')}
+                  expanded={expandedKey === draft.key}
+                  onToggle={() => toggleExpand(draft.key)}
+                  onChange={(next) => setFieldAt(draft.key, next)}
+                  onDelete={() => {
+                    deleteField(draft.key);
+                    setExpandedKey(null);
+                  }}
+                  onRestore={() => restoreField(draft.key)}
+                />
+              ))}
+
+              {pickerOpen && <TypePicker onPick={pickType} onClose={() => setPickerOpen(false)} />}
+
+              {!pickerOpen && (
+                <button
+                  type="button"
+                  onClick={() => setPickerOpen(true)}
+                  className="flex w-full items-center justify-center gap-2 rounded-[11px] border-[1.5px] border-dashed py-[13px] text-[13.5px] font-semibold text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+                >
+                  <Plus className="h-[15px] w-[15px]" />
+                  Add field
+                </button>
+              )}
+            </div>
+          </>
+        )}
 
         {rawFields.length > 0 && (
-          <div className="space-y-1.5 rounded-md border border-dashed p-3">
+          <div className="mt-3 space-y-1.5 rounded-md border border-dashed p-3">
             <p className="text-xs text-muted-foreground">
               Authored in code (components / dynamic zones / inline relations) — preserved on save, edit in the
               schema file:
@@ -261,5 +320,30 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
         </Button>
       </div>
     </form>
+  );
+}
+
+/** The first-field empty state: a centered prompt with a dashed "Add your first field" CTA. */
+function EmptyFieldsState({ moduleName, onAdd }: { moduleName: string; onAdd: () => void }) {
+  return (
+    <div className="mx-auto max-w-[720px] py-2 text-center" style={{ animation: 'lmbUp .4s ease' }}>
+      <div className="mx-auto mb-[18px] flex h-[60px] w-[60px] items-center justify-center rounded-2xl border bg-card shadow-card">
+        <LayoutGrid className="h-7 w-7" style={{ color: 'hsl(var(--primary))' }} strokeWidth={1.7} />
+      </div>
+      <h1 className="mb-[7px] font-display text-[25px] font-semibold tracking-[-0.02em]">
+        Design your <span style={{ color: 'hsl(var(--primary))' }}>{moduleName}</span> module
+      </h1>
+      <p className="mx-auto max-w-[440px] text-[14.5px] leading-[1.6] text-muted-foreground">
+        A module is a content type — its fields, relations and options. Add your first field to get started.
+      </p>
+      <button
+        type="button"
+        onClick={onAdd}
+        className="mt-6 flex w-full items-center justify-center gap-2.5 rounded-[13px] border-[1.5px] border-dashed border-primary/30 bg-card py-4 text-[14px] font-semibold text-primary transition-colors hover:border-primary hover:bg-primary/5"
+      >
+        <Plus className="h-[17px] w-[17px]" />
+        Add your first field
+      </button>
+    </div>
   );
 }

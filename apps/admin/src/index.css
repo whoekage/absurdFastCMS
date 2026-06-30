@@ -107,3 +107,34 @@
     background: hsl(var(--foreground) / 0.2);
   }
 }
+
+/* Module-builder entrance animations (Lua design): subtle slide/pop on cards, panels, the picker. */
+@keyframes lmbUp {
+  from {
+    transform: translateY(8px);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes lmbExpand {
+  from {
+    transform: translateY(-4px);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes lmbPop {
+  from {
+    transform: translateY(-8px) scale(0.985);
+  }
+  to {
+    transform: translateY(0) scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-builder] * {
+    animation-duration: 0.01ms !important;
+  }
+}

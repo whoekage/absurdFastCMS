@@ -1,6 +1,7 @@
 import type { CmsType } from '@conti/sdk';
 import { optionMetaFor, BUILDER_CMS_TYPES } from '@/lib/field-types';
 import type {
+  FieldCondition,
   FieldOptions,
   FieldSchema,
   ModuleDraft,
@@ -61,6 +62,18 @@ export interface FieldDraft {
   localized: boolean;
   /** be-04 MEDIA: single asset (false) vs asset array (true). */
   multiple: boolean;
+  /** UNIQUE constraint (offerable on uniqueable types — see optionMetaFor().unique). */
+  unique: boolean;
+  /** Editor layout: half-width (two side-by-side) vs full. Maps to options.editorWidth. */
+  half: boolean;
+  /** Lower bound — CONTEXTUAL: min char-length for string/email/uid, min VALUE for integer/float. */
+  min: string;
+  /** Upper VALUE bound for integer/float (string types use `length` for their char max). */
+  max: string;
+  /** Conditional admin visibility ("show/hide when …"). Undefined = always visible. */
+  condition?: FieldCondition;
+  /** Soft-delete marker for a LOADED field (drops on apply, with a restore strip). New fields are removed outright. */
+  deleted: boolean;
   /** Set for a non-authorable field (component/dynamiczone/inline-relation) — lowered verbatim. */
   raw?: FieldSchema;
 }
@@ -71,12 +84,12 @@ const nextKey = (prefix: string): string => {
   return `${prefix}-${draftSeq}`;
 };
 
-/** A fresh, empty field draft (defaults to a nullable string field). */
-export function emptyFieldDraft(): FieldDraft {
+/** A fresh, empty field draft (defaults to a nullable string field). `type` overrides the default. */
+export function emptyFieldDraft(type: CmsType = 'string'): FieldDraft {
   return {
     key: nextKey('field'),
     name: '',
-    type: 'string',
+    type,
     nullable: true,
     defaultValue: '',
     enumValues: [],
@@ -85,6 +98,11 @@ export function emptyFieldDraft(): FieldDraft {
     scale: '',
     localized: true,
     multiple: false,
+    unique: false,
+    half: false,
+    min: '',
+    max: '',
+    deleted: false,
   };
 }
 
@@ -116,7 +134,13 @@ function draftFromField(field: FieldSchema): FieldDraft {
     scale: field.options?.scale !== undefined ? String(field.options.scale) : '',
     localized: field.localized ?? true,
     multiple: field.options?.multiple ?? false,
+    unique: field.options?.unique ?? false,
+    half: field.options?.editorWidth === 'half',
+    min: field.options?.min !== undefined ? String(field.options.min) : '',
+    max: field.options?.max !== undefined ? String(field.options.max) : '',
+    deleted: false,
   };
+  if (field.options?.condition) base.condition = field.options.condition;
   if (!isAuthorableField(field.type)) base.raw = field;
   return base;
 }
@@ -133,9 +157,23 @@ function validateFieldDraft(draft: FieldDraft): string | null {
     if (values.length === 0) return 'Enumeration needs at least one value';
     if (new Set(values).size !== values.length) return 'Enumeration values must be distinct';
   }
-  if (meta.length && draft.length.trim() !== '') {
-    const n = Number(draft.length);
-    if (!Number.isInteger(n) || n <= 0) return 'Length must be a positive integer';
+  if (meta.length) {
+    if (draft.length.trim() !== '') {
+      const n = Number(draft.length);
+      if (!Number.isInteger(n) || n <= 0) return 'Max length must be a positive integer';
+    }
+    if (draft.min.trim() !== '') {
+      const m = Number(draft.min);
+      if (!Number.isInteger(m) || m < 0) return 'Min length must be a non-negative integer';
+      if (draft.length.trim() !== '' && m > Number(draft.length)) return 'Min length can’t exceed max length';
+    }
+  }
+  if (meta.numericBounds) {
+    const hasMin = draft.min.trim() !== '';
+    const hasMax = draft.max.trim() !== '';
+    if (hasMin && !Number.isFinite(Number(draft.min))) return 'Min value must be a number';
+    if (hasMax && !Number.isFinite(Number(draft.max))) return 'Max value must be a number';
+    if (hasMin && hasMax && Number(draft.max) < Number(draft.min)) return 'Max value can’t be below min value';
   }
   if (meta.precisionScale) {
     if (draft.precision.trim() !== '') {
@@ -157,12 +195,25 @@ function draftOptions(draft: FieldDraft): FieldOptions {
   if (meta.enumValues) {
     options.values = draft.enumValues.map((v) => v.trim()).filter((v) => v.length > 0);
   }
-  if (meta.length && draft.length.trim() !== '') options.length = Number(draft.length);
+  if (meta.length) {
+    // string/email/uid: `length` is the char MAX, `min` the char minimum.
+    if (draft.length.trim() !== '') options.length = Number(draft.length);
+    if (draft.min.trim() !== '') options.min = Number(draft.min);
+  }
+  if (meta.numericBounds) {
+    // integer/float: `min`/`max` are VALUE bounds.
+    if (draft.min.trim() !== '') options.min = Number(draft.min);
+    if (draft.max.trim() !== '') options.max = Number(draft.max);
+  }
   if (meta.precisionScale) {
     if (draft.precision.trim() !== '') options.precision = Number(draft.precision);
     if (draft.scale.trim() !== '') options.scale = Number(draft.scale);
   }
   if (meta.multiple) options.multiple = draft.multiple;
+  if (meta.unique && draft.unique) options.unique = true;
+  // editorWidth defaults to 'full' on the backend — only emit when 'half' to keep the schema clean.
+  if (draft.half) options.editorWidth = 'half';
+  if (draft.condition) options.condition = draft.condition;
   if (draft.defaultValue.trim() !== '') options.default = parseDefault(draft);
   return options;
 }
@@ -177,6 +228,51 @@ function draftToField(draft: FieldDraft): Omit<FieldSchema, 'id'> & { id?: strin
     options: draftOptions(draft),
     localized: draft.localized,
   };
+}
+
+/** The client-derived change status of a field, relative to the loaded baseline. */
+export type FieldStatus = 'clean' | 'new' | 'modified' | 'deleted';
+
+/**
+ * A stable, comparable serialization of a field's wire shape (excluding the stable `id`). Two fields
+ * with the same name/type/options/localized serialize identically, so we can diff against a baseline
+ * snapshot client-side for the status badge. `draftOptions` builds keys in a fixed order, so a loaded
+ * field round-trips to the same string until the user actually changes something.
+ */
+function comparableField(field: Omit<FieldSchema, 'id'> & { id?: string }): string {
+  return JSON.stringify({ name: field.name, type: field.type, options: field.options ?? {}, localized: field.localized });
+}
+
+/** Build the baseline map (fieldId → comparable snapshot) from loaded drafts. New/raw-less fields have no id. */
+function baselineFrom(drafts: FieldDraft[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const d of drafts) if (d.id !== undefined) out[d.id] = comparableField(draftToField(d));
+  return out;
+}
+
+/** Derive a field's status badge from the baseline: new (no id) / deleted / modified / clean. */
+export function fieldStatus(draft: FieldDraft, baseline: Record<string, string>): FieldStatus {
+  if (draft.deleted) return 'deleted';
+  if (draft.id === undefined) return 'new';
+  const base = baseline[draft.id];
+  if (base === undefined) return 'new';
+  return comparableField(draftToField(draft)) === base ? 'clean' : 'modified';
+}
+
+/** A one-line summary of a field's configured options (the collapsed card subtitle). */
+export function fieldSummary(draft: FieldDraft): string {
+  const meta = optionMetaFor(draft.type);
+  const bits: string[] = [draft.nullable ? 'optional' : 'required'];
+  if (meta.unique && draft.unique) bits.push('unique');
+  if (meta.enumValues && draft.enumValues.length > 0) bits.push(`${draft.enumValues.length} values`);
+  if (meta.length && draft.length.trim() !== '') bits.push(`max ${draft.length.trim()}`);
+  if (meta.numericBounds) {
+    if (draft.min.trim() !== '') bits.push(`min ${draft.min.trim()}`);
+    if (draft.max.trim() !== '') bits.push(`max ${draft.max.trim()}`);
+  }
+  if (meta.multiple) bits.push(draft.multiple ? 'multiple' : 'single');
+  if (draft.defaultValue.trim() !== '') bits.push(`default ${draft.defaultValue.trim()}`);
+  return bits.join(' · ');
 }
 
 /** Interpret the raw `default` string for a draft according to its type. */
@@ -270,32 +366,37 @@ export interface ModuleFormState {
   i18n: boolean;
   fields: FieldDraft[];
   relations: RelationDraft[];
+  /** fieldId → comparable snapshot at load (for client-side status badges). Empty on create. */
+  baseline: Record<string, string>;
 }
 
-/** A blank create-form state. */
+/** A blank create-form state — starts with NO fields (the empty-state prompt drives the first add). */
 export function emptyModuleForm(): ModuleFormState {
-  return { name: '', label: '', draftAndPublish: false, i18n: false, fields: [emptyFieldDraft()], relations: [] };
+  return { name: '', label: '', draftAndPublish: false, i18n: false, fields: [], relations: [], baseline: {} };
 }
 
 /** Seed an edit-form state from a loaded module schema (preserves ids; round-trips non-authorable fields). */
 export function moduleToForm(schema: ModuleSchema): ModuleFormState {
+  const fields = schema.fields.map(draftFromField);
   return {
     id: schema.id,
     name: schema.name,
     label: schema.label ?? '',
     draftAndPublish: schema.options?.draftAndPublish ?? false,
     i18n: schema.options?.i18n ?? false,
-    fields: schema.fields.map(draftFromField),
+    fields,
     relations: (schema.relations ?? []).map(relationFromSchema),
+    baseline: baselineFrom(fields),
   };
 }
 
 /** Lower a whole form state to the {@link ModuleDraft} PUT/preview payload. */
 export function formToModuleDraft(state: ModuleFormState): ModuleDraft {
+  // Soft-deleted fields are OMITTED so the server diff classifies them as drops.
   const draft: ModuleDraft = {
     name: state.name.trim(),
     options: { draftAndPublish: state.draftAndPublish, i18n: state.i18n },
-    fields: state.fields.map(draftToField),
+    fields: state.fields.filter((f) => !f.deleted).map(draftToField),
   };
   const label = state.label.trim();
   if (label.length > 0) draft.label = label;
@@ -314,11 +415,12 @@ export function validateModuleForm(state: ModuleFormState, allModuleNames: reado
     return `A module named "${state.name.trim()}" already exists`;
   }
 
-  const authorable = state.fields.filter((f) => !f.raw);
+  const live = state.fields.filter((f) => !f.deleted);
+  const authorable = live.filter((f) => !f.raw);
   if (authorable.length === 0) return 'A module needs at least one field';
 
   const names = new Set<string>();
-  for (const f of state.fields) {
+  for (const f of live) {
     const err = validateFieldDraft(f);
     if (err) return err;
     const name = (f.raw?.name ?? f.name).trim().toLowerCase();
