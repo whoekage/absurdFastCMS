@@ -81,6 +81,18 @@ class OutputArena {
 }
 
 /**
+ * Drop `private` field keys from a materialized row BEFORE it is serialized into the arena, so the stored
+ * (and therefore every served) bytes never contain a private field. Returns a NEW object (materialize order
+ * preserved); the caller only reaches here for a type that actually declares a private field, so the common
+ * no-private type pays nothing (the call site gates on `privateNames.size`).
+ */
+function stripPrivate(row: Record<string, unknown>, privateNames: ReadonlySet<string>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(row)) if (!privateNames.has(k)) out[k] = row[k];
+  return out;
+}
+
+/**
  * A DETACHED Table + OutputArena pair, built OFF to the side from a field schema and populated row by
  * row with the EXACT same serialize-on-write discipline as {@link Engine.insert}. This is the building
  * block for {@link Engine.replaceType}: a per-type rebuild streams all rows into a fresh detached pair
@@ -102,7 +114,8 @@ export class DetachedTable {
   insert(row: Record<string, unknown>): number {
     const rowId = this.table.insert(row);
     const materialized = this.table.materialize(rowId);
-    const json = this.hasRawField ? serializeRow(materialized) : JSON.stringify(materialized);
+    const out = this.table.privateNames.size > 0 ? stripPrivate(materialized, this.table.privateNames) : materialized;
+    const json = this.hasRawField ? serializeRow(out) : JSON.stringify(out);
     this.arena.append(json);
     return rowId;
   }
@@ -407,12 +420,19 @@ export class Engine {
     // column's scale to coerce a predicate value to the SAME mantissa the column stored (dropping scale
     // would coerce against scale 0 and silently miss), and the precision to reject an out-of-precision
     // predicate value exactly as the column's push and Postgres do.
-    return this.table(name).fields.map((f) => ({
-      name: f.name,
-      type: f.type,
-      ...(f.scale !== undefined ? { scale: f.scale } : {}),
-      ...(f.precision !== undefined ? { precision: f.precision } : {}),
-    }));
+    //
+    // `private` fields are OMITTED: this is the SOLE query-parser whitelist (filter / sort / `fields=`), so
+    // excluding them here makes `?fields=secret`, `filter[secret]`, and `sort=secret` all 400 as unknown —
+    // closing the projection/lookup resurrection vector (Strapi #16069 + the fields-lookup CVE class) in one
+    // place. The column still exists in the Table (storage + write), just never reachable from a read query.
+    return this.table(name).fields
+      .filter((f) => !f.private)
+      .map((f) => ({
+        name: f.name,
+        type: f.type,
+        ...(f.scale !== undefined ? { scale: f.scale } : {}),
+        ...(f.precision !== undefined ? { precision: f.precision } : {}),
+      }));
   }
 
   /** The dense row count of a module (the single-item id range gate: id in [0, rowCount)). */
@@ -439,7 +459,8 @@ export class Engine {
     // A table with NO i64/decimal/json field takes the fast JSON.stringify path (byte-identical to
     // before this slice); otherwise the type-aware serializer splices RawJson fragments verbatim.
     const materialized = t.materialize(rowId);
-    const json = this.hasRawField.get(name) ? serializeRow(materialized) : JSON.stringify(materialized);
+    const out = t.privateNames.size > 0 ? stripPrivate(materialized, t.privateNames) : materialized;
+    const json = this.hasRawField.get(name) ? serializeRow(out) : JSON.stringify(out);
     this.arena(name).append(json);
     // A write to this type invalidates every cached response for it (no stale serve). Predicate-
     // aware partial invalidation is a later optimization; for this slice we drop the whole type.

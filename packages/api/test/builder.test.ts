@@ -183,6 +183,24 @@ test('string/text regex pattern round-trips through the written file', async () 
   assert.deepStrictEqual(loaded, r.schema);
 });
 
+test('private flag round-trips through the written file', async () => {
+  const r = await applySchemaEdit(sql, genDir, {
+    name: 'account',
+    fields: [
+      { name: 'email', type: 'string', options: { nullable: false } },
+      { name: 'secret', type: 'string', options: { nullable: true, private: true } },
+    ],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(await tableExists(sql, 'ct_account'), true);
+
+  const loaded = (await loadTypes(genDir)).schemas.find((s) => s.name === 'account')!;
+  const byName = new Map(loaded.fields.map((f) => [f.name, f]));
+  assert.equal(byName.get('secret')!.options?.private, true);
+  assert.equal(byName.get('email')!.options?.private, undefined); // only emitted when true
+  assert.deepStrictEqual(loaded, r.schema);
+});
+
 test('destructive edit is gated: blocked → nothing written/applied; allowDestructive → applied', async () => {
   await applySchemaEdit(sql, genDir, {
     name: 'widget',

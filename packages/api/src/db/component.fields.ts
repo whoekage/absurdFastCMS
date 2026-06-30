@@ -1,4 +1,4 @@
-import { resolveType, resolveComponentField, isComponentFieldKind, type CmsType, type ComponentFieldKind, type FieldOptions, type ResolvedType } from './type.catalog.ts';
+import { resolveType, resolveComponentField, isComponentFieldKind, TypeOptionError, type CmsType, type ComponentFieldKind, type FieldOptions, type ResolvedType } from './type.catalog.ts';
 import { validateFieldName, DuplicateFieldError } from './ddl.ts';
 
 /**
@@ -57,6 +57,11 @@ export function resolveComponentFields(specs: ComponentFieldSpec[]): ResolvedCom
     const lower = name.toLowerCase();
     if (seen.has(lower)) throw new DuplicateFieldError(name);
     seen.add(lower);
+    // FAIL CLOSED: `private` strips fields from the read path at the TOP-LEVEL serialize-on-write arena +
+    // query whitelist; a field nested inside a component json column is NOT walked by that path, so a
+    // `private` sub-field would silently leak. Reject it at definition until component-internal stripping
+    // ships (a documented follow-up) — never advertise privacy we don't enforce.
+    if (spec.options?.private === true) throw new TypeOptionError('private is not supported inside components');
     const resolved: ResolvedType = isComponentFieldKind(spec.type)
       ? resolveComponentField(spec.type, spec.options)
       : resolveType(spec.type, spec.options);

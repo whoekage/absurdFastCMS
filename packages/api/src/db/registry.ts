@@ -112,6 +112,8 @@ export interface RegistryField {
   patternMessage?: string;
   /** the COMPILED full-match RE2 matcher (built once at load) — the write-time hot path. Linear-time (ReDoS-safe). */
   patternRe?: { test(s: string): boolean };
+  /** `private` (params.private): stripped from every public read (arena serialize + query whitelist + write response). */
+  private?: boolean;
   /** lower bound (params.min) — char-length (string/email/uid) or VALUE; STRING for biginteger/decimal. Write-time guard. */
   min?: number | string;
   /** upper VALUE bound (params.max); STRING for biginteger/decimal. Write-time guard. */
@@ -343,6 +345,8 @@ function buildUserField(name: string, row: FieldRow): RegistryField {
       throw new RegistryError(name, row.name, `invalid stored pattern: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
+  // `private`: read-stripped flag (the read path omits it from arena bytes + the query whitelist + write response).
+  if (params['private'] === true) field.private = true;
   // min/max are numbers for i32/f64 + string char-min, but STRINGS for i64/decimal value bounds — read either.
   const min = params['min'];
   if (typeof min === 'number' || typeof min === 'string') field.min = min;
@@ -576,6 +580,7 @@ function buildDef(ct: ModuleRow, fieldRows: FieldRow[], relationRows: RelationRo
     type: f.engineType,
     ...(f.scale !== undefined ? { scale: f.scale } : {}),
     ...(f.precision !== undefined ? { precision: f.precision } : {}),
+    ...(f.private ? { private: true } : {}),
   }));
 
   const writable = fields.filter((f) => !f.system);

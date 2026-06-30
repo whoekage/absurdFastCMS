@@ -110,6 +110,8 @@ export interface FieldOptions {
   patternFlags?: string;
   /** custom validation message when {@link pattern} fails. */
   patternMessage?: string;
+  /** `private`: stripped from every public read (never serialized/projectable/filterable/sortable). Write-only. */
+  private?: boolean;
 }
 
 /** A field's admin conditional-visibility rule. Metadata only (mirrors the api's FieldCondition). */

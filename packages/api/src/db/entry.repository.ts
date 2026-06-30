@@ -335,6 +335,7 @@ export function serializeEntry(def: ModuleDef, row: Record<string, unknown>): st
   let out = '{';
   let first = true;
   for (const f of def.fields) {
+    if (f.private) continue; // private fields are never echoed on the write response (parity with reads).
     if (!first) out += ',';
     first = false;
     out += JSON.stringify(f.name) + ':';

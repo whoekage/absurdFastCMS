@@ -131,7 +131,8 @@ function fieldBuilderCall(f: FieldSchema): string {
   const cm =
     (o.editorWidth !== undefined ? `, editorWidth: ${lit(o.editorWidth)}` : '') +
     (o.condition !== undefined ? `, condition: ${lit(o.condition)}` : '') +
-    (o.unique ? `, unique: true` : '');
+    (o.unique ? `, unique: true` : '') +
+    (o.private ? `, private: true` : '');
   switch (f.type) {
     case 'string': return `c.string({ ${id}${max}${min}${pat}${nul}${def}${cm} })`;
     case 'text': return `c.text({ ${id}${pat}${nul}${def}${cm} })`;

@@ -62,6 +62,7 @@ const fieldOptionsSchema = z
     pattern: z.string().optional(),
     patternFlags: z.string().optional(),
     patternMessage: z.string().optional(),
+    private: z.boolean().optional(),
     editorWidth: z.enum(['full', 'half']).optional(),
     condition: z
       .object({

@@ -134,6 +134,12 @@ export function resolveFields(specs: FieldSpec[]): ResolvedField[] {
     if (spec.options?.default !== undefined) defaultValue = validateDefault(resolved, spec.options.default).sqlLiteral;
     const rf: ResolvedField = { name, resolved, nullable, defaultValue, localized: spec.localized ?? true };
     if (spec.options?.unique) rf.unique = true;
+    // `private`: a write-time-stored, read-stripped flag. Recorded in params so the registry/engine read it
+    // (the read path omits it from the arena bytes + the query whitelist). Universal — applies to any field.
+    if (spec.options?.private !== undefined) {
+      if (typeof spec.options.private !== 'boolean') throw new TypeOptionError('private must be a boolean');
+      if (spec.options.private) (rf.resolved.params as Record<string, unknown>).private = true;
+    }
     out.push(rf);
   }
   return out;

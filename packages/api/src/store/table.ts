@@ -38,6 +38,12 @@ export interface FieldDef {
    * declared `numeric(p,s)`. Ignored for non-decimal fields.
    */
   precision?: number;
+  /**
+   * `private` field: stored + loaded like any column, but STRIPPED from every public read (the engine
+   * omits it from the serialize-on-write arena bytes and from the query whitelist {@link Engine.fields},
+   * so it is never serialized, projectable, filterable, or sortable). Write-only from the API's view.
+   */
+  private?: boolean;
 }
 
 export interface Predicate {
@@ -172,6 +178,8 @@ const MAX_COMPOSITE_INDEXES = 32;
  */
 export class Table {
   readonly fields: readonly FieldDef[];
+  /** Names of `private` fields (stripped from every public read) — computed once from the schema. */
+  readonly privateNames: ReadonlySet<string>;
   private readonly columns: Map<string, Column>;
   private readonly eqIndexes = new Map<string, EqIndex>();
   private readonly sortedIndexes = new Map<string, SortedIndex>();
@@ -209,6 +217,7 @@ export class Table {
 
   constructor(fields: FieldDef[]) {
     this.fields = fields;
+    this.privateNames = new Set(fields.filter((f) => f.private).map((f) => f.name));
     this.columns = new Map();
     for (const f of fields) this.columns.set(f.name, createColumn(f.type, f.scale, f.precision));
   }

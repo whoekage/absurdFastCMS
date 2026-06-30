@@ -17,6 +17,7 @@ import {
 } from '../src/db/ddl.ts';
 import { resolveType, classifyTypeChange, UnknownCmsTypeError, TypeOptionError, EnumValueError, INTENT_ONLY_ENGINE_TYPES, type CmsType, type EngineTypeIntent } from '../src/db/type.catalog.ts';
 import { resolveFields } from '../src/db/module.fields.ts';
+import { resolveComponentFields } from '../src/db/component.fields.ts';
 import { type ColumnType } from '../src/store/column.ts';
 
 /**
@@ -337,6 +338,20 @@ test('T22 string pattern resolve + validation (RE2)', () => {
   // a malformed regex + an empty pattern throw.
   assert.throws(() => resolveType('string', { pattern: '(' }), TypeOptionError);
   assert.throws(() => resolveType('string', { pattern: '' }), TypeOptionError);
+});
+
+// T23 — `private` is recorded in params (so the registry/engine strip it) and REJECTED inside components.
+test('T23 private flag: stored in params, boolean-validated, rejected inside components', () => {
+  const [secret] = resolveFields([{ name: 'secret', type: 'string', options: { private: true } }]);
+  assert.equal(secret!.resolved.params['private'], true);
+  // private is universal (works on any field type), e.g. an integer pin.
+  assert.equal(resolveFields([{ name: 'pin', type: 'integer', options: { private: true } }])[0]!.resolved.params['private'], true);
+  // a non-private field carries no private key (omitted, not false).
+  assert.equal('private' in resolveFields([{ name: 'name', type: 'string' }])[0]!.resolved.params, false);
+  // a non-boolean private throws.
+  assert.throws(() => resolveFields([{ name: 'x', type: 'string', options: { private: 'yes' as unknown as boolean } }]), TypeOptionError);
+  // FAIL CLOSED: private inside a component is rejected (would silently leak — component json isn't walked).
+  assert.throws(() => resolveComponentFields([{ name: 'secret', type: 'string', options: { private: true } }]), TypeOptionError);
 });
 
 // T18 — `unique` emits an inline UNIQUE column constraint via columnSpec; applicability-gated in resolveFields.

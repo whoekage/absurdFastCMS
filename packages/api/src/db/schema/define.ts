@@ -52,6 +52,8 @@ interface BaseOpts {
   condition?: FieldCondition;
   /** Emit a single-column UNIQUE constraint. Rejected at resolve on text/boolean/json/array/media. */
   unique?: boolean;
+  /** `private`: stripped from every public read (write-only from the API's view). Rejected inside components. */
+  private?: boolean;
 }
 /** Add `| null` to the inferred type unless the options literal says `nullable: false`. */
 type Nullable<T, O> = O extends { nullable: false } ? T : T | null;
@@ -67,7 +69,7 @@ function field<T>(type: CmsType | ComponentFieldKind, options: FieldOptions, id?
 }
 /** The per-field metadata EVERY type carries (editor layout + conditional visibility); undefined-dropped by clean(). */
 function common(o?: BaseOpts): Record<string, unknown> {
-  return { editorWidth: o?.editorWidth, condition: o?.condition, unique: o?.unique };
+  return { editorWidth: o?.editorWidth, condition: o?.condition, unique: o?.unique, private: o?.private };
 }
 /** The regex-pattern options string/email/uid/text carry (undefined-dropped by clean()). */
 function pat(o?: PatternOpts): Record<string, unknown> {

@@ -110,6 +110,12 @@ export interface FieldOptions {
   scale?: number;
   /** allowed members for `enumeration` (non-empty, distinct). */
   values?: string[];
+  /**
+   * `private` field: stored + writable like any field, but STRIPPED from every public read (never
+   * serialized, projectable, filterable, or sortable). Write-only from the API's view (e.g. a password
+   * hash). Orthogonal to required/default/unique. NOT supported inside components (rejected at resolve).
+   */
+  private?: boolean;
   /** whether the column accepts NULL (defaults to true; see `nullable` in the resolved field). */
   nullable?: boolean;
   /** constant default value (volatile defaults like now()/gen_random_uuid() are rejected upstream). */
