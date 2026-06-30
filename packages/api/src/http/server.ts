@@ -1,7 +1,6 @@
 import uWS from 'uWebSockets.js';
 import { loadAdminBundle, mountAdmin } from './static.ts';
 import { type CorsPolicy, captureCors, writeCapturedCors, preflightHeaders } from './cors.ts';
-import busboy from 'busboy';
 import type { Engine } from '../store/engine.ts';
 import type { Registry } from '../db/registry.ts';
 import type { PostgresStore } from '../db/postgres.store.ts';
@@ -18,7 +17,7 @@ import { SchemaChangeConflictError } from '../db/ddl.ts';
 import { localeFromAcceptLanguage, type Locale } from '../errors/index.ts';
 import { computeCatalogVersion, hashRequest } from '../compose/catalog-version.ts';
 import { ensureIdempotencyTable, idempotencyLookup, recordIdempotency, pruneIdempotency } from '../compose/builder-idempotency.ts';
-import { handleUpload, handleListFiles, handleGetFile, handleDeleteFile, type FileContext, type ParsedUpload } from './upload.handler.ts';
+import { type FileContext } from './upload.handler.ts';
 import { mediaPopulateTargets, stripMediaPopulate, applyMediaPopulate } from './media.populate.ts';
 import { componentPopulateTargets, applyComponentPopulate } from './component.populate.ts';
 import { getStorageProvider } from '../storage/index.ts';
@@ -46,6 +45,7 @@ import { createGates } from './auth-gates.ts';
 import type { ServerContext } from './context.ts';
 import { registerTeamRoutes } from './routes/team.ts';
 import { registerKeyRoutes } from './routes/keys.ts';
+import { registerMediaRoutes } from './routes/media.ts';
 
 /**
  * The HTTP server, built directly on uWebSockets.js. uWS is the committed transport (single-instance
@@ -113,120 +113,6 @@ interface CtRouteOpts {
   sub?: string;
   /** Read getParameter(1) as a field `:name` (the `.../fields/:name` template). */
   hasFieldName?: boolean;
-}
-
-// be-04 MEDIA — sanitize a busboy-reported filename to its bare basename over a safe alphabet. NEVER used
-// to build a storage path (that is the content-addressed key); recorded only for display. Strips any
-// directory component (defends against `../../etc/passwd` or a backslash-path), collapses everything
-// outside `[A-Za-z0-9._-]`, caps length, and falls back to `upload` when nothing survives.
-function sanitizeFilename(raw: string): string {
-  // basename over BOTH separators (a Windows client may send backslashes).
-  const base = raw.replace(/\\/g, '/').split('/').pop() ?? '';
-  const cleaned = base.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '').slice(0, 255);
-  return cleaned.length > 0 ? cleaned : 'upload';
-}
-
-/** A media upload-route outcome: a parsed single file, or a client error to surface verbatim. */
-type UploadParseResult = { ok: true; upload: ParsedUpload } | { ok: false; status: number; message: string };
-
-/**
- * be-04 MEDIA — stream the multipart/form-data body through busboy into a SINGLE bounded file buffer.
- * Uses a SEPARATE cap (`config.uploadMaxBytes`) — the 1 MiB JSON `MAX_BODY_BYTES` is untouched. busboy
- * enforces the size natively (`limits.fileSize`) and emits the file stream's `limit` event when exceeded
- * => we reject 413 WITHOUT buffering the whole oversized body. `files:1` rejects a second file part. The
- * `content-type` header MUST be read synchronously off the stack-allocated `req` before the first onData.
- */
-/**
- * be-09b — parse an ALREADY-BUFFERED multipart body through busboy (single-file, bounded). Used by the
- * GATED upload path: the gate resolves auth (async) WHILE the body buffers synchronously, so by dispatch
- * time the bytes are in hand and we feed busboy in one `write`+`end`. Mirrors {@link readMultipart}'s
- * settle/limit/extra-file rules; the size cap is enforced by the caller's buffering (uploadMaxBytes).
- */
-function parseMultipartBuffer(contentType: string, raw: Buffer, onDone: (r: UploadParseResult) => void): void {
-  if (!/^multipart\/form-data/i.test(contentType)) {
-    onDone({ ok: false, status: 415, message: 'expected multipart/form-data' });
-    return;
-  }
-  let bb: ReturnType<typeof busboy>;
-  try {
-    bb = busboy({ headers: { 'content-type': contentType }, limits: { files: 1, fields: 0, fileSize: config.uploadMaxBytes } });
-  } catch {
-    onDone({ ok: false, status: 400, message: 'invalid multipart body' });
-    return;
-  }
-  let settled = false;
-  const settle = (r: UploadParseResult): void => {
-    if (settled) return;
-    settled = true;
-    onDone(r);
-  };
-  const chunks: Buffer[] = [];
-  let sawFile = false;
-  let tooLarge = false;
-  let extraFile = false;
-  let filename = 'upload';
-  let declaredMime = 'application/octet-stream';
-  bb.on('file', (_name, stream, info) => {
-    if (sawFile) {
-      extraFile = true;
-      stream.resume();
-      return;
-    }
-    sawFile = true;
-    filename = sanitizeFilename(info.filename ?? '');
-    declaredMime = (info.mimeType ?? 'application/octet-stream').slice(0, 127);
-    stream.on('data', (d: Buffer) => {
-      if (!tooLarge) chunks.push(d);
-    });
-    stream.on('limit', () => {
-      tooLarge = true;
-    });
-    stream.on('error', () => settle({ ok: false, status: 400, message: 'invalid multipart body' }));
-  });
-  bb.on('filesLimit', () => {
-    extraFile = true;
-  });
-  bb.on('error', () => settle({ ok: false, status: 400, message: 'invalid multipart body' }));
-  bb.on('close', () => {
-    if (tooLarge) return settle({ ok: false, status: 413, message: 'upload too large' });
-    if (extraFile) return settle({ ok: false, status: 400, message: 'expected exactly one file part' });
-    if (!sawFile) return settle({ ok: false, status: 400, message: 'no file part' });
-    settle({ ok: true, upload: { bytes: Buffer.concat(chunks), filename, declaredMime } });
-  });
-  bb.end(raw);
-}
-
-/**
- * be-04 MEDIA — the GET /_files[, /:id] + DELETE /_files/:id routes. GET-list reads ?start&limit off the
- * query synchronously; the :id routes validate a canonical int id (404 otherwise, like the data routes).
- * No body is read (these verbs carry none), so this is synchronous-capture + async-core, corked.
- */
-function handleFilesRoute(res: uWS.HttpResponse, req: uWS.HttpRequest, method: 'GET' | 'DELETE', hasId: boolean, ctx: FileContext): void {
-  const idRaw = hasId ? (req.getParameter(0) ?? '') : '';
-  const query = req.getQuery() ?? '';
-  let aborted = false;
-  res.onAborted(() => {
-    aborted = true;
-  });
-  void (async () => {
-    let result: CoreResponse;
-    try {
-      if (!hasId) {
-        const params = new URLSearchParams(query);
-        const start = toInt(params.get('start')) ?? 0;
-        const limit = toInt(params.get('limit')) ?? 25;
-        result = await handleListFiles(ctx, start, limit);
-      } else {
-        // Canonical non-negative int id, else 404 — symmetric with the data routes.
-        if (!/^(0|[1-9]\d*)$/.test(idRaw)) result = errorResponse(404, 'not found');
-        else if (method === 'GET') result = await handleGetFile(ctx, Number(idRaw));
-        else result = await handleDeleteFile(ctx, Number(idRaw));
-      }
-    } catch {
-      result = errorResponse(500, 'internal error');
-    }
-    if (!aborted) res.cork(() => writeResponse(res, result));
-  })();
 }
 
 /**
@@ -934,10 +820,8 @@ export function createServer(deps: ServerDeps): Server {
   route.put('/:type/:id', dataWrite('PUT', 'content.update', true));
   route.del('/:type/:id', dataWrite('DELETE', 'content.delete', true));
 
-  // be-04 MEDIA — asset endpoints under the `/_files` literal prefix. A leading underscore is illegal
-  // in an name (validateFieldName / deriveTableName), so `_files` can NEVER collide with a real
-  // `/:type`; uWS also matches a static segment over a `:param`. The UPLOAD (POST) + DELETE are GATED on
-  // `media.upload`; the GET reads stay PUBLIC.
+  // be-04 MEDIA — asset endpoints (`/_files`) need the storage provider; build the file context here and
+  // thread it via the ServerContext so registerMediaRoutes can serve upload/list/get/delete.
   const fileCtx: FileContext = { sql: store.sql, provider: getStorageProvider() };
 
   // The shared context handed to every extracted register*Routes(rctx) module. `apply` (the schema-write
@@ -945,45 +829,7 @@ export function createServer(deps: ServerDeps): Server {
   const rctx: ServerContext = { route, gates, live, writeCtx: ctx, store, sql, dir, auth, rbac, teamView, fileCtx };
   registerTeamRoutes(rctx);
   registerKeyRoutes(rctx);
-
-  // GATED upload (`media.upload`): read the content-type header SYNC (multipart boundary), buffer the
-  // body (up to uploadMaxBytes) while resolving auth in parallel via gateUpload, then on allow parse the
-  // buffered multipart through busboy and dispatch the core.
-  route.post('/_files/upload', (res, req) => {
-    const contentType = req.getHeader('content-type') ?? '';
-    gateUpload(res, req, contentType, (raw, aborted) => {
-      parseMultipartBuffer(contentType, raw, (parsed) => {
-        void (async () => {
-          if (!parsed.ok) return corkSend(res, aborted, errorResponse(parsed.status, parsed.message));
-          let result: CoreResponse;
-          try {
-            result = await handleUpload(fileCtx, parsed.upload);
-          } catch {
-            result = errorResponse(500, 'internal error');
-          }
-          corkSend(res, aborted, result);
-        })();
-      });
-    });
-  });
-  route.get('/_files', (res, req) => handleFilesRoute(res, req, 'GET', false, fileCtx));
-  route.get('/_files/:id', (res, req) => handleFilesRoute(res, req, 'GET', true, fileCtx));
-  // GATED delete (`media.upload`): a delete is a mutation. Capture the id sync, gate (bodyless), dispatch.
-  route.del('/_files/:id', (res, req) => {
-    const idRaw = req.getParameter(0) ?? '';
-    gate(res, req, 'media.upload', false, (_raw, aborted) => {
-      void (async () => {
-        let result: CoreResponse;
-        try {
-          if (!/^(0|[1-9]\d*)$/.test(idRaw)) result = errorResponse(404, 'not found');
-          else result = await handleDeleteFile(fileCtx, Number(idRaw));
-        } catch {
-          result = errorResponse(500, 'internal error');
-        }
-        corkSend(res, aborted, result);
-      })();
-    });
-  });
+  registerMediaRoutes(rctx);
 
   // Everything else (root, non-GET on a known route, deeper paths): let the core decide the status
   // (404 / 405). We pass the real method + path so a non-GET on /:type still yields 405.
