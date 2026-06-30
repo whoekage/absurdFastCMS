@@ -1,6 +1,8 @@
 import type { CmsType } from '@conti/sdk';
 import { optionMetaFor, BUILDER_CMS_TYPES } from '@/lib/field-types';
 import type {
+  ComponentDraft,
+  ComponentSchema,
   FieldCondition,
   FieldOptions,
   FieldSchema,
@@ -80,9 +82,19 @@ export interface FieldDraft {
   max: string;
   /** `array` only: forbid duplicate items. */
   uniqueItems: boolean;
-  /** `array` only: item-count bounds (string-typed inputs). */
+  /** `array`/`media` (multiple): item-count bounds (string-typed inputs). */
   minItems: string;
   maxItems: string;
+  /** media only: restrict to these asset categories ('images'|'videos'|'audios'|'files') / MIME strings. */
+  allowedTypes: string[];
+  /** string/email/uid/text: RE2 full-match pattern source (no slashes). */
+  pattern: string;
+  /** pattern flags (subset of `imsu`). */
+  patternFlags: string;
+  /** custom message shown when `pattern` fails. */
+  patternMessage: string;
+  /** write-only: hide from ALL read responses (list/detail/populate). */
+  isPrivate: boolean;
   /** Conditional admin visibility ("show/hide when …"). Undefined = always visible. */
   condition?: FieldCondition;
   /** Soft-delete marker for a LOADED field (drops on apply, with a restore strip). New fields are removed outright. */
@@ -118,6 +130,11 @@ export function emptyFieldDraft(type: CmsType = 'string'): FieldDraft {
     uniqueItems: false,
     minItems: '',
     maxItems: '',
+    allowedTypes: [],
+    pattern: '',
+    patternFlags: '',
+    patternMessage: '',
+    isPrivate: false,
     deleted: false,
   };
 }
@@ -157,6 +174,11 @@ function draftFromField(field: FieldSchema): FieldDraft {
     uniqueItems: field.options?.uniqueItems ?? false,
     minItems: field.options?.minItems !== undefined ? String(field.options.minItems) : '',
     maxItems: field.options?.maxItems !== undefined ? String(field.options.maxItems) : '',
+    allowedTypes: field.options?.allowedTypes ? [...field.options.allowedTypes] : [],
+    pattern: field.options?.pattern ?? '',
+    patternFlags: field.options?.patternFlags ?? '',
+    patternMessage: field.options?.patternMessage ?? '',
+    isPrivate: field.options?.private ?? false,
     deleted: false,
   };
   if (field.options?.condition) base.condition = field.options.condition;
@@ -208,6 +230,23 @@ function validateFieldDraft(draft: FieldDraft): string | null {
     if (draft.min.trim() !== '' && !isValidDateBound(draft.min.trim())) return 'Earliest must be an ISO date or a $now(…) token';
     if (draft.max.trim() !== '' && !isValidDateBound(draft.max.trim())) return 'Latest must be an ISO date or a $now(…) token';
   }
+  if (meta.pattern && draft.patternFlags.trim() !== '' && !/^[imsu]+$/.test(draft.patternFlags.trim())) {
+    // Client pre-check only — the server compiles with RE2 and validates the pattern strictly.
+    return 'Pattern flags may only contain i, m, s, u';
+  }
+  if (meta.mediaTypes && draft.multiple) {
+    if (draft.minItems.trim() !== '') {
+      const n = Number(draft.minItems);
+      if (!Number.isInteger(n) || n < 0) return 'Min items must be a non-negative integer';
+    }
+    if (draft.maxItems.trim() !== '') {
+      const n = Number(draft.maxItems);
+      if (!Number.isInteger(n) || n < 0) return 'Max items must be a non-negative integer';
+    }
+    if (draft.minItems.trim() !== '' && draft.maxItems.trim() !== '' && Number(draft.maxItems) < Number(draft.minItems)) {
+      return 'Max items can’t be below min items';
+    }
+  }
   return null;
 }
 
@@ -244,6 +283,21 @@ function draftOptions(draft: FieldDraft): FieldOptions {
     if (draft.scale.trim() !== '') options.scale = Number(draft.scale);
   }
   if (meta.multiple) options.multiple = draft.multiple;
+  if (meta.mediaTypes) {
+    const types = draft.allowedTypes.map((t) => t.trim()).filter((t) => t.length > 0);
+    if (types.length > 0) options.allowedTypes = types;
+    // item-count bounds only apply to MULTIPLE media (the server rejects them on a single).
+    if (draft.multiple) {
+      if (draft.minItems.trim() !== '') options.minItems = Number(draft.minItems);
+      if (draft.maxItems.trim() !== '') options.maxItems = Number(draft.maxItems);
+    }
+  }
+  if (meta.pattern && draft.pattern.trim() !== '') {
+    options.pattern = draft.pattern; // verbatim source (no slashes); server wraps ^(?:…)$ + compiles with RE2
+    if (draft.patternFlags.trim() !== '') options.patternFlags = draft.patternFlags.trim();
+    if (draft.patternMessage.trim() !== '') options.patternMessage = draft.patternMessage.trim();
+  }
+  if (draft.isPrivate) options.private = true;
   if (meta.unique && draft.unique) options.unique = true;
   // editorWidth defaults to 'full' on the backend — only emit when 'half' to keep the schema clean.
   if (draft.half) options.editorWidth = 'half';
@@ -298,6 +352,7 @@ export function fieldStatus(draft: FieldDraft, baseline: Record<string, string>)
 export function fieldSummary(draft: FieldDraft): string {
   const meta = optionMetaFor(draft.type);
   const bits: string[] = [draft.nullable ? 'optional' : 'required'];
+  if (draft.isPrivate) bits.push('private');
   if (meta.unique && draft.unique) bits.push('unique');
   if (meta.enumValues && draft.enumValues.length > 0) bits.push(`${draft.enumValues.length} values`);
   if (meta.length && draft.length.trim() !== '') bits.push(`max ${draft.length.trim()}`);
@@ -310,6 +365,8 @@ export function fieldSummary(draft: FieldDraft): string {
     if (draft.max.trim() !== '') bits.push(`to ${draft.max.trim()}`);
   }
   if (meta.multiple) bits.push(draft.multiple ? 'multiple' : 'single');
+  if (meta.mediaTypes && draft.allowedTypes.length > 0) bits.push(draft.allowedTypes.join('/'));
+  if (meta.pattern && draft.pattern.trim() !== '') bits.push('pattern');
   if (draft.defaultValue.trim() !== '') bits.push(`default ${draft.defaultValue.trim()}`);
   return bits.join(' · ');
 }
@@ -504,7 +561,7 @@ export interface ModuleFormState {
   name: string;
   /** Editable human display name; falls back to `name` in the UI when blank. */
   label: string;
-  /** UI-only: collection (many entries) vs single (one entry). Backend wiring deferred. */
+  /** collection (many entries) vs single (one entry). Maps to options.single on the wire. */
   kind: 'collection' | 'single';
   draftAndPublish: boolean;
   i18n: boolean;
@@ -538,7 +595,7 @@ export function moduleToForm(schema: ModuleSchema): ModuleFormState {
     id: schema.id,
     name: schema.name,
     label: schema.label ?? '',
-    kind: 'collection',
+    kind: schema.options?.single ? 'single' : 'collection',
     draftAndPublish: schema.options?.draftAndPublish ?? false,
     i18n: schema.options?.i18n ?? false,
     fields,
@@ -553,7 +610,7 @@ export function formToModuleDraft(state: ModuleFormState): ModuleDraft {
   // Soft-deleted fields are OMITTED so the server diff classifies them as drops.
   const draft: ModuleDraft = {
     name: state.name.trim(),
-    options: { draftAndPublish: state.draftAndPublish, i18n: state.i18n },
+    options: { draftAndPublish: state.draftAndPublish, i18n: state.i18n, single: state.kind === 'single' },
     fields: state.fields.filter((f) => !f.deleted).map(draftToField),
   };
   const label = state.label.trim();
@@ -597,6 +654,76 @@ export function validateModuleForm(state: ModuleFormState, allModuleNames: reado
     const name = r.field.trim().toLowerCase();
     if (names.has(name)) return `Relation field "${name}" collides with a field`;
     names.add(name);
+  }
+  return null;
+}
+
+// ── component definitions (a reusable nested field group; edited on its own screen) ────────────────
+
+/**
+ * The editable state for a whole COMPONENT. A component is just a name + a list of nested fields (no module
+ * options, no top-level relations), so it reuses {@link FieldDraft} for its fields — the same field cards and
+ * config the module builder uses. Non-authorable inner fields (a nested component / inline relation) round-
+ * trip via `raw`, exactly like the module form.
+ */
+export interface ComponentFormState {
+  /** Backend stable id (absent on create). */
+  id?: string;
+  name: string;
+  fields: FieldDraft[];
+  /** fieldId → comparable snapshot at load (for the per-field status badges). Empty on create. */
+  baseline: Record<string, string>;
+}
+
+/** TanStack Query keys for the component definitions (distinct from the module builder keys). */
+export const componentKeys = {
+  all: ['builder', 'components'] as const,
+  list: () => ['builder', 'components', 'list'] as const,
+};
+
+/** A blank create-form state — starts with NO fields (the empty-state prompt drives the first add). */
+export function emptyComponentForm(): ComponentFormState {
+  return { name: '', fields: [], baseline: {} };
+}
+
+/** Seed an edit-form state from a loaded component schema (preserves ids; round-trips non-authorable fields). */
+export function componentToForm(schema: ComponentSchema): ComponentFormState {
+  const fields = schema.fields.map(draftFromField);
+  return { id: schema.id, name: schema.name, fields, baseline: baselineFrom(fields) };
+}
+
+/** Lower a component form state to the {@link ComponentDraft} PUT/preview payload. */
+export function formToComponentDraft(state: ComponentFormState): ComponentDraft {
+  const draft: ComponentDraft = {
+    name: state.name.trim(),
+    fields: state.fields.filter((f) => !f.deleted).map(draftToField),
+  };
+  if (state.id !== undefined) draft.id = state.id;
+  return draft;
+}
+
+/** Validate a whole component form; returns the first error message or null. */
+export function validateComponentForm(state: ComponentFormState, allComponentNames: readonly string[]): string | null {
+  const nameError = validateIdentifier(state.name, 'Name');
+  if (nameError) return nameError;
+  // On CREATE the name must be free — PUT is an upsert, so a taken name would edit the existing component.
+  if (state.id === undefined && allComponentNames.includes(state.name.trim())) {
+    return `A component named "${state.name.trim()}" already exists`;
+  }
+
+  const live = state.fields.filter((f) => !f.deleted);
+  const authorable = live.filter((f) => !f.raw);
+  if (authorable.length === 0) return 'A component needs at least one field';
+
+  const names = new Set<string>();
+  for (const f of live) {
+    const err = validateFieldDraft(f);
+    if (err) return err;
+    const name = (f.raw?.name ?? f.name).trim().toLowerCase();
+    if (name !== '') {
+      if (names.has(name)) return `Duplicate field name "${name}"`;
+      names.add(name);
+    }
   }
   return null;
 }

@@ -55,9 +55,19 @@ export interface FieldOptions {
   unique?: boolean;
   /** `array` only: forbid duplicate items. */
   uniqueItems?: boolean;
-  /** `array` only: item-count bounds. */
+  /** `array`/`media` (multiple): item-count bounds. */
   minItems?: number;
   maxItems?: number;
+  /** media only: allowed asset categories ('images'|'videos'|'audios'|'files') or MIME ('image/png','image/*'). */
+  allowedTypes?: string[];
+  /** string/email/uid/text: RE2 full-match pattern (source, no slashes). */
+  pattern?: string;
+  /** pattern flags — a subset of `i m s u` (g/y rejected). */
+  patternFlags?: string;
+  /** custom validation message shown when `pattern` fails. */
+  patternMessage?: string;
+  /** hide this field from ALL read responses (write-only); not allowed inside components. */
+  private?: boolean;
 }
 
 /** A field as it lives in `modules/<name>/schema.ts` — `id` is stable identity, `name` is the renamable key. */
@@ -87,7 +97,7 @@ export interface ModuleSchema {
   /** Editable human display name; `label ?? name` is what the admin shows. */
   label?: string;
   collectionName?: string;
-  options?: { draftAndPublish?: boolean; i18n?: boolean };
+  options?: { draftAndPublish?: boolean; i18n?: boolean; single?: boolean };
   fields: FieldSchema[];
   relations?: RelationSchema[];
 }
@@ -100,9 +110,43 @@ export interface ModuleDraft {
   id?: string;
   name: string;
   label?: string;
-  options?: { draftAndPublish?: boolean; i18n?: boolean };
+  options?: { draftAndPublish?: boolean; i18n?: boolean; single?: boolean };
   fields: Array<Omit<FieldSchema, 'id'> & { id?: string }>;
   relations?: Array<Omit<RelationSchema, 'id'> & { id?: string }>;
+}
+
+/** A reusable component definition (a nested field group with no table), as GET /builder/components returns it. */
+export interface ComponentSchema {
+  id: string;
+  name: string;
+  fields: FieldSchema[];
+}
+
+/** The PUT/preview payload for a component — fields WITHOUT an id are new (the server mints one). */
+export interface ComponentDraft {
+  id?: string;
+  name: string;
+  fields: Array<Omit<FieldSchema, 'id'> & { id?: string }>;
+}
+
+/** GET /builder/components — the defined components + the (shared) catalog version. */
+export interface ComponentCatalogResult {
+  components: ComponentSchema[];
+  version: string;
+}
+
+/** POST /builder/components/:name/preview — a dry run (no write/swap). */
+export interface ComponentPreviewResult {
+  ok: boolean;
+  component: ComponentSchema;
+  generatedSource: string;
+}
+
+/** PUT/DELETE /builder/components/:name — the new catalog version + the resolved component (absent on delete). */
+export interface ComponentSaveResult {
+  ok: true;
+  version: string;
+  component?: ComponentSchema;
 }
 
 /** The risk classification the migrate-lint assigns each change. */
@@ -307,6 +351,65 @@ export async function deleteModule(
     method: 'DELETE',
     path: `/builder/modules/${enc(name)}`,
     body: { allowDestructive: true, version },
+    version,
+    ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  });
+}
+
+// ── component definitions (the migrate-free /builder/components resource) ──────────────────────────
+
+/** GET /builder/components — the full defined component set (with ids) + the shared catalog version (ETag). */
+export async function listComponents(signal?: AbortSignal): Promise<ComponentCatalogResult> {
+  const r = await request<{ components: ComponentSchema[]; version: string }>({
+    method: 'GET',
+    path: '/builder/components',
+    ...(signal ? { signal } : {}),
+  });
+  return { components: r.components, version: r.version };
+}
+
+/** POST /builder/components/:name/preview — dry run: the resolved component + its generated source, no write. */
+export async function previewComponent(
+  name: string,
+  draft: ComponentDraft,
+  signal?: AbortSignal,
+): Promise<ComponentPreviewResult> {
+  return request<ComponentPreviewResult>({
+    method: 'POST',
+    path: `/builder/components/${enc(name)}/preview`,
+    body: draft,
+    ...(signal ? { signal } : {}),
+  });
+}
+
+/** PUT /builder/components/:name — create-or-update: write the component file, swap the registry (no migrate). */
+export async function saveComponent(
+  name: string,
+  draft: ComponentDraft,
+  version: string,
+  opts: { idempotencyKey?: string; signal?: AbortSignal } = {},
+): Promise<ComponentSaveResult> {
+  return request<ComponentSaveResult>({
+    method: 'PUT',
+    path: `/builder/components/${enc(name)}`,
+    body: { ...draft, version },
+    version,
+    ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  });
+}
+
+/** DELETE /builder/components/:name — remove the component (409/422 if a module or component field references it). */
+export async function deleteComponent(
+  name: string,
+  version: string,
+  opts: { idempotencyKey?: string; signal?: AbortSignal } = {},
+): Promise<ComponentSaveResult> {
+  return request<ComponentSaveResult>({
+    method: 'DELETE',
+    path: `/builder/components/${enc(name)}`,
+    body: { version },
     version,
     ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
     ...(opts.signal ? { signal: opts.signal } : {}),
