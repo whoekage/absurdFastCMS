@@ -160,8 +160,8 @@ export async function startTestServerFromFilesWithAuth(
   const base = `http://127.0.0.1:${port}`;
   const store = new PostgresStore(sql);
   const { auth, sessionCache, rbac, teamView } = await assembleAuth(sql, base);
-  const { schemas, hooks } = await loadTypes(modulesDir);
-  const { engine, registry } = await store.loadFromSchemas(schemas);
+  const { schemas, hooks, components } = await loadTypes(modulesDir);
+  const { engine, registry } = await store.loadFromSchemas(schemas, components);
   const deps: ServerDeps = { engine, store, registry, auth, sessionCache, rbac, teamView, hooks: new HookRegistry(hooks), modulesDir };
   const server = createServer(deps);
   const token = await server.listen(port);
@@ -200,6 +200,7 @@ export interface SchemaSpec {
   relations?: { field: string; kind: RelationKind; target: string; inverseField?: string }[];
   draftPublish?: boolean;
   i18n?: boolean;
+  single?: boolean;
 }
 export function schema(spec: SchemaSpec): Schema {
   const out: Schema = {
@@ -213,7 +214,7 @@ export function schema(spec: SchemaSpec): Schema {
       ...(f.localized !== undefined ? { localized: f.localized } : {}),
     })),
   };
-  if (spec.draftPublish || spec.i18n) out.options = { ...(spec.draftPublish ? { draftAndPublish: true } : {}), ...(spec.i18n ? { i18n: true } : {}) };
+  if (spec.draftPublish || spec.i18n || spec.single) out.options = { ...(spec.draftPublish ? { draftAndPublish: true } : {}), ...(spec.i18n ? { i18n: true } : {}), ...(spec.single ? { single: true } : {}) };
   if (spec.relations !== undefined) out.relations = spec.relations.map((r) => (r.inverseField !== undefined ? { id: mintId('rel'), field: r.field, kind: r.kind, target: r.target, inverseField: r.inverseField } : { id: mintId('rel'), field: r.field, kind: r.kind, target: r.target }));
   return out;
 }

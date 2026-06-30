@@ -927,8 +927,10 @@ export function createServer(deps: ServerDeps): Server {
   // a restart), then swaps. A blocked / no-op result returns without swapping.
   const swapAfter = async (result: SchemaEditResult): Promise<SchemaEditResult> => {
     if (!result.ok || result.next === undefined || (result.applied?.length ?? 0) === 0) return result;
-    const { hooks: nextHooks } = await loadTypes(dir);
-    await swapFromIR(sql, live, result.next, result.applied!, new HookRegistry(nextHooks));
+    // Re-load hooks AND component definitions so the rebuilt registry keeps both — without the components a
+    // module that uses one would lose its component field on the swap. (A project with none passes [].)
+    const { hooks: nextHooks, components: nextComponents } = await loadTypes(dir);
+    await swapFromIR(sql, live, result.next, result.applied!, new HookRegistry(nextHooks), nextComponents);
     return result;
   };
   const runEdit = async (draft: ModuleDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult> =>
@@ -1101,8 +1103,8 @@ export function createServer(deps: ServerDeps): Server {
         if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
         writerBusy = true;
         try {
-          const { schemas, hooks } = await loadTypesCacheBusted(dir, `reload:${process.pid}:${Date.now()}`);
-          await swapFromIR(sql, live, schemas, [], new HookRegistry(hooks)); // applied=[] → swaps registry/hooks/relations, no per-type rebuild
+          const { schemas, hooks, components } = await loadTypesCacheBusted(dir, `reload:${process.pid}:${Date.now()}`);
+          await swapFromIR(sql, live, schemas, [], new HookRegistry(hooks), components); // applied=[] → swaps registry/hooks/relations/components, no per-type rebuild
           currentVersion = await computeCatalogVersion(dir);
           corkSend(res, aborted, builderJson(200, { ok: true, version: currentVersion }, { ETag: currentVersion }));
         } catch (e) { corkSend(res, aborted, builderError(e, locale)); }

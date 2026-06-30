@@ -88,11 +88,13 @@ export function createConti(config: ContiConfig, lifecycle: ServerLifecycle = {}
     // engine reads it — migrate-forward (files ahead) / recover-forward (files behind, the S2 crash window) /
     // clean — superseding the old unconditional create-if-absent seed. Default to <cwd>/modules.
     const modulesDir = config.modules?.dir ?? path.join(process.cwd(), 'modules');
-    const { schemas: filesIR, hooks: filesHooks } = await loadTypes(modulesDir);
+    const { schemas: filesIR, hooks: filesHooks, components: filesComponents } = await loadTypes(modulesDir);
     const { schemas, hooks } = await reconcileBoot(store.sql, modulesDir, filesIR, filesHooks);
     const hookRegistry = new HookRegistry(hooks);
-    // Keyset cursor codec (HMAC over the configured secret) wired once at the composition root.
-    const { engine, registry } = await store.loadFromSchemas(schemas, [], { cursorCodec: new CursorCodec(config.cursor.secret) });
+    // Keyset cursor codec (HMAC over the configured secret) wired once at the composition root. Components
+    // have no table (no reconcile/migrate) — they feed the registry directly so a module's component field
+    // resolves at read/write. A project with no components passes [] here, byte-identical to before.
+    const { engine, registry } = await store.loadFromSchemas(schemas, filesComponents, { cursorCodec: new CursorCodec(config.cursor.secret) });
 
     // AUTH (be-09a/b/f): build over the SAME postgres.js handle. teamView BEFORE auth (auth's user hooks call
     // teamView.rebuild) and BEFORE the session cache (caps a team member's cached TTL); the cache references
