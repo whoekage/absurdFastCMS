@@ -184,9 +184,14 @@ green-suite checkpoint.
   `builder-components.e2e`. No regressions across builder/version/component suites.
 - ✅ **D — admin wire**: `builder-client` component fns (`listComponents`/`previewComponent`/
   `saveComponent`/`deleteComponent`) + the `ComponentFormState` draft model (reuses `FieldDraft`).
-- 🟡 **E — admin component editor**: ✅ **E1** standalone Components editor (sidebar + `/components`
-  hub / new / edit, reusing the field cards/config). ⏳ **E2** attach a component on a MODULE field
-  (needs `FieldDraft.type` widened to component kinds + a component picker in field-config) — this is
-  also ⏳ **E3** (replaces the read-only "Authored in code" zone for component fields).
+- ✅ **E — admin component editor**: **E1** standalone Components editor (sidebar + `/components`
+  hub / new / edit). **E2** attach a component on a MODULE field (BuilderFieldType widening +
+  component picker / repeatable / min-max in field-config + a "Component" type-picker entry).
+  **E3** component fields are authorable, so they left the read-only "Authored in code" zone (only
+  dynamic zones / inline relations remain there); Preview + Code canvases render them too.
 
   > Admin UI is verified visually in the running dev server (no admin unit runner); typecheck + biome lint are clean.
+
+## DONE — the full component-authoring slice (A→E) has landed on this branch.
+Deferred sub-steps remain (each its own future slice, noted under "Scope cuts"): inline-relation-in-
+component DSL authoring, dynamic-zone visual authoring, and content-ENTRY component editing.
