@@ -17,8 +17,10 @@ test('loadTypes imports modules/<name>/schema.ts modules into the IR', async () 
   const article = schemas.find((s) => s.name === 'article');
   assert.ok(article, 'article.ts was loaded + introspected');
   assert.equal(article!.id, 'ct_article');
-  assert.deepEqual(article!.fields.map((f) => f.name), ['title', 'body', 'status', 'views', 'rating', 'active', 'publishedAt']);
+  // Relations (author, categories) are split into the IR's relations[], so they are NOT in fields[].
+  assert.deepEqual(article!.fields.map((f) => f.name), ['title', 'slug', 'excerpt', 'cover', 'body', 'status', 'views', 'rating', 'active', 'publishedAt', 'seo']);
   assert.ok(article!.fields.some((f) => f.name === 'status' && f.type === 'enumeration'));
+  assert.deepEqual(article!.relations?.map((r) => r.target).sort(), ['author', 'category']);
 });
 
 test('loadTypes returns an empty catalog for a missing dir', async () => {
