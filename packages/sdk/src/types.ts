@@ -77,6 +77,8 @@ export interface FieldOptions {
    * (an ordered array of `files.id`s). Ignored for non-media types.
    */
   multiple?: boolean;
+  /** be-04 MEDIA only: restrict assets to category buckets (images/videos/audios/files) and/or explicit MIME. */
+  allowedTypes?: string[];
   /** be-05 `component` / `component-repeatable` only: the referenced component-type api_id. */
   component?: string;
   /** be-05 `dynamiczone` only: the allowed component-type api_ids (the zone's allowed-set). */

@@ -14,7 +14,7 @@ const { runMigrations } = await import('../src/db/migration.runner.ts');
 const { createFileDatabase, dropFileDatabase } = await import('./db-per-file.ts');
 const { startTestServer, schema, closeAuth } = await import('./helpers.ts');
 const { resetStorageProvider } = await import('../src/storage/index.ts');
-const { pngBytes } = await import('./storage-fixtures.ts');
+const { pngBytes, textBytes } = await import('./storage-fixtures.ts');
 
 /**
  * be-04 MEDIA FIELD — declare a media field on a module, attach uploaded asset(s), read it back
@@ -57,6 +57,14 @@ before(async () => {
       ],
     }),
     schema({ name: 'note', fields: [{ name: 'body', type: 'text' }] }),
+    // be-04 allowedTypes + count: avatar accepts images only; reel accepts ≥1..≤2 image/video assets.
+    schema({
+      name: 'restricted',
+      fields: [
+        { name: 'avatar', type: 'media', options: { allowedTypes: ['images'] } },
+        { name: 'reel', type: 'media', options: { multiple: true, allowedTypes: ['images', 'video/*'], minItems: 1, maxItems: 2 } },
+      ],
+    }),
   ];
   const srv = await startTestServer(sql, schemas);
   base = srv.base;
@@ -183,6 +191,52 @@ test('a deleted asset populates as null (single) — dangling ref is tolerated, 
   const pop = await GET(`/product/${created.data.id}?populate=cover`);
   assert.equal(pop.status, 200);
   assert.equal(((await pop.json()) as { data: { cover: Asset | null } }).data.cover, null);
+});
+
+/** Upload a NON-image asset (declared mime is kept since the bytes aren't a sniffable image). */
+async function uploadText(mime: string, body = 'hello world'): Promise<Asset> {
+  const fd = new FormData();
+  fd.set('file', new Blob([textBytes(body)], { type: mime }), 'note.txt');
+  const r = await authedFetch('/_files/upload', { method: 'POST', body: fd });
+  assert.ok(r.status === 201 || r.status === 200, `text upload -> ${r.status}`);
+  return ((await r.json()) as { data: Asset }).data;
+}
+
+test('allowedTypes: registry carries the allowed set + count on the media meta', () => {
+  assert.deepEqual(registry.get('restricted')!.mediaFields.get('avatar'), { multiple: false, allowedTypes: ['images'] });
+  assert.deepEqual(registry.get('restricted')!.mediaFields.get('reel'), {
+    multiple: true,
+    allowedTypes: ['images', 'video/*'],
+    min: 1,
+    max: 2,
+  });
+});
+
+test('allowedTypes enforced at the write boundary against the STORED asset mime', async () => {
+  const img = await uploadAsset(8, 9); // image/png
+  const txt = await uploadText('text/plain', 'definitely not an image');
+  // an image satisfies an images-only field; a text asset is rejected 400.
+  assert.equal((await POST('/restricted', { avatar: img.id })).status, 201);
+  const bad = await POST('/restricted', { avatar: txt.id });
+  assert.equal(bad.status, 400);
+  // The check reads the STORED `files.mime`, never anything in the entry-write body (which carries only an
+  // id) — so an entry author cannot influence the mime decision. (Upload-time mime detection is a separate
+  // concern: the sniffer only fingerprints images, falling back to the declared part mime for other types.)
+});
+
+test('multiple-media allowedTypes + count enforced together', async () => {
+  const a = await uploadAsset(5, 6);
+  const b = await uploadAsset(7, 8);
+  const cc = await uploadAsset(9, 10);
+  const txt = await uploadText('text/plain');
+  // within count (1..2) and all images → accepted.
+  assert.equal((await POST('/restricted', { avatar: a.id, reel: [a.id, b.id] })).status, 201);
+  // empty reel violates minItems 1 → 400 (body-parser count guard).
+  assert.equal((await POST('/restricted', { avatar: a.id, reel: [] })).status, 400);
+  // 3 DISTINCT ids violates maxItems 2 → 400 (count is over distinct ids, so they must differ).
+  assert.equal((await POST('/restricted', { avatar: a.id, reel: [a.id, b.id, cc.id] })).status, 400);
+  // a disallowed mime inside the array → 400 (write-boundary mime check).
+  assert.equal((await POST('/restricted', { avatar: a.id, reel: [a.id, txt.id] })).status, 400);
 });
 
 test('a type WITHOUT a media field is byte-identical: no media key, populate has no effect', async () => {

@@ -138,6 +138,30 @@ test('date/datetime min/max bounds round-trip through the written file', async (
   assert.deepStrictEqual(loaded, r.schema);
 });
 
+test('media allowedTypes + count round-trip through the written file', async () => {
+  // An un-emitted media guard is silently lost on the next boot — pin the codegen ⇄ defToSchema round-trip
+  // for allowedTypes (single) + allowedTypes-with-count (multiple).
+  const r = await applySchemaEdit(sql, genDir, {
+    name: 'assets',
+    fields: [
+      { name: 'avatar', type: 'media', options: { nullable: true, allowedTypes: ['images'] } },
+      { name: 'clips', type: 'media', options: { nullable: true, multiple: true, allowedTypes: ['videos', 'audio/*'], minItems: 1, maxItems: 4 } },
+    ],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(await tableExists(sql, 'ct_assets'), true);
+
+  const loaded = (await loadTypes(genDir)).schemas.find((s) => s.name === 'assets')!;
+  const byName = new Map(loaded.fields.map((f) => [f.name, f]));
+  assert.deepEqual(byName.get('avatar')!.options?.allowedTypes, ['images']);
+  assert.deepEqual(byName.get('clips')!.options?.allowedTypes, ['videos', 'audio/*']);
+  assert.equal(byName.get('clips')!.options?.minItems, 1);
+  assert.equal(byName.get('clips')!.options?.maxItems, 4);
+  // NB: a whole-object deepStrictEqual(loaded, r.schema) is NOT asserted here — a single-media field
+  // round-trips with a `multiple: false` the DSL default re-adds but defToSchema omits (a pre-existing,
+  // allowedTypes-orthogonal asymmetry). The per-option checks above pin the codegen ⇄ loadTypes round-trip.
+});
+
 test('destructive edit is gated: blocked → nothing written/applied; allowDestructive → applied', async () => {
   await applySchemaEdit(sql, genDir, {
     name: 'widget',

@@ -58,6 +58,7 @@ const fieldOptionsSchema = z
     uniqueItems: z.boolean().optional(),
     minItems: z.number().int().min(0).optional(),
     maxItems: z.number().int().min(0).optional(),
+    allowedTypes: z.array(z.string()).optional(),
     editorWidth: z.enum(['full', 'half']).optional(),
     condition: z
       .object({

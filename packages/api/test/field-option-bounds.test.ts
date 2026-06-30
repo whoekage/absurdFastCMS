@@ -85,3 +85,19 @@ test('relative $now bounds resolve against the request instant', () => {
   dok({ recent: days(0) });
   dbad({ recent: days(-30) });
 });
+
+// media COUNT bounds (minItems/maxItems on a MULTIPLE field) — pure body-parser guard (no DB / mime here).
+const galleries = Registry.fromSchemas([
+  schema({
+    name: 'gallery',
+    fields: [{ name: 'photos', type: 'media', options: { nullable: true, multiple: true, minItems: 1, maxItems: 2 } }],
+  }),
+]);
+const gdef = galleries.get('gallery')!;
+
+test('multiple-media count bounds are enforced (distinct ids)', () => {
+  assert.doesNotThrow(() => validateBody(gdef, { photos: [10] }, 'create', galleries)); // == min
+  assert.doesNotThrow(() => validateBody(gdef, { photos: [10, 11] }, 'create', galleries)); // == max
+  assert.throws(() => validateBody(gdef, { photos: [] }, 'create', galleries), BodyParseError); // < min
+  assert.throws(() => validateBody(gdef, { photos: [10, 11, 12] }, 'create', galleries), BodyParseError); // > max
+});

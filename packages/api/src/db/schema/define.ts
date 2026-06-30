@@ -73,7 +73,7 @@ function common(o?: BaseOpts): Record<string, unknown> {
 type StringOpts = BaseOpts & { max?: number; min?: number; default?: string };
 type NumOpts = BaseOpts & { min?: number; max?: number; default?: number };
 type DecimalOpts = BaseOpts & { precision?: number; scale?: number; min?: string | number; max?: string | number; default?: string | number };
-type MediaOpts = BaseOpts & { multiple?: boolean };
+type MediaOpts = BaseOpts & { multiple?: boolean; allowedTypes?: string[]; minItems?: number; maxItems?: number };
 type BigIntOpts = BaseOpts & { min?: string | number; max?: string | number; default?: string | number }; // i64 bounds/default may be strings
 type DateOpts = BaseOpts & { min?: string; max?: string; default?: string }; // min/max: absolute ISO or a `$now` token
 type JsonOpts = BaseOpts & { default?: unknown };
@@ -114,7 +114,7 @@ export const c = {
   array: <O extends ArrayOpts = {}>(o?: O): FieldBuilder<Nullable<unknown[], O>> =>
     field('array', clean({ nullable: o?.nullable ?? true, default: o?.default, uniqueItems: o?.uniqueItems, minItems: o?.minItems, maxItems: o?.maxItems, ...common(o) }), o?.id),
   media: <O extends MediaOpts = {}>(o?: O): FieldBuilder<Nullable<O extends { multiple: true } ? number[] : number, O>> =>
-    field('media', clean({ multiple: o?.multiple ?? false, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
+    field('media', clean({ multiple: o?.multiple ?? false, allowedTypes: o?.allowedTypes, minItems: o?.minItems, maxItems: o?.maxItems, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   component: <O extends BaseOpts = {}>(name: string, o?: O): FieldBuilder<Nullable<unknown, O>> =>
     field('component', clean({ component: name, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
   dynamiczone: (names: readonly string[], o?: { id?: string }): FieldBuilder<unknown[]> =>

@@ -222,7 +222,15 @@ function coerceMedia(field: RegistryField, multiple: boolean, v: unknown): unkno
   for (const x of arr) {
     if (!validId(x)) throw new BodyParseError(`media field "${name}" must be a positive integer file id or an array of them`);
   }
-  return [...new Set(arr as number[])];
+  const ids = [...new Set(arr as number[])];
+  // Count bounds (distinct ids). allowedTypes (MIME) is enforced later in write.handler (needs the registry).
+  if (field.media?.min !== undefined && ids.length < field.media.min) {
+    throw new BodyParseError(`media field "${name}" needs at least ${field.media.min} file(s)`);
+  }
+  if (field.media?.max !== undefined && ids.length > field.media.max) {
+    throw new BodyParseError(`media field "${name}" accepts at most ${field.media.max} file(s)`);
+  }
+  return ids;
 }
 
 /**

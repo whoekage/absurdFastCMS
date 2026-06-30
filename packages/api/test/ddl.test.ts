@@ -299,6 +299,23 @@ test('T20 date/datetime min/max bounds (ISO + $now tokens)', () => {
   assert.doesNotThrow(() => resolveType('datetime', { min: '$now(+1 year)', max: '2020-01-01' }));
 });
 
+// T21 — media allowedTypes (category/MIME set) + count range resolve into params; bad options throw.
+test('T21 media allowedTypes + count range', () => {
+  // single media: cardinality only by default.
+  assert.deepEqual(resolveType('media').params, { multiple: false });
+  // allowedTypes: known categories + explicit MIME accepted + deduped; count valid only on a multiple field.
+  assert.deepEqual(
+    resolveType('media', { multiple: true, allowedTypes: ['images', 'video/*', 'images'], minItems: 1, maxItems: 3 }).params,
+    { multiple: true, allowedTypes: ['images', 'video/*'], minItems: 1, maxItems: 3 },
+  );
+  assert.deepEqual(resolveType('media', { allowedTypes: ['images'] }).params, { multiple: false, allowedTypes: ['images'] });
+  // bad bounds / options throw at resolve.
+  assert.throws(() => resolveType('media', { allowedTypes: ['not-a-category'] }), TypeOptionError); // unknown bucket, no '/'
+  assert.throws(() => resolveType('media', { allowedTypes: [] }), TypeOptionError); // empty set
+  assert.throws(() => resolveType('media', { minItems: 1 }), TypeOptionError); // count on a single field
+  assert.throws(() => resolveType('media', { multiple: true, minItems: 3, maxItems: 1 }), TypeOptionError); // max<min
+});
+
 // T18 — `unique` emits an inline UNIQUE column constraint via columnSpec; applicability-gated in resolveFields.
 test('T18 unique column constraint + applicability guard', () => {
   const fields = resolveFields([

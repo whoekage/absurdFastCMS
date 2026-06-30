@@ -4,7 +4,8 @@ import type { Registry, ModuleDef, ComponentDef } from '../db/registry.ts';
 import { validateBody, BodyParseError } from '../db/body.parser.ts';
 import { insertEntry, updateEntry, deleteEntry, publishEntry, unpublishEntry, readSiblingForVariant, serializeEntry, missingEntryIds, EntryWriteError } from '../db/entry.repository.ts';
 import { applyRelationOps } from '../db/relation.repository.ts';
-import { missingFileIds } from '../db/file.repository.ts';
+import { missingFileIds, getFileMimes } from '../db/file.repository.ts';
+import { mimeAllowed } from '../db/media.types.ts';
 import { RawJson } from '../store/column.ts';
 import { validateLocale, QueryParseError } from '../store/query.parser.ts';
 import { config } from '../config.ts';
@@ -107,15 +108,22 @@ export interface WriteRequest {
 async function assertMediaRefsExist(tx: Sql | TransactionSql, def: ModuleDef, data: Record<string, unknown>, registry: Registry): Promise<void> {
   if (def.mediaFields.size === 0 && def.componentFields.size === 0) return;
   const ids: number[] = [];
-  for (const [name, { multiple }] of def.mediaFields) {
+  // Per-field MIME-restricted id sets (allowedTypes) — verified after the existence gate against STORED mimes.
+  const restricted: Array<{ name: string; allowedTypes: readonly string[]; ids: number[] }> = [];
+  for (const [name, media] of def.mediaFields) {
     const v = data[name];
     if (v === undefined || v === null) continue; // not in this write, or explicitly cleared.
-    if (multiple) {
+    const fieldIds: number[] = [];
+    if (media.multiple) {
       // A freshly-supplied overlay is a coerced number[]; a shared sibling copy is a RawJson(`[…]`).
       const arr = v instanceof RawJson ? (JSON.parse(v.raw) as number[]) : (v as number[]);
-      for (const id of arr) ids.push(id);
+      for (const id of arr) { ids.push(id); fieldIds.push(id); }
     } else {
       ids.push(v as number);
+      fieldIds.push(v as number);
+    }
+    if (media.allowedTypes !== undefined && media.allowedTypes.length > 0 && fieldIds.length > 0) {
+      restricted.push({ name, allowedTypes: media.allowedTypes, ids: fieldIds });
     }
   }
   // be-05 COMPONENT: walk the coerced component / dynamiczone trees for INLINE media id refs. The body
@@ -133,6 +141,20 @@ async function assertMediaRefsExist(tx: Sql | TransactionSql, def: ModuleDef, da
   const missing = await missingFileIds(tx, ids);
   if (missing.length > 0) {
     throw new EntryWriteError(`media reference to unknown file id(s): ${missing.join(', ')}`);
+  }
+  // allowedTypes: every referenced asset's STORED mime (never client-declared) must satisfy the field's
+  // allowed set. Enforced at this SHARED boundary (all write paths funnel here) — an alt path that skipped it
+  // is exactly the Strapi CVE-2026-22707 / #14648 class. One batched mime lookup over the restricted ids.
+  if (restricted.length > 0) {
+    const mimes = await getFileMimes(tx, restricted.flatMap((r) => r.ids));
+    for (const r of restricted) {
+      for (const id of r.ids) {
+        const mime = mimes.get(id);
+        if (mime !== undefined && !mimeAllowed(mime, r.allowedTypes)) {
+          throw new EntryWriteError(`media field "${r.name}" does not allow files of type ${mime} (id ${id})`);
+        }
+      }
+    }
   }
 }
 

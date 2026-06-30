@@ -115,6 +115,21 @@ export async function missingFileIds(sql: Sql | TransactionSql, ids: number[]): 
 }
 
 /**
+ * be-04 MEDIA — fetch id -> STORED mime for the given ids in ONE round-trip (the `allowedTypes` write gate).
+ * The mime is the registry's content-detected value (never client-declared), so a write can be rejected when
+ * a referenced asset's type is outside a media field's allowed set. An absent id (already caught by the
+ * existence gate) is simply not in the Map. Empty input -> empty Map. Runs INSIDE the caller's tx.
+ */
+export async function getFileMimes(sql: Sql | TransactionSql, ids: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  if (ids.length === 0) return out;
+  const unique = [...new Set(ids)];
+  const rows = await sql<{ id: number; mime: string }[]>`SELECT id, mime FROM files WHERE id = ANY(${unique}::int[])`;
+  for (const r of rows) out.set(r.id, r.mime);
+  return out;
+}
+
+/**
  * be-04 MEDIA — fetch many assets by id in ONE round-trip (the populate batch lookup). Returns a Map
  * id -> asset for the ids that exist; a requested id with no row is simply absent (the populate post-step
  * emits `null` for a dangling single ref / drops it from a multiple array). Empty input -> empty Map.

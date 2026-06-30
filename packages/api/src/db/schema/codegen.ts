@@ -116,6 +116,11 @@ function fieldBuilderCall(f: FieldSchema): string {
     (o.uniqueItems ? `, uniqueItems: true` : '') +
     (o.minItems !== undefined ? `, minItems: ${o.minItems}` : '') +
     (o.maxItems !== undefined ? `, maxItems: ${o.maxItems}` : '');
+  // `media` write guards: allowedTypes (category/MIME set) + count range (reuses minItems/maxItems).
+  const mediaOpts =
+    (o.allowedTypes !== undefined ? `, allowedTypes: ${lit(o.allowedTypes)}` : '') +
+    (o.minItems !== undefined ? `, minItems: ${o.minItems}` : '') +
+    (o.maxItems !== undefined ? `, maxItems: ${o.maxItems}` : '');
   // Common per-field metadata every type carries (editor layout + conditional visibility) — emit so it
   // round-trips through the file (the `info`/`label` lesson: an un-emitted option is silently lost on boot).
   const cm =
@@ -138,7 +143,7 @@ function fieldBuilderCall(f: FieldSchema): string {
     case 'datetime': return `c.datetime({ ${id}${nul}${def}${min}${maxv}${cm} })`;
     case 'json': return `c.json({ ${id}${nul}${def}${cm} })`;
     case 'array': return `c.array({ ${id}${nul}${def}${ai}${cm} })`;
-    case 'media': return `c.media({ ${id}${o.multiple ? ', multiple: true' : ''}${nul}${cm} })`;
+    case 'media': return `c.media({ ${id}${o.multiple ? ', multiple: true' : ''}${mediaOpts}${nul}${cm} })`;
     case 'component': return `c.component(${lit(o.component ?? '')}, { ${id}${nul}${cm} })`;
     case 'dynamiczone': return `c.dynamiczone(${lit(o.components ?? [])}, { ${id} })`;
     default:

@@ -1,5 +1,6 @@
 import type { ColumnType } from '../store/column.ts';
 import { DECIMAL_MAX_SAFE_PRECISION } from '../store/decimal.const.ts';
+import { isValidAllowedType } from './media.types.ts';
 
 /**
  * The SINGLE source of the `type -> { pgType, engineType, params }` mapping. Both the DDL
@@ -104,6 +105,12 @@ export interface FieldOptions {
   default?: unknown;
   /** `media` only: false (default) -> a single int4 file id column; true -> a jsonb array of file ids. */
   multiple?: boolean;
+  /**
+   * `media` only: restrict referenced assets to category buckets (images/videos/audios/files) and/or explicit
+   * MIME (`image/png`, `image/*`). Enforced at the SHARED write boundary against each asset's STORED mime
+   * (write.handler), never the client-declared type. See {@link import('./media.types.ts').mimeAllowed}.
+   */
+  allowedTypes?: string[];
   /** be-05 component / component-repeatable only: the referenced component-type name. */
   component?: string;
   /** be-05 dynamiczone only: the allowed component-type api_ids (the zone's allowed-set). */
@@ -307,6 +314,42 @@ function arrayParams(o: FieldOptions | undefined): Record<string, unknown> {
   return p;
 }
 
+/**
+ * be-04 MEDIA params: cardinality (`multiple`), optional `allowedTypes` (validated category/MIME set), and
+ * an optional count range (reusing `minItems`/`maxItems`, meaningful only for a MULTIPLE field — a count on
+ * a single-valued media is a config error, rejected here). Pure validation; no DDL effect (write-time guards).
+ */
+function mediaParams(o: FieldOptions | undefined): Record<string, unknown> {
+  const multiple = o?.multiple === true;
+  const params: Record<string, unknown> = { multiple };
+  if (o?.allowedTypes !== undefined) {
+    if (!Array.isArray(o.allowedTypes) || o.allowedTypes.length === 0) {
+      throw new TypeOptionError('allowedTypes must be a non-empty string array');
+    }
+    const seen = new Set<string>();
+    for (const t of o.allowedTypes) {
+      if (typeof t !== 'string' || t.length === 0) throw new TypeOptionError(`allowedTypes entries must be non-empty strings, got ${String(t)}`);
+      if (!isValidAllowedType(t)) throw new TypeOptionError(`allowedTypes "${t}" is not a known category (images/videos/audios/files) or a MIME type`);
+      seen.add(t);
+    }
+    params.allowedTypes = [...seen];
+  }
+  const count = (v: unknown, name: string): number | undefined => {
+    if (v === undefined) return undefined;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) throw new TypeOptionError(`${name} must be a non-negative integer, got ${String(v)}`);
+    return v;
+  };
+  const min = count(o?.minItems, 'minItems');
+  const max = count(o?.maxItems, 'maxItems');
+  if ((min !== undefined || max !== undefined) && !multiple) {
+    throw new TypeOptionError('minItems/maxItems apply only to a multiple media field');
+  }
+  if (min !== undefined && max !== undefined && max < min) throw new TypeOptionError(`maxItems ${max} is less than minItems ${min}`);
+  if (min !== undefined) params.minItems = min;
+  if (max !== undefined) params.maxItems = max;
+  return params;
+}
+
 /** Validate + dedup the `enumeration` value set; returns the distinct values and the longest length. */
 function resolveEnum(options: FieldOptions | undefined): { values: string[]; maxLen: number } {
   const values = options?.values;
@@ -364,8 +407,8 @@ const RESOLVERS = {
   // deleted asset, mirroring how a relation id may dangle. `params.multiple` is the load/validate/
   // populate switch (registry reads it to size cardinality + pick the i32-vs-json populate shape).
   media: (o) => (o?.multiple === true
-    ? { pgType: 'jsonb', engineType: 'json', params: { multiple: true } }
-    : { pgType: 'integer', engineType: 'i32', params: { multiple: false } }),
+    ? { pgType: 'jsonb', engineType: 'json', params: mediaParams(o) }
+    : { pgType: 'integer', engineType: 'i32', params: mediaParams(o) }),
 } satisfies Record<CmsType, (o?: FieldOptions) => { pgType: string; engineType: EngineTypeIntent; params: Record<string, unknown> }>;
 
 /**

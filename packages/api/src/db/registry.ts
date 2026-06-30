@@ -69,6 +69,18 @@ export class RegistryError extends AppError {
   }
 }
 
+/**
+ * be-04 MEDIA field meta: cardinality + the optional write-time guards. `allowedTypes` restricts a
+ * referenced asset's STORED mime (category bucket / explicit MIME), enforced at the shared write boundary
+ * (write.handler); `min`/`max` bound the count of a MULTIPLE media field, enforced in the body parser.
+ */
+interface MediaMeta {
+  multiple: boolean;
+  allowedTypes?: readonly string[];
+  min?: number;
+  max?: number;
+}
+
 /** One field of a module, fully resolved for load / validate / write. */
 export interface RegistryField {
   /** Engine field name == Postgres column name (verbatim, no snake_case map). */
@@ -108,7 +120,7 @@ export interface RegistryField {
    * (a jsonb array of ids). Absent for every non-media field. The body parser reads it (positive-int4 +
    * cardinality check), and the media-populate post-step reads it (resolve the id(s) against `files`).
    */
-  media?: { multiple: boolean };
+  media?: MediaMeta;
   /**
    * be-05 COMPONENT: present iff `type` is a component kind (component / component-repeatable /
    * dynamiczone). The field IS a plain `json` column in `fields`/`fieldDefs`/`writable` (the inline
@@ -210,7 +222,7 @@ export interface ModuleDef {
    * resolve against `files`, and whether to inline ONE object or an ARRAY). Empty for a type with no
    * media field => the populate post-step is skipped entirely (byte-identical read path).
    */
-  mediaFields: Map<string, { multiple: boolean }>;
+  mediaFields: Map<string, MediaMeta>;
   /**
    * be-05 COMPONENT: O(1) lookup of this type's component / component-repeatable / dynamiczone fields by
    * field name -> structural intent. A component field IS a plain json column in `fields`/`writable`, so
@@ -323,7 +335,13 @@ function buildUserField(name: string, row: FieldRow): RegistryField {
   // flag the body parser + populate post-step read. A multiple-media field IS a json column, so
   // `field.json` is already true (RETURNING/SELECT ::text cast applies) — correct, no special-case.
   if (type === 'media') {
-    field.media = { multiple: params['multiple'] === true };
+    const media: MediaMeta = { multiple: params['multiple'] === true };
+    if (Array.isArray(params['allowedTypes'])) media.allowedTypes = params['allowedTypes'] as string[];
+    const minCount = numberParam(params, 'minItems');
+    if (minCount !== undefined) media.min = minCount;
+    const maxCount = numberParam(params, 'maxItems');
+    if (maxCount !== undefined) media.max = maxCount;
+    field.media = media;
   }
   // be-05b RELATION-INSIDE-COMPONENT: tag an inline relation ref from its catalog params. engine_type is
   // `json` (set above) so the column loads/serializes as RawJson verbatim — exactly like a media-multiple
@@ -548,7 +566,7 @@ function buildDef(ct: ModuleRow, fieldRows: FieldRow[], relationRows: RelationRo
   const relationsByField = new Map<string, RelationMeta>(relations.map((r) => [r.field, r]));
 
   // be-04 MEDIA: index the media fields (a SUBSET of `writable`, since a media field is a real column).
-  const mediaFields = new Map<string, { multiple: boolean }>();
+  const mediaFields = new Map<string, MediaMeta>();
   for (const f of writable) if (f.media !== undefined) mediaFields.set(f.name, f.media);
 
   // be-05 COMPONENT: index the component fields (a SUBSET of `writable`; each IS a json column).
@@ -591,7 +609,7 @@ export interface ComponentDef {
   /** Component / dynamiczone fields nested INSIDE this component (the recursion seam). */
   componentFields: Map<string, { kind: ComponentFieldKind; component?: string; components?: readonly string[] }>;
   /** Media fields inside this component (inline id refs; the populate seam). */
-  mediaFields: Map<string, { multiple: boolean }>;
+  mediaFields: Map<string, MediaMeta>;
   /**
    * be-05b: relation-ref fields inside this component (inline module id refs; the write existence-
    * check + read populate seam). Empty for a component with no relation field => those walks are no-ops.
@@ -610,7 +628,7 @@ function buildComponentDef(cmp: ComponentTypeRow, fieldRows: ComponentFieldRow[]
   const requiredOnCreate = fields.filter((f) => !f.nullable && !f.hasDefault).map((f) => f.name);
   const componentFields = new Map<string, { kind: ComponentFieldKind; component?: string; components?: readonly string[] }>();
   for (const f of fields) if (f.component !== undefined) componentFields.set(f.name, f.component);
-  const mediaFields = new Map<string, { multiple: boolean }>();
+  const mediaFields = new Map<string, MediaMeta>();
   for (const f of fields) if (f.media !== undefined) mediaFields.set(f.name, f.media);
   const relationRefFields = new Map<string, { target: string; multiple: boolean }>();
   for (const f of fields) if (f.relationRef !== undefined) relationRefFields.set(f.name, f.relationRef);
