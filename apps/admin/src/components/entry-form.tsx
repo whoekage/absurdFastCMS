@@ -115,6 +115,9 @@ function toWriteBody(def: ModuleDefinition, values: EntryFormValues): WriteBody 
   for (const field of editableFields(def)) {
     const handler = getFieldHandler(field.type);
     const raw = values[field.name];
+    // private (write-only): the current value can't be read back, so an empty input means "leave it" —
+    // skip it so saving other fields never clobbers the stored value. Only send when the user typed one.
+    if (field.private && (raw === undefined || raw === handler.emptyForm())) continue;
     const wire = handler.fromForm(raw ?? handler.emptyForm(), field);
     if (wire === undefined) continue; // skip unset optional fields
     body[field.name] = wire;
@@ -225,13 +228,19 @@ export function EntryForm({
           <form.Field
             key={field.name}
             name={field.name}
-            validators={{
-              onChange: ({ value }) => {
-                const result = handler.zod(field).safeParse(value);
-                if (result.success) return undefined;
-                return result.error.issues[0]?.message ?? 'Invalid value';
-              },
-            }}
+            validators={
+              // private (write-only): the stored value can't be read back, so empty must be allowed on
+              // edit (it means "unchanged"). Skip client validation; the server validates on write.
+              field.private
+                ? {}
+                : {
+                    onChange: ({ value }) => {
+                      const result = handler.zod(field).safeParse(value);
+                      if (result.success) return undefined;
+                      return result.error.issues[0]?.message ?? 'Invalid value';
+                    },
+                  }
+            }
           >
             {(fieldApi) => {
               const errors = fieldApi.state.meta.errors;
@@ -242,10 +251,18 @@ export function EntryForm({
                 <div className="space-y-1.5">
                   <Label htmlFor={fieldId}>
                     {field.name}
-                    {!field.nullable && <span className="ml-0.5 text-destructive">*</span>}
+                    {!field.nullable && !field.private && <span className="ml-0.5 text-destructive">*</span>}
                     <span className="ml-2 text-xs font-normal text-muted-foreground">
                       {field.type}
                     </span>
+                    {field.private && (
+                      <span
+                        className="ml-2 text-xs font-normal text-muted-foreground/80"
+                        title="Write-only: the stored value is never returned. Leave blank to keep it; type to replace."
+                      >
+                        write-only
+                      </span>
+                    )}
                     {/* i18n: a shared field's value is synced across every locale variant (editing it on
                         ANY variant updates all). Localized fields are per-variant. */}
                     {def.i18n === true && field.localized === false && (
@@ -265,6 +282,9 @@ export function EntryForm({
                     onBlur: () => fieldApi.handleBlur(),
                     disabled: pending,
                   })}
+                  {field.private && (
+                    <p className="text-xs text-muted-foreground">•••• stored value hidden — leave blank to keep it</p>
+                  )}
                   {errorText && <p className="text-xs text-destructive">{errorText}</p>}
                 </div>
               );

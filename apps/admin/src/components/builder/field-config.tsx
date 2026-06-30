@@ -142,6 +142,50 @@ export function FieldConfig({ draft, i18n, siblingNames, onChange, onDelete, onD
         </div>
       )}
 
+      {meta.mediaTypes && (
+        <div className="mt-3">
+          <label className={LABEL}>Allowed file types</label>
+          <div className="flex flex-wrap gap-1.5">
+            {(['images', 'videos', 'audios', 'files'] as const).map((cat) => {
+              const on = draft.allowedTypes.includes(cat);
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() =>
+                    set({ allowedTypes: on ? draft.allowedTypes.filter((t) => t !== cat) : [...draft.allowedTypes, cat] })
+                  }
+                  className="rounded-[7px] border px-2.5 py-1 text-[12px] font-medium capitalize transition-colors"
+                  style={
+                    on
+                      ? { background: 'color-mix(in srgb, hsl(var(--primary)) 14%, transparent)', color: 'hsl(var(--primary))', borderColor: 'color-mix(in srgb, hsl(var(--primary)) 30%, transparent)' }
+                      : { color: 'hsl(var(--muted-foreground))' }
+                  }
+                >
+                  {cat}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            {draft.allowedTypes.length === 0 ? 'Any file type allowed.' : 'Only the selected categories are accepted.'}
+          </p>
+        </div>
+      )}
+
+      {meta.mediaTypes && draft.multiple && (
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>Min items</label>
+            <input className={MONO_INPUT} value={draft.minItems} onChange={(e) => set({ minItems: e.target.value })} placeholder="0" inputMode="numeric" />
+          </div>
+          <div>
+            <label className={LABEL}>Max items</label>
+            <input className={MONO_INPUT} value={draft.maxItems} onChange={(e) => set({ maxItems: e.target.value })} placeholder="—" inputMode="numeric" />
+          </div>
+        </div>
+      )}
+
       {meta.arrayItems && (
         <>
           <div className="mt-3 grid grid-cols-2 gap-3">
@@ -161,6 +205,28 @@ export function FieldConfig({ draft, i18n, siblingNames, onChange, onDelete, onD
         </>
       )}
 
+      {meta.pattern && (
+        <div className="mt-3 space-y-3">
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className={LABEL}>Pattern (regex)</label>
+              <input className={MONO_INPUT} value={draft.pattern} onChange={(e) => set({ pattern: e.target.value })} placeholder="^[a-z0-9-]+$" />
+            </div>
+            <div className="w-[80px]">
+              <label className={LABEL}>Flags</label>
+              <input className={MONO_INPUT} value={draft.patternFlags} onChange={(e) => set({ patternFlags: e.target.value })} placeholder="i" />
+            </div>
+          </div>
+          <div>
+            <label className={LABEL}>Validation message</label>
+            <input className={INPUT} value={draft.patternMessage} onChange={(e) => set({ patternMessage: e.target.value })} placeholder="Shown when the value doesn’t match" />
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Full-match (the server wraps it as <span className="font-mono">^(?:…)$</span>) · flags from <span className="font-mono">imsu</span> only.
+          </p>
+        </div>
+      )}
+
       {/* toggles */}
       <div className="mt-[15px] flex flex-wrap items-center gap-x-[18px] gap-y-3 border-t pt-3.5">
         <label className="flex items-center gap-2">
@@ -173,6 +239,10 @@ export function FieldConfig({ draft, i18n, siblingNames, onChange, onDelete, onD
             <span className="text-[12.5px] font-medium text-foreground">Unique</span>
           </label>
         )}
+        <label className="flex items-center gap-2" title="Write-only: hidden from all read responses">
+          <Switch checked={draft.isPrivate} onCheckedChange={(v) => set({ isPrivate: v })} />
+          <span className="text-[12.5px] font-medium text-foreground">Private</span>
+        </label>
         {i18n && (
           <label className="flex items-center gap-2">
             <Switch checked={draft.localized} onCheckedChange={(v) => set({ localized: v })} />

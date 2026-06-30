@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { DeleteModuleDialog } from "@/components/builder/delete-module-dialog";
 import { toast } from "@/components/ui/toast";
-import { BuilderError, deleteModule, listModules } from "@/lib/builder-client";
-import { builderKeys, errorMessage } from "@/lib/module-draft";
+import { listModules } from "@/lib/builder-client";
+import { builderKeys } from "@/lib/module-draft";
 import { moduleKeys } from "@/lib/modules";
 
 export const Route = createFileRoute("/modules/")({
@@ -43,43 +44,8 @@ function ModulesIndexPage() {
   const schemas = query.data?.schemas ?? [];
   const totalFields = schemas.reduce((s, m) => s + m.fields.length, 0);
 
-  // Inline delete (hub-level quick action).
+  // Hub-level delete quick action (shares the type-to-confirm dialog with the edit screen).
   const [deletingName, setDeletingName] = useState<string | null>(null);
-  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
-  const [deleteBusy, setDeleteBusy] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-
-  function openDelete(name: string) {
-    setDeletingName(name);
-    setDeleteConfirmInput("");
-    setDeleteError(null);
-  }
-  function closeDelete() {
-    setDeletingName(null);
-    setDeleteConfirmInput("");
-    setDeleteError(null);
-  }
-
-  async function doDelete(name: string): Promise<void> {
-    setDeleteError(null);
-    setDeleteBusy(true);
-    try {
-      await deleteModule(name, query.data!.version, { idempotencyKey: crypto.randomUUID() });
-      await queryClient.invalidateQueries({ queryKey: moduleKeys.all });
-      await queryClient.invalidateQueries({ queryKey: builderKeys.all });
-      toast.success(`Module "${name}" deleted`);
-      closeDelete();
-    } catch (err) {
-      const msg =
-        err instanceof BuilderError && err.isStale
-          ? "Schema changed elsewhere — reload and try again."
-          : errorMessage(err);
-      setDeleteError(msg);
-      toast.error(msg);
-    } finally {
-      setDeleteBusy(false);
-    }
-  }
 
   return (
     <section className="mx-auto max-w-4xl">
@@ -166,7 +132,7 @@ function ModulesIndexPage() {
               .map((f) => f.name)
               .slice(0, 6)
               .join(" · ");
-            const isSingle = (schema as { kind?: string }).kind === "single";
+            const isSingle = schema.options?.single === true;
             return (
               <div
                 key={schema.name}
@@ -237,7 +203,7 @@ function ModulesIndexPage() {
                   <button
                     type="button"
                     aria-label={`Delete ${schema.label || schema.name}`}
-                    onClick={() => openDelete(schema.name)}
+                    onClick={() => setDeletingName(schema.name)}
                     className="flex h-[29px] w-[29px] items-center justify-center rounded-[7px] border transition-colors"
                     style={{
                       borderColor: "color-mix(in srgb,#d6456a 32%,transparent)",
@@ -253,90 +219,20 @@ function ModulesIndexPage() {
         </div>
       )}
 
-      {/* ── Delete confirmation modal ── */}
-      {deletingName && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{
-            background: "color-mix(in srgb,#241c12 42%,transparent)",
-            backdropFilter: "blur(2px)",
+      {/* ── Delete confirmation modal (shared with the edit screen) ── */}
+      {deletingName && query.data && (
+        <DeleteModuleDialog
+          name={deletingName}
+          label={schemas.find((s) => s.name === deletingName)?.label}
+          version={query.data.version}
+          onClose={() => setDeletingName(null)}
+          onDeleted={async () => {
+            await queryClient.invalidateQueries({ queryKey: moduleKeys.all });
+            await queryClient.invalidateQueries({ queryKey: builderKeys.all });
+            toast.success(`Module "${deletingName}" deleted`);
+            setDeletingName(null);
           }}
-          onClick={closeDelete}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-[434px] max-w-[90vw] overflow-hidden rounded-[13px] border bg-card"
-            style={{ boxShadow: "0 28px 64px rgba(40,30,10,.36)" }}
-          >
-            <div className="p-[22px] pb-[18px]">
-              <div className="mb-[13px] flex items-center gap-[10px]">
-                <span
-                  className="flex h-[34px] w-[34px] items-center justify-center rounded-[9px]"
-                  style={{
-                    background: "color-mix(in srgb,#d6456a 13%,transparent)",
-                    color: "#d6456a",
-                  }}
-                >
-                  <Trash2 className="h-[17px] w-[17px]" />
-                </span>
-                <span
-                  className="font-mono text-[11px] font-semibold uppercase tracking-[0.1em]"
-                  style={{ color: "#d6456a" }}
-                >
-                  Destructive · Irreversible
-                </span>
-              </div>
-              <h3 className="mb-[11px] font-display text-[22px] font-semibold tracking-[-0.02em]">
-                Delete {schemas.find((s) => s.name === deletingName)?.label || deletingName}
-              </h3>
-              <p className="mb-[18px] text-[13.5px] leading-[1.55] text-muted-foreground">
-                Deletes module <span className="font-mono text-foreground">{deletingName}</span>,
-                its schema, and all its entries. This cannot be undone.
-              </p>
-              <p className="mb-[7px] font-mono text-[11px] text-muted-foreground">
-                type <span style={{ color: "#d6456a" }}>{deletingName}</span> to confirm
-              </p>
-              <input
-                autoFocus
-                value={deleteConfirmInput}
-                onChange={(e) => setDeleteConfirmInput(e.target.value)}
-                className="h-[41px] w-full rounded-[8px] bg-background px-[13px] font-mono text-[13.5px] outline-none"
-                style={{
-                  border: "1px solid color-mix(in srgb,#d6456a 32%,transparent)",
-                  boxShadow: "0 0 0 3px color-mix(in srgb,#d6456a 11%,transparent)",
-                }}
-              />
-              {deleteError && (
-                <p className="mt-2 text-[12px]" style={{ color: "#d6456a" }}>
-                  <AlertTriangle className="mr-1 inline h-3 w-3" />
-                  {deleteError}
-                </p>
-              )}
-            </div>
-            <div className="flex gap-[10px] border-t bg-muted/30 px-[22px] py-[15px]">
-              <button
-                type="button"
-                disabled={deleteConfirmInput !== deletingName || deleteBusy}
-                onClick={() => void doDelete(deletingName)}
-                className="flex-1 rounded-[8px] py-[11px] text-[13.5px] font-bold text-white transition-opacity disabled:opacity-40"
-                style={{
-                  background: "#d6456a",
-                  boxShadow: "0 5px 14px color-mix(in srgb,#d6456a 34%,transparent)",
-                }}
-              >
-                {deleteBusy ? "Deleting…" : "Delete forever"}
-              </button>
-              <button
-                type="button"
-                onClick={closeDelete}
-                disabled={deleteBusy}
-                className="rounded-[8px] border px-[17px] py-[11px] text-[13.5px] font-semibold text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
+        />
       )}
     </section>
   );

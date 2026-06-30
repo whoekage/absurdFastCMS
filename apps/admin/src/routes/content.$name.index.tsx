@@ -155,6 +155,8 @@ function EntryListPage() {
   // configured relations so list cells can show the linked rows.
   const isDraftPublish = def?.draftPublish === true;
   const isI18n = def?.i18n === true;
+  // Single type: no list — the editor opens the one entry directly (existing row → edit, else → new).
+  const isSingle = def?.single === true;
   const queryParams = def
     ? {
         ...toQueryParams(search, def, byName),
@@ -170,6 +172,18 @@ function EntryListPage() {
     placeholderData: keepPreviousData,
     enabled: defQuery.isSuccess && queryParams !== null,
   });
+
+  // Single type → bounce to its one entry (edit it if it exists, otherwise the create form). `replace`
+  // keeps the list URL out of history so Back doesn't loop straight back here.
+  useEffect(() => {
+    if (!isSingle || !listQuery.isSuccess) return;
+    const first = listQuery.data?.data?.[0];
+    if (first !== undefined) {
+      void navigate({ to: '/content/$name/$id/edit', params: { name, id: String(first.id) }, replace: true });
+    } else {
+      void navigate({ to: '/content/$name/new', params: { name }, replace: true });
+    }
+  }, [isSingle, listQuery.isSuccess, listQuery.data, name, navigate]);
 
   const deleteMutation = useMutation({
     mutationFn: (id: number | string) => api.delete(name, id),
@@ -337,6 +351,11 @@ function EntryListPage() {
         </Button>
       </div>
     );
+  }
+
+  // Single type: the effect above is redirecting to the one entry — don't flash the list table.
+  if (isSingle) {
+    return <p className="text-sm text-muted-foreground">Opening…</p>;
   }
 
   const sf = searchField(def);

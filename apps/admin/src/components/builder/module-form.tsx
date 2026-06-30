@@ -33,11 +33,16 @@ import {
 } from "@/lib/module-draft";
 import { moduleKeys } from "@/lib/modules";
 import { generateSchemaSourceMirror } from "@/lib/schema-codegen-mirror";
+import { useHistoryState } from "@/lib/use-history-state";
 
 interface BuilderState {
   dirty: boolean;
   pendingCount: number;
   busy: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => void;
+  redo: () => void;
 }
 
 interface ModuleFormProps {
@@ -69,7 +74,9 @@ export function ModuleForm({
   onSaved,
 }: ModuleFormProps) {
   const queryClient = useQueryClient();
-  const [state, setState] = useState<ModuleFormState>(initial);
+  const history = useHistoryState<ModuleFormState>(initial);
+  const state = history.state;
+  const setState = history.set;
   const [phase, setPhase] = useState<"editing" | "reviewing">("editing");
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [allowDestructive, setAllowDestructive] = useState(false);
@@ -167,15 +174,38 @@ export function ModuleForm({
     state.fields.filter((f) => !f.raw && fieldStatus(f, state.baseline) !== "clean").length +
     state.relations.filter((r) => relationStatus(r, state.relationBaseline) !== "clean").length;
 
-  // Report builder state to the parent (drives header CTA disabled state + status dot).
+  // Report builder state to the parent (drives header CTA disabled state + status dot + undo/redo).
   useEffect(() => {
-    onStateChange?.({ dirty, pendingCount, busy });
-  }, [dirty, pendingCount, busy, onStateChange]);
+    onStateChange?.({
+      dirty,
+      pendingCount,
+      busy,
+      canUndo: history.canUndo,
+      canRedo: history.canRedo,
+      undo: history.undo,
+      redo: history.redo,
+    });
+  }, [dirty, pendingCount, busy, history.canUndo, history.canRedo, history.undo, history.redo, onStateChange]);
+
+  // ⌘Z / ⌘⇧Z undo-redo (edit mode). Skipped while a text input is focused so native field undo wins.
+  useEffect(() => {
+    if (!isEdit) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      e.preventDefault();
+      if (e.shiftKey) history.redo();
+      else history.undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isEdit, history.undo, history.redo]);
 
   const discard = () => {
     if (!dirty) return;
     if (!window.confirm("Discard all unsaved changes to this module?")) return;
-    setState(initial);
+    history.reset(initial);
     setExpandedKey(null);
     setPickerOpen(false);
     setError(null);

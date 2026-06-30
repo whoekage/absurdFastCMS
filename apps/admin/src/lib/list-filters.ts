@@ -78,7 +78,8 @@ export function isFilterableField(field: FieldDefinition): boolean {
   // rejects operators on); filtering by raw file id is not a meaningful admin operation — exclude it.
   // be-05: a component / component-repeatable / dynamiczone field is a structured jsonb tree — not a
   // scalar to filter on; exclude it from the field picker + search fallback.
-  return field.type !== 'json' && field.type !== 'array' && field.type !== 'media' && !COMPONENT_KINDS.has(field.type);
+  // `private` fields are stripped from reads and the API 400s on filtering/sorting them — exclude here too.
+  return field.type !== 'json' && field.type !== 'array' && field.type !== 'media' && !field.private && !COMPONENT_KINDS.has(field.type);
 }
 
 /**
@@ -316,10 +317,15 @@ function buildFilters(
   return { $and: clauses };
 }
 
-/** Map the sort-key list to the SDK `sort` param (`['field:dir', ...]`). Empty → `undefined`. */
-function buildSort(search: ListSearch): string[] | undefined {
-  if (search.sort.length === 0) return undefined;
-  return search.sort.map((k) => `${k.field}:${k.dir}`);
+/**
+ * Map the sort-key list to the SDK `sort` param (`['field:dir', ...]`). Drops keys on `private` fields
+ * (the API 400s on sorting them) — a guard against a stale URL after a field was made private. Empty →
+ * `undefined`.
+ */
+function buildSort(search: ListSearch, byName: Map<string, FieldDefinition>): string[] | undefined {
+  const keys = search.sort.filter((k) => !byName.get(k.field)?.private);
+  if (keys.length === 0) return undefined;
+  return keys.map((k) => `${k.field}:${k.dir}`);
 }
 
 /**
@@ -337,7 +343,7 @@ export function toQueryParams(
   };
   const filters = buildFilters(search, def, byName);
   if (filters) params.filters = filters;
-  const sort = buildSort(search);
+  const sort = buildSort(search, byName);
   if (sort) params.sort = sort;
   return params;
 }

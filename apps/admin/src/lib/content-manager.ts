@@ -35,7 +35,8 @@ export const contentKeys = {
  * {@link FieldDefinition} is looked up via {@link fieldMap} for per-cell formatting.
  */
 export function listColumns(def: ModuleDefinition, maxUserColumns = 5): string[] {
-  const userCols = def.fields.filter((f) => !f.system).map((f) => f.name);
+  // `private` fields never carry a value in a read response (and can't be sorted) — omit them as columns.
+  const userCols = def.fields.filter((f) => !f.system && !f.private).map((f) => f.name);
   return ['id', ...userCols.slice(0, maxUserColumns)];
 }
 

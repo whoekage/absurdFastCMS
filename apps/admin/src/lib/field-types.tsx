@@ -546,6 +546,10 @@ export interface CmsTypeOptionMeta {
   arrayItems: boolean;
   /** date/datetime min/max bounds (absolute ISO or a `$now(±N unit)` token) apply. */
   dateBounds: boolean;
+  /** be-04 MEDIA: `allowedTypes` (category/MIME restriction) + multiple-only item-count bounds apply. */
+  mediaTypes: boolean;
+  /** RE2 `pattern` / `patternFlags` / `patternMessage` apply (string/email/uid/text). */
+  pattern: boolean;
 }
 
 const NO_OPTIONS: CmsTypeOptionMeta = {
@@ -557,13 +561,15 @@ const NO_OPTIONS: CmsTypeOptionMeta = {
   unique: false,
   arrayItems: false,
   dateBounds: false,
+  mediaTypes: false,
+  pattern: false,
 };
 
 const optionMeta: Record<CmsType, CmsTypeOptionMeta> = {
-  string: { ...NO_OPTIONS, length: true, unique: true },
-  text: NO_OPTIONS,
-  email: { ...NO_OPTIONS, length: true, unique: true },
-  uid: { ...NO_OPTIONS, length: true, unique: true },
+  string: { ...NO_OPTIONS, length: true, unique: true, pattern: true },
+  text: { ...NO_OPTIONS, pattern: true },
+  email: { ...NO_OPTIONS, length: true, unique: true, pattern: true },
+  uid: { ...NO_OPTIONS, length: true, unique: true, pattern: true },
   enumeration: { ...NO_OPTIONS, enumValues: true, unique: true },
   integer: { ...NO_OPTIONS, numericBounds: true, unique: true },
   biginteger: { ...NO_OPTIONS, numericBounds: true, unique: true },
@@ -576,7 +582,7 @@ const optionMeta: Record<CmsType, CmsTypeOptionMeta> = {
   json: NO_OPTIONS,
   array: { ...NO_OPTIONS, arrayItems: true },
   uuid: { ...NO_OPTIONS, unique: true },
-  media: { ...NO_OPTIONS, multiple: true },
+  media: { ...NO_OPTIONS, multiple: true, mediaTypes: true },
 };
 
 /** Which conditional option inputs a type needs in the builder forms. */

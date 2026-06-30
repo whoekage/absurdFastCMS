@@ -135,9 +135,16 @@ function ViewEntryPage() {
                       {isI18n && !field.system && field.localized === false && (
                         <span className="ml-1 text-xs text-muted-foreground/70">(shared)</span>
                       )}
+                      {field.private && (
+                        <span className="ml-1 text-xs text-muted-foreground/70">(write-only)</span>
+                      )}
                     </dt>
                     <dd className="col-span-2 break-words text-sm">
-                      {formatValue(row[field.name], field)}
+                      {field.private ? (
+                        <span className="text-muted-foreground">•••• (hidden)</span>
+                      ) : (
+                        formatValue(row[field.name], field)
+                      )}
                     </dd>
                   </div>
                 ))}
