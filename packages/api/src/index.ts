@@ -12,9 +12,10 @@ export type { ContiConfig } from './compose/config.ts';
 // calls `adminBundleDir()` to serve the bundled admin at the root. (migrationsDir stays internal.)
 export { adminBundleDir } from './paths.ts';
 export type { S3Config } from './config.ts';
-// Code-first schema authoring DSL (the `schema/<name>.ts` surface): defineSchema + the `c.*` builders.
-export { defineSchema, defineHooks, c } from './db/schema/define.ts';
-export type { InferType, TypeDef, BeforeHookFn, AfterHookFn, Hooks, HookContext } from './db/schema/define.ts';
+// Code-first schema authoring DSL (the `schema/<name>.ts` surface): defineSchema + the `c.*` builders,
+// plus defineComponent for the reusable nested field groups in `modules/components/<name>.ts`.
+export { defineSchema, defineComponent, defineHooks, c } from './db/schema/define.ts';
+export type { InferType, TypeDef, ComponentTypeDef, BeforeHookFn, AfterHookFn, Hooks, HookContext } from './db/schema/define.ts';
 export { HookError } from './db/schema/hooks.ts';
 // Files-first schema migration (the `conti migrate` / `conti migrate lint` commands).
 export { runMigrate, runMigrateLint, runDrop } from './compose/migrate.ts';

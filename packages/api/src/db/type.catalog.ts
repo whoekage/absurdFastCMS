@@ -549,12 +549,18 @@ export function resolveComponentField(kind: ComponentFieldKind, options?: FieldO
     }
     return { type: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, components: [...components] } };
   }
-  // component / component-repeatable: exactly one referenced component name.
+  // component / component-repeatable: exactly one referenced component name. A repeatable component may
+  // bound its instance count with min/max (a single component ignores them).
   const component = options?.component;
   if (typeof component !== 'string' || component.length === 0) {
     throw new ComponentFieldError(`${kind} requires a component name`);
   }
-  return { type: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params: { kind, component } };
+  const params: Record<string, unknown> = { kind, component };
+  if (kind === 'component-repeatable') {
+    if (typeof options?.min === 'number') params['min'] = options.min;
+    if (typeof options?.max === 'number') params['max'] = options.max;
+  }
+  return { type: kind as unknown as CmsType, pgType: 'jsonb', engineType: 'json', params };
 }
 
 /**

@@ -1,6 +1,6 @@
 import type { CmsType, ComponentFieldKind, FieldOptions, FieldCondition } from '../type.catalog.ts';
 import type { RelationKind } from '../ddl.ts';
-import type { Schema, FieldSchema, RelationSchema } from './model.ts';
+import type { Schema, FieldSchema, RelationSchema, ComponentSchema } from './model.ts';
 
 /**
  * THE CODE-FIRST AUTHORING DSL (pivot §11) — a `schema/<name>.ts` declares its module via
@@ -123,8 +123,17 @@ export const c = {
     field('array', clean({ nullable: o?.nullable ?? true, default: o?.default, uniqueItems: o?.uniqueItems, minItems: o?.minItems, maxItems: o?.maxItems, ...common(o) }), o?.id),
   media: <O extends MediaOpts = {}>(o?: O): FieldBuilder<Nullable<O extends { multiple: true } ? number[] : number, O>> =>
     field('media', clean({ multiple: o?.multiple ?? false, allowedTypes: o?.allowedTypes, minItems: o?.minItems, maxItems: o?.maxItems, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
-  component: <O extends BaseOpts = {}>(name: string, o?: O): FieldBuilder<Nullable<unknown, O>> =>
-    field('component', clean({ component: name, nullable: o?.nullable ?? true, ...common(o) }), o?.id),
+  component: <O extends BaseOpts & { repeatable?: boolean; min?: number; max?: number } = {}>(
+    name: string,
+    o?: O,
+  ): FieldBuilder<Nullable<unknown, O>> =>
+    // `repeatable: true` makes this a list of component instances (kind `component-repeatable`); `min`/`max`
+    // bound that list (ignored for a single component).
+    field(
+      o?.repeatable ? 'component-repeatable' : 'component',
+      clean({ component: name, min: o?.min, max: o?.max, nullable: o?.nullable ?? true, ...common(o) }),
+      o?.id,
+    ),
   dynamiczone: (names: readonly string[], o?: { id?: string }): FieldBuilder<unknown[]> =>
     field('dynamiczone', clean({ components: [...names] }), o?.id),
   relation: <const O extends RelOpts>(target: string, o: O): RelationBuilder<O['kind'] extends 'oneToMany' | 'manyToMany' ? number[] : number | null> => {
@@ -146,6 +155,8 @@ type FieldsRecord = Record<string, AnyBuilder>;
 export interface TypeOptions {
   draftAndPublish?: boolean;
   i18n?: boolean;
+  /** Single type — exactly one entry (no list; the admin opens the one entry directly). */
+  single?: boolean;
 }
 export interface HookContext {
   readonly name: string;
@@ -246,4 +257,41 @@ export function defToSchema(def: TypeDef, moduleName: string): Schema {
   if (def.options !== undefined) schema.options = def.options;
   if (relations.length > 0) schema.relations = relations;
   return schema;
+}
+
+// --- component definitions (reusable nested field groups) ----------------------------------------
+
+/** The captured component definition — the default export of `modules/components/<name>.ts`. */
+export interface ComponentTypeDef<F extends FieldsRecord = FieldsRecord> {
+  readonly id?: string;
+  readonly fields: F;
+}
+
+/**
+ * Author a reusable COMPONENT — a named group of nested fields with NO physical table (stored as nested
+ * JSON inside a host module's jsonb column). Identity helper like {@link defineSchema}; the `name` is the
+ * FILE NAME (the loader supplies it). A component has no module options (draft&publish/i18n are module
+ * concerns) and no TOP-LEVEL relations — a relation field inside a component is an inline id-ref.
+ */
+export function defineComponent<const F extends FieldsRecord>(def: { id?: string; fields: F }): ComponentTypeDef<F> {
+  return def;
+}
+
+/**
+ * Introspect a {@link ComponentTypeDef} into the engine's {@link ComponentSchema} IR (the SAME shape the
+ * injected/runtime path produces). Every field key becomes a {@link FieldSchema}; a relation builder
+ * becomes an inline-ref field (`type: 'relation'`, `options.target` + `options.multiple`) rather than a
+ * top-level relation, because a component has no own table to own a join.
+ */
+export function defToComponentSchema(def: ComponentTypeDef, componentName: string): ComponentSchema {
+  const fields: FieldSchema[] = [];
+  for (const [name, b] of Object.entries(def.fields)) {
+    if (b.__kind === 'relation') {
+      const multiple = b.relKind === 'oneToMany' || b.relKind === 'manyToMany';
+      fields.push({ id: b.id ?? name, name, type: 'relation', options: { target: b.target, multiple } });
+    } else {
+      fields.push({ id: b.id ?? name, name, type: b.type, options: b.options });
+    }
+  }
+  return { id: def.id ?? componentName, name: componentName, fields };
 }
