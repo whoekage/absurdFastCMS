@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { Boxes, FileStack, Image, LayoutDashboard, LogOut, Search } from 'lucide-react';
+import { Boxes, Component, FileStack, Image, LayoutDashboard, LogOut, Search } from 'lucide-react';
 import { api } from '@/lib/api';
 import { moduleKeys, errorMessage } from '@/lib/modules';
 import { formatCount } from '@/lib/dashboard';
@@ -126,6 +126,11 @@ export function Sidebar() {
         <Link to="/modules" className={navItem}>
           <Boxes className="h-4 w-4 shrink-0" strokeWidth={1.9} />
           Modules
+        </Link>
+        {/* Reusable component definitions (modules/components/*.ts) → the /builder/components resource. */}
+        <Link to="/components" className={navItem}>
+          <Component className="h-4 w-4 shrink-0" strokeWidth={1.9} />
+          Components
         </Link>
         <Link to="/media" className={navItem} activeOptions={{ exact: true }}>
           <Image className="h-4 w-4 shrink-0" strokeWidth={1.9} />

@@ -15,9 +15,12 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ModulesIndexRouteImport } from './routes/modules.index'
 import { Route as MediaIndexRouteImport } from './routes/media.index'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
+import { Route as ComponentsIndexRouteImport } from './routes/components.index'
 import { Route as ArticlesIndexRouteImport } from './routes/articles.index'
 import { Route as ModulesNewRouteImport } from './routes/modules.new'
 import { Route as ModulesNameRouteImport } from './routes/modules.$name'
+import { Route as ComponentsNewRouteImport } from './routes/components.new'
+import { Route as ComponentsNameRouteImport } from './routes/components.$name'
 import { Route as ArticlesNewRouteImport } from './routes/articles.new'
 import { Route as ArticlesIdRouteImport } from './routes/articles.$id'
 import { Route as ContentNameIndexRouteImport } from './routes/content.$name.index'
@@ -56,6 +59,11 @@ const DashboardIndexRoute = DashboardIndexRouteImport.update({
   path: '/dashboard/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ComponentsIndexRoute = ComponentsIndexRouteImport.update({
+  id: '/components/',
+  path: '/components/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ArticlesIndexRoute = ArticlesIndexRouteImport.update({
   id: '/articles/',
   path: '/articles/',
@@ -69,6 +77,16 @@ const ModulesNewRoute = ModulesNewRouteImport.update({
 const ModulesNameRoute = ModulesNameRouteImport.update({
   id: '/modules/$name',
   path: '/modules/$name',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ComponentsNewRoute = ComponentsNewRouteImport.update({
+  id: '/components/new',
+  path: '/components/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ComponentsNameRoute = ComponentsNameRouteImport.update({
+  id: '/components/$name',
+  path: '/components/$name',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ArticlesNewRoute = ArticlesNewRouteImport.update({
@@ -113,9 +131,12 @@ export interface FileRoutesByFullPath {
   '/sign-in': typeof SignInRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
+  '/components/$name': typeof ComponentsNameRoute
+  '/components/new': typeof ComponentsNewRoute
   '/modules/$name': typeof ModulesNameRoute
   '/modules/new': typeof ModulesNewRoute
   '/articles/': typeof ArticlesIndexRoute
+  '/components/': typeof ComponentsIndexRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/media/': typeof MediaIndexRoute
   '/modules/': typeof ModulesIndexRoute
@@ -131,9 +152,12 @@ export interface FileRoutesByTo {
   '/sign-in': typeof SignInRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
+  '/components/$name': typeof ComponentsNameRoute
+  '/components/new': typeof ComponentsNewRoute
   '/modules/$name': typeof ModulesNameRoute
   '/modules/new': typeof ModulesNewRoute
   '/articles': typeof ArticlesIndexRoute
+  '/components': typeof ComponentsIndexRoute
   '/dashboard': typeof DashboardIndexRoute
   '/media': typeof MediaIndexRoute
   '/modules': typeof ModulesIndexRoute
@@ -150,9 +174,12 @@ export interface FileRoutesById {
   '/sign-in': typeof SignInRoute
   '/articles/$id': typeof ArticlesIdRouteWithChildren
   '/articles/new': typeof ArticlesNewRoute
+  '/components/$name': typeof ComponentsNameRoute
+  '/components/new': typeof ComponentsNewRoute
   '/modules/$name': typeof ModulesNameRoute
   '/modules/new': typeof ModulesNewRoute
   '/articles/': typeof ArticlesIndexRoute
+  '/components/': typeof ComponentsIndexRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/media/': typeof MediaIndexRoute
   '/modules/': typeof ModulesIndexRoute
@@ -170,9 +197,12 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/articles/$id'
     | '/articles/new'
+    | '/components/$name'
+    | '/components/new'
     | '/modules/$name'
     | '/modules/new'
     | '/articles/'
+    | '/components/'
     | '/dashboard/'
     | '/media/'
     | '/modules/'
@@ -188,9 +218,12 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/articles/$id'
     | '/articles/new'
+    | '/components/$name'
+    | '/components/new'
     | '/modules/$name'
     | '/modules/new'
     | '/articles'
+    | '/components'
     | '/dashboard'
     | '/media'
     | '/modules'
@@ -206,9 +239,12 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/articles/$id'
     | '/articles/new'
+    | '/components/$name'
+    | '/components/new'
     | '/modules/$name'
     | '/modules/new'
     | '/articles/'
+    | '/components/'
     | '/dashboard/'
     | '/media/'
     | '/modules/'
@@ -225,9 +261,12 @@ export interface RootRouteChildren {
   SignInRoute: typeof SignInRoute
   ArticlesIdRoute: typeof ArticlesIdRouteWithChildren
   ArticlesNewRoute: typeof ArticlesNewRoute
+  ComponentsNameRoute: typeof ComponentsNameRoute
+  ComponentsNewRoute: typeof ComponentsNewRoute
   ModulesNameRoute: typeof ModulesNameRoute
   ModulesNewRoute: typeof ModulesNewRoute
   ArticlesIndexRoute: typeof ArticlesIndexRoute
+  ComponentsIndexRoute: typeof ComponentsIndexRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
   MediaIndexRoute: typeof MediaIndexRoute
   ModulesIndexRoute: typeof ModulesIndexRoute
@@ -280,6 +319,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/components/': {
+      id: '/components/'
+      path: '/components'
+      fullPath: '/components/'
+      preLoaderRoute: typeof ComponentsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/articles/': {
       id: '/articles/'
       path: '/articles'
@@ -299,6 +345,20 @@ declare module '@tanstack/react-router' {
       path: '/modules/$name'
       fullPath: '/modules/$name'
       preLoaderRoute: typeof ModulesNameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/components/new': {
+      id: '/components/new'
+      path: '/components/new'
+      fullPath: '/components/new'
+      preLoaderRoute: typeof ComponentsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/components/$name': {
+      id: '/components/$name'
+      path: '/components/$name'
+      fullPath: '/components/$name'
+      preLoaderRoute: typeof ComponentsNameRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/articles/new': {
@@ -383,9 +443,12 @@ const rootRouteChildren: RootRouteChildren = {
   SignInRoute: SignInRoute,
   ArticlesIdRoute: ArticlesIdRouteWithChildren,
   ArticlesNewRoute: ArticlesNewRoute,
+  ComponentsNameRoute: ComponentsNameRoute,
+  ComponentsNewRoute: ComponentsNewRoute,
   ModulesNameRoute: ModulesNameRoute,
   ModulesNewRoute: ModulesNewRoute,
   ArticlesIndexRoute: ArticlesIndexRoute,
+  ComponentsIndexRoute: ComponentsIndexRoute,
   DashboardIndexRoute: DashboardIndexRoute,
   MediaIndexRoute: MediaIndexRoute,
   ModulesIndexRoute: ModulesIndexRoute,
