@@ -24,6 +24,8 @@ interface FieldCardProps {
   i18n: boolean;
   /** Other live field names (conditional-visibility source list). */
   siblingNames: string[];
+  /** Defined component names (the reference picker for a component field). */
+  componentNames?: string[];
   expanded: boolean;
   onToggle: () => void;
   onChange: (next: FieldDraft) => void;
@@ -40,7 +42,7 @@ interface FieldCardProps {
  * type pill, half-width hint, caret) that expands to the inline {@link FieldConfig}. A soft-deleted
  * field shows a strike-through and a restore strip instead of expanding. Pixel-matches the Lua design.
  */
-export function FieldCard({ draft, status, i18n, siblingNames, expanded, onToggle, onChange, onDelete, onRestore, drag }: FieldCardProps) {
+export function FieldCard({ draft, status, i18n, siblingNames, componentNames, expanded, onToggle, onChange, onDelete, onRestore, drag }: FieldCardProps) {
   const meta = typeMetaFor(draft.type);
   const tone = TONE_VAR[meta.tone];
   const deleted = status === 'deleted';
@@ -124,7 +126,7 @@ export function FieldCard({ draft, status, i18n, siblingNames, expanded, onToggl
       </div>
 
       {open && (
-        <FieldConfig draft={draft} i18n={i18n} siblingNames={siblingNames} onChange={onChange} onDelete={onDelete} onDone={onToggle} />
+        <FieldConfig draft={draft} i18n={i18n} siblingNames={siblingNames} componentNames={componentNames} onChange={onChange} onDelete={onDelete} onDone={onToggle} />
       )}
 
       {deleted && (

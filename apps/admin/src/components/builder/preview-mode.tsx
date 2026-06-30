@@ -159,6 +159,14 @@ function PreviewWidget({ field }: { field: FieldDraft }): ReactNode {
       );
     case 'json':
       return <div className={`${FIELD_BOX} min-h-[60px] px-[13px] py-[11px] font-mono text-[12.5px] text-muted-foreground`}>{v || '{ }'}</div>;
+    case 'component':
+    case 'component-repeatable':
+      return (
+        <div className={`${FIELD_BOX} flex min-h-[52px] items-center gap-2 border-dashed px-[13px] py-[11px] text-[12.5px]`} style={{ color: 'var(--faint)' }}>
+          <span className="font-mono">{field.componentRef || 'component'}</span>
+          <span>{field.type === 'component-repeatable' ? '· repeatable group' : '· nested group'}</span>
+        </div>
+      );
     default:
       // string / email / uuid / date / datetime
       return (

@@ -1,16 +1,16 @@
 import { useMemo, useRef, useState, useEffect } from 'react';
 import { Search } from 'lucide-react';
-import type { CmsType } from '@conti/sdk';
 import {
   BUILDER_TYPE_CATALOG,
   BUILDER_TYPE_GROUP_ORDER,
+  type BuilderFieldType,
   TONE_VAR,
   type BuilderTypeEntry,
 } from '@/lib/field-types';
 
 interface TypePickerProps {
   /** Pick a (creatable) field type → the builder appends a fresh field and opens its config. */
-  onPick: (type: CmsType) => void;
+  onPick: (type: BuilderFieldType) => void;
   /** Dismiss the picker (Esc / the esc button / picking). */
   onClose: () => void;
 }
@@ -92,7 +92,7 @@ export function TypePicker({ onPick, onClose }: TypePickerProps) {
                     type="button"
                     disabled={t.soon}
                     onClick={() => {
-                      if (!t.soon) onPick(t.id as CmsType);
+                      if (!t.soon) onPick(t.id as BuilderFieldType);
                     }}
                     className="flex items-center gap-2.5 rounded-[10px] border px-[11px] py-2.5 text-start transition-colors enabled:hover:bg-[var(--fill)] disabled:cursor-not-allowed disabled:opacity-55"
                     style={{ borderColor: 'hsl(var(--border))', background: 'hsl(var(--card))' }}

@@ -11,6 +11,8 @@ interface FieldConfigProps {
   i18n: boolean;
   /** Names of the OTHER live fields (the conditional-visibility "show when" source list). */
   siblingNames: string[];
+  /** Defined component names — the options for a component field's reference picker. */
+  componentNames?: string[] | undefined;
   onChange: (next: FieldDraft) => void;
   onDelete: () => void;
   onDone: () => void;
@@ -50,7 +52,7 @@ function Segmented({ options }: { options: { label: string; active: boolean; onP
  * Required + Unique toggles, the per-field localized note, editor-width + conditional-visibility, and
  * the Delete / Done actions. Mirrors the Lua design's expanded field row.
  */
-export function FieldConfig({ draft, i18n, siblingNames, onChange, onDelete, onDone }: FieldConfigProps) {
+export function FieldConfig({ draft, i18n, siblingNames, componentNames = [], onChange, onDelete, onDone }: FieldConfigProps) {
   const meta = optionMetaFor(draft.type);
   const set = (patch: Partial<FieldDraft>) => onChange({ ...draft, ...patch });
 
@@ -65,7 +67,7 @@ export function FieldConfig({ draft, i18n, siblingNames, onChange, onDelete, onD
           <label className={LABEL}>Name</label>
           <input className={MONO_INPUT} value={draft.name} onChange={(e) => set({ name: e.target.value })} placeholder="field_name" />
         </div>
-        {draft.type !== 'media' && (
+        {draft.type !== 'media' && !meta.componentRef && (
           <div>
             <label className={LABEL}>Default value</label>
             <input className={INPUT} value={draft.defaultValue} onChange={(e) => set({ defaultValue: e.target.value })} placeholder="—" />
@@ -203,6 +205,46 @@ export function FieldConfig({ draft, i18n, siblingNames, onChange, onDelete, onD
             <span className="text-[12.5px] font-medium text-foreground">Unique items</span>
           </label>
         </>
+      )}
+
+      {meta.componentRef && (
+        <div className="mt-3 space-y-3">
+          <div>
+            <label className={LABEL}>Component</label>
+            <select className={INPUT} value={draft.componentRef} onChange={(e) => set({ componentRef: e.target.value })}>
+              <option value="">{componentNames.length > 0 ? "Select a component…" : "No components defined yet"}</option>
+              {componentNames.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+            {componentNames.length === 0 && (
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                Define a component first (Components in the sidebar), then attach it here.
+              </p>
+            )}
+          </div>
+          <label className="flex items-center gap-2">
+            <Switch
+              checked={draft.type === "component-repeatable"}
+              onCheckedChange={(v) => set({ type: v ? "component-repeatable" : "component" })}
+            />
+            <span className="text-[12.5px] font-medium text-foreground">Repeatable (a list of instances)</span>
+          </label>
+          {meta.componentCount && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={LABEL}>Min instances</label>
+                <input className={MONO_INPUT} value={draft.min} onChange={(e) => set({ min: e.target.value })} placeholder="0" inputMode="numeric" />
+              </div>
+              <div>
+                <label className={LABEL}>Max instances</label>
+                <input className={MONO_INPUT} value={draft.max} onChange={(e) => set({ max: e.target.value })} placeholder="—" inputMode="numeric" />
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {meta.pattern && (

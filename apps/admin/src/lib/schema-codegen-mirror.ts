@@ -34,6 +34,13 @@ function fieldCall(f: WireField): string {
     (o.editorWidth !== undefined ? `, editorWidth: ${lit(o.editorWidth)}` : '') +
     (o.condition !== undefined ? `, condition: ${lit(o.condition)}` : '') +
     (o.unique ? `, unique: true` : '');
+  // component / component-repeatable take a positional component name + (repeatable) min/max bounds.
+  if (f.type === 'component' || f.type === 'component-repeatable') {
+    const repeat = f.type === 'component-repeatable' ? ', repeatable: true' : '';
+    const bounds = `${o.min !== undefined ? `, min: ${o.min}` : ''}${o.max !== undefined ? `, max: ${o.max}` : ''}`;
+    const ci = `${id}${repeat}${bounds}${nul}${cm}`.replace(/^, /, '');
+    return `c.component(${lit(o.component ?? '')}, { ${ci} })`;
+  }
   // The option run per type (mirrors the server's fieldBuilderCall switch).
   const body =
     f.type === 'string' || f.type === 'email' || f.type === 'uid' ? `${max}${min}${nul}${def}${cm}`

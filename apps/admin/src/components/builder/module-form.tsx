@@ -1,5 +1,4 @@
-import type { CmsType } from "@conti/sdk";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBlocker } from "@tanstack/react-router";
 import { AlertTriangle, Code2, Lock, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -18,9 +17,11 @@ import {
   previewModule,
   type SaveResult,
   saveModule,
+  listComponents,
 } from "@/lib/builder-client";
 import {
   builderKeys,
+  componentKeys,
   emptyFieldDraft,
   errorMessage,
   type FieldDraft,
@@ -31,6 +32,7 @@ import {
   slugify,
   validateModuleForm,
 } from "@/lib/module-draft";
+import type { BuilderFieldType } from "@/lib/field-types";
 import { moduleKeys } from "@/lib/modules";
 import { generateSchemaSourceMirror } from "@/lib/schema-codegen-mirror";
 import { useHistoryState } from "@/lib/use-history-state";
@@ -93,6 +95,13 @@ export function ModuleForm({
 
   const isEdit = mode === "edit";
 
+  // Defined components — the options for a component field's reference picker.
+  const componentsQuery = useQuery({
+    queryKey: componentKeys.list(),
+    queryFn: ({ signal }) => listComponents(signal),
+  });
+  const componentNames = (componentsQuery.data?.components ?? []).map((c) => c.name);
+
   const targets = [...new Set([state.name.trim(), ...allModuleNames])].filter((t) => t !== "");
   const targetLabels: Record<string, string> = {
     ...moduleLabels,
@@ -117,7 +126,7 @@ export function ModuleForm({
     }
   }
 
-  const pickType = (type: CmsType) => {
+  const pickType = (type: BuilderFieldType) => {
     const draft = emptyFieldDraft(type);
     setState((s) => ({ ...s, fields: [...s.fields, draft] }));
     setExpandedKey(draft.key);
@@ -693,6 +702,7 @@ export function ModuleForm({
                       .filter((f) => f.key !== draft.key)
                       .map((f) => f.name)
                       .filter((n) => n.trim() !== "")}
+                    componentNames={componentNames}
                     expanded={expandedKey === draft.key}
                     onToggle={() => toggleExpand(draft.key)}
                     onChange={(next) => setFieldAt(draft.key, next)}

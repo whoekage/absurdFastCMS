@@ -18,7 +18,7 @@ import {
   validateComponentForm,
 } from "@/lib/module-draft";
 import { builderKeys } from "@/lib/module-draft";
-import type { CmsType } from "@conti/sdk";
+import type { BuilderFieldType } from "@/lib/field-types";
 
 interface ComponentState {
   dirty: boolean;
@@ -61,7 +61,7 @@ export function ComponentForm({ mode, initial, version, allComponentNames, onSta
   const setFieldAt = (key: string, next: FieldDraft) =>
     setState((s) => ({ ...s, fields: s.fields.map((f) => (f.key === key ? next : f)) }));
 
-  const pickType = (type: CmsType) => {
+  const pickType = (type: BuilderFieldType) => {
     const draft = emptyFieldDraft(type);
     setState((s) => ({ ...s, fields: [...s.fields, draft] }));
     setExpandedKey(draft.key);
@@ -208,6 +208,7 @@ export function ComponentForm({ mode, initial, version, allComponentNames, onSta
                   .filter((f) => f.key !== draft.key)
                   .map((f) => f.name)
                   .filter((n) => n.trim() !== "")}
+                componentNames={allComponentNames}
                 expanded={expandedKey === draft.key}
                 onToggle={() => toggleExpand(draft.key)}
                 onChange={(next) => setFieldAt(draft.key, next)}

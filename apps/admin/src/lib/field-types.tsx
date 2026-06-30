@@ -528,6 +528,13 @@ export const BUILDER_CMS_TYPES: readonly CmsType[] = CMS_TYPES.filter(
   (t) => !UNSUPPORTED_BUILDER_TYPES.has(t),
 );
 
+/**
+ * The field types the module builder can author: every scalar {@link CmsType} PLUS the two component
+ * kinds (a single component reference and a repeatable list of them). `dynamiczone` + inline `relation`
+ * stay non-authorable (round-tripped via `raw`).
+ */
+export type BuilderFieldType = CmsType | 'component' | 'component-repeatable';
+
 /** The option keys a given type actually honours, beyond the universal `nullable` / `default`. */
 export interface CmsTypeOptionMeta {
   /** editable enum `values` list applies. */
@@ -550,6 +557,10 @@ export interface CmsTypeOptionMeta {
   mediaTypes: boolean;
   /** RE2 `pattern` / `patternFlags` / `patternMessage` apply (string/email/uid/text). */
   pattern: boolean;
+  /** be-05 COMPONENT: a referenced-component picker + a repeatable toggle apply. */
+  componentRef: boolean;
+  /** be-05 COMPONENT (repeatable only): instance-count bounds (min/max) apply. */
+  componentCount: boolean;
 }
 
 const NO_OPTIONS: CmsTypeOptionMeta = {
@@ -563,6 +574,8 @@ const NO_OPTIONS: CmsTypeOptionMeta = {
   dateBounds: false,
   mediaTypes: false,
   pattern: false,
+  componentRef: false,
+  componentCount: false,
 };
 
 const optionMeta: Record<CmsType, CmsTypeOptionMeta> = {
@@ -586,7 +599,10 @@ const optionMeta: Record<CmsType, CmsTypeOptionMeta> = {
 };
 
 /** Which conditional option inputs a type needs in the builder forms. */
-export function optionMetaFor(type: CmsType): CmsTypeOptionMeta {
+export function optionMetaFor(type: BuilderFieldType): CmsTypeOptionMeta {
+  if (type === 'component' || type === 'component-repeatable') {
+    return { ...NO_OPTIONS, componentRef: true, componentCount: type === 'component-repeatable' };
+  }
   return optionMeta[type] ?? NO_OPTIONS;
 }
 
@@ -641,18 +657,20 @@ export const BUILDER_TYPE_CATALOG: readonly BuilderTypeEntry[] = [
   T('json', 'JSON', '{}', 'Arbitrary JSON', 'Data', 'violet'),
   T('array', 'Array', '[]', 'List of scalars', 'Data', 'violet'),
   T('media', 'Media', '▣', 'Image, video or file', 'Media', 'pink'),
+  T('component', 'Component', '▦', 'A reusable group of fields', 'Components', 'teal'),
   T('richtext', 'Rich text', 'R', 'WYSIWYG formatted body', 'Rich content', 'primary', true),
   T('blocks', 'Blocks', '▦', 'Modular block editor', 'Rich content', 'pink', true),
 ];
 
 /** The group headers, in picker order. */
-export const BUILDER_TYPE_GROUP_ORDER: readonly string[] = ['Text', 'Number', 'Boolean', 'Date', 'Data', 'Media', 'Rich content'];
+export const BUILDER_TYPE_GROUP_ORDER: readonly string[] = ['Text', 'Number', 'Boolean', 'Date', 'Data', 'Media', 'Components', 'Rich content'];
 
 const TYPE_BY_ID = new Map(BUILDER_TYPE_CATALOG.map((t) => [t.id, t]));
 const STRING_ENTRY = TYPE_BY_ID.get('string') as BuilderTypeEntry;
 
-/** Resolve a type's gallery metadata (glyph / tone / desc); falls back to the string entry. */
+/** Resolve a type's gallery metadata (glyph / tone / desc); both component kinds share the `component` card. */
 export function typeMetaFor(type: string): BuilderTypeEntry {
+  if (type === 'component-repeatable') return TYPE_BY_ID.get('component') ?? STRING_ENTRY;
   return TYPE_BY_ID.get(type) ?? STRING_ENTRY;
 }
 

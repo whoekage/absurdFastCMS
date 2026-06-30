@@ -1,5 +1,4 @@
-import type { CmsType } from '@conti/sdk';
-import { optionMetaFor, BUILDER_CMS_TYPES } from '@/lib/field-types';
+import { optionMetaFor, BUILDER_CMS_TYPES, type BuilderFieldType } from '@/lib/field-types';
 import type {
   ComponentDraft,
   ComponentSchema,
@@ -60,7 +59,8 @@ export interface FieldDraft {
   /** Backend stable id (absent = new field). */
   id?: string;
   name: string;
-  type: CmsType;
+  /** A scalar CmsType, or a component kind (`component` / `component-repeatable`). */
+  type: BuilderFieldType;
   nullable: boolean;
   /** raw `default` value as typed (empty = unset). */
   defaultValue: string;
@@ -95,6 +95,8 @@ export interface FieldDraft {
   patternMessage: string;
   /** write-only: hide from ALL read responses (list/detail/populate). */
   isPrivate: boolean;
+  /** component / component-repeatable only: the referenced component name. */
+  componentRef: string;
   /** Conditional admin visibility ("show/hide when …"). Undefined = always visible. */
   condition?: FieldCondition;
   /** Soft-delete marker for a LOADED field (drops on apply, with a restore strip). New fields are removed outright. */
@@ -110,7 +112,7 @@ const nextKey = (prefix: string): string => {
 };
 
 /** A fresh, empty field draft (defaults to a nullable string field). `type` overrides the default. */
-export function emptyFieldDraft(type: CmsType = 'string'): FieldDraft {
+export function emptyFieldDraft(type: BuilderFieldType = 'string'): FieldDraft {
   return {
     key: nextKey('field'),
     name: '',
@@ -135,13 +137,22 @@ export function emptyFieldDraft(type: CmsType = 'string'): FieldDraft {
     patternFlags: '',
     patternMessage: '',
     isPrivate: false,
+    componentRef: '',
     deleted: false,
   };
 }
 
-/** Is this field type editable by the builder form (vs. authored-in-code components/inline-relations)? */
-function isAuthorableField(type: FieldSchema['type']): type is CmsType {
-  return (BUILDER_CMS_TYPES as readonly string[]).includes(type);
+/**
+ * Is this field type editable by the builder form? Every scalar CmsType, plus the two component kinds
+ * (a component reference / a repeatable list). `dynamiczone` + inline `relation` stay non-authorable
+ * (round-tripped via `raw`).
+ */
+function isAuthorableField(type: FieldSchema['type']): type is BuilderFieldType {
+  return (
+    (BUILDER_CMS_TYPES as readonly string[]).includes(type) ||
+    type === 'component' ||
+    type === 'component-repeatable'
+  );
 }
 
 /** A `default` wire value → its editable string form. */
@@ -158,7 +169,7 @@ function draftFromField(field: FieldSchema): FieldDraft {
     key: nextKey('field'),
     id: field.id,
     name: field.name,
-    type: (isAuthorableField(field.type) ? field.type : 'string') as CmsType,
+    type: (isAuthorableField(field.type) ? field.type : 'string') as BuilderFieldType,
     nullable: field.options?.nullable ?? true,
     defaultValue: defaultToString(field.options?.default),
     enumValues: field.options?.values ? [...field.options.values] : [],
@@ -179,6 +190,7 @@ function draftFromField(field: FieldSchema): FieldDraft {
     patternFlags: field.options?.patternFlags ?? '',
     patternMessage: field.options?.patternMessage ?? '',
     isPrivate: field.options?.private ?? false,
+    componentRef: field.options?.component ?? '',
     deleted: false,
   };
   if (field.options?.condition) base.condition = field.options.condition;
@@ -247,6 +259,22 @@ function validateFieldDraft(draft: FieldDraft): string | null {
       return 'Max items can’t be below min items';
     }
   }
+  if (meta.componentRef) {
+    if (draft.componentRef.trim() === '') return 'Choose a component for this field';
+    if (draft.type === 'component-repeatable') {
+      if (draft.min.trim() !== '') {
+        const n = Number(draft.min);
+        if (!Number.isInteger(n) || n < 0) return 'Min instances must be a non-negative integer';
+      }
+      if (draft.max.trim() !== '') {
+        const n = Number(draft.max);
+        if (!Number.isInteger(n) || n < 0) return 'Max instances must be a non-negative integer';
+      }
+      if (draft.min.trim() !== '' && draft.max.trim() !== '' && Number(draft.max) < Number(draft.min)) {
+        return 'Max instances can’t be below min instances';
+      }
+    }
+  }
   return null;
 }
 
@@ -297,13 +325,28 @@ function draftOptions(draft: FieldDraft): FieldOptions {
     if (draft.patternFlags.trim() !== '') options.patternFlags = draft.patternFlags.trim();
     if (draft.patternMessage.trim() !== '') options.patternMessage = draft.patternMessage.trim();
   }
+  if (meta.componentRef) {
+    options.component = draft.componentRef.trim();
+    // a repeatable component bounds its instance count via min/max (numbers); a single ignores them.
+    if (draft.type === 'component-repeatable') {
+      if (draft.min.trim() !== '') options.min = Number(draft.min);
+      if (draft.max.trim() !== '') options.max = Number(draft.max);
+    }
+  }
   if (draft.isPrivate) options.private = true;
   if (meta.unique && draft.unique) options.unique = true;
   // editorWidth defaults to 'full' on the backend — only emit when 'half' to keep the schema clean.
   if (draft.half) options.editorWidth = 'half';
   if (draft.condition) options.condition = draft.condition;
-  // media carries no constant default (the backend codegen can't express one — would be lost on reboot).
-  if (draft.type !== 'media' && draft.defaultValue.trim() !== '') options.default = parseDefault(draft);
+  // media + component carry no constant default (the backend codegen can't express one).
+  if (
+    draft.type !== 'media' &&
+    draft.type !== 'component' &&
+    draft.type !== 'component-repeatable' &&
+    draft.defaultValue.trim() !== ''
+  ) {
+    options.default = parseDefault(draft);
+  }
   return options;
 }
 
@@ -365,6 +408,10 @@ export function fieldSummary(draft: FieldDraft): string {
     if (draft.max.trim() !== '') bits.push(`to ${draft.max.trim()}`);
   }
   if (meta.multiple) bits.push(draft.multiple ? 'multiple' : 'single');
+  if (meta.componentRef) {
+    bits.push(draft.componentRef.trim() || 'no component');
+    if (draft.type === 'component-repeatable') bits.push('repeatable');
+  }
   if (meta.mediaTypes && draft.allowedTypes.length > 0) bits.push(draft.allowedTypes.join('/'));
   if (meta.pattern && draft.pattern.trim() !== '') bits.push('pattern');
   if (draft.defaultValue.trim() !== '') bits.push(`default ${draft.defaultValue.trim()}`);
