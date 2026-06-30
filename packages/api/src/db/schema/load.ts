@@ -2,8 +2,8 @@ import { readdir } from 'node:fs/promises';
 import { existsSync, type Dirent } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { defToSchema, type TypeDef, type Hooks } from './define.ts';
-import type { Schema } from './model.ts';
+import { defToSchema, defToComponentSchema, type TypeDef, type ComponentTypeDef, type Hooks } from './define.ts';
+import type { Schema, ComponentSchema } from './model.ts';
 import { AppError } from '../../errors/app-error.ts';
 
 /**
@@ -32,6 +32,8 @@ class SchemaLoadError extends AppError {
 export interface LoadedTypes {
   schemas: Schema[];
   hooks: Map<string, Hooks>;
+  /** Reusable component definitions from `modules/components/*.ts` (empty when the dir is absent). */
+  components: ComponentSchema[];
 }
 
 export async function loadTypes(dir: string): Promise<LoadedTypes> {
@@ -55,7 +57,7 @@ async function loadTypesImpl(dir: string, token: string): Promise<LoadedTypes> {
   try {
     dirents = await readdir(dir, { withFileTypes: true });
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { schemas: [], hooks: new Map() };
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { schemas: [], hooks: new Map(), components: [] };
     throw e;
   }
   // An entity is a subdir holding a `schema.ts`. `components/` is the reserved component-definition group.
@@ -85,5 +87,43 @@ async function loadTypesImpl(dir: string, token: string): Promise<LoadedTypes> {
       if (hmod.default !== undefined) hooks.set(name, hmod.default);
     }
   }
-  return { schemas, hooks };
+  const components = await loadComponentsImpl(path.join(dir, 'components'), bust);
+  return { schemas, hooks, components };
+}
+
+/**
+ * Load the reusable component definitions from `modules/components/*.ts`. Each FILE is one component (the
+ * name is the file's basename) that must `export default defineComponent({ ... })`. Mirrors the module
+ * loader: a missing dir is an EMPTY set (byte-identical to a project with no components), `?v=` cache-busts
+ * an out-of-band edit, and an entry that vanishes mid-walk during a concurrent delete is skipped (not fatal).
+ */
+async function loadComponentsImpl(componentsDir: string, bust: string): Promise<ComponentSchema[]> {
+  let dirents: Dirent[];
+  try {
+    dirents = await readdir(componentsDir, { withFileTypes: true });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw e;
+  }
+  const files = dirents
+    .filter((d) => d.isFile() && d.name.endsWith('.ts'))
+    .map((d) => d.name)
+    .sort();
+  const components: ComponentSchema[] = [];
+  for (const file of files) {
+    const name = file.slice(0, -'.ts'.length);
+    const componentFile = path.join(componentsDir, file);
+    let mod: { default?: ComponentTypeDef };
+    try {
+      mod = (await import(pathToFileURL(componentFile).href + bust)) as { default?: ComponentTypeDef };
+    } catch (e) {
+      if (bust !== '' && (e as NodeJS.ErrnoException).code === 'ENOENT') continue; // vanished mid-walk (race) — skip
+      throw e;
+    }
+    if (!mod.default || typeof mod.default !== 'object' || !('fields' in mod.default)) {
+      throw new SchemaLoadError(`components/${file}`, 'must `export default defineComponent({ ... })`');
+    }
+    components.push(defToComponentSchema(mod.default, name));
+  }
+  return components;
 }
