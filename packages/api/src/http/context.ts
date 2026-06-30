@@ -10,6 +10,7 @@ import type { Auth } from '../auth/auth.ts';
 import type { RbacRegistry } from '../auth/rbac.registry.ts';
 import type { TeamView } from '../auth/team.view.ts';
 import type { Principal } from '../auth/session.cache.ts';
+import type { ApplyCore } from './apply-core.ts';
 
 /**
  * The shared structural contracts for the decomposed HTTP layer. `createServer` builds a single
@@ -93,6 +94,7 @@ export interface ServerContext {
   gates: Gates;
   live: LiveCell;
   writeCtx: WriteContext;
+  apply: ApplyCore;
   store: PostgresStore;
   sql: Sql;
   dir: string;

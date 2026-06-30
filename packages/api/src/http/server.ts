@@ -5,18 +5,10 @@ import type { Engine } from '../store/engine.ts';
 import type { Registry } from '../db/registry.ts';
 import type { PostgresStore } from '../db/postgres.store.ts';
 import { rebuildType } from '../db/engine.loader.ts';
-import { handleRequest, errorResponse, type CoreResponse } from './read.router.ts';
+import { handleRequest } from './read.router.ts';
 import { type WriteContext } from './write.handler.ts';
 import { HookRegistry } from '../db/schema/hooks.ts';
-import { applySchemaEdit, applySchemaDelete, previewSchemaEdit, BuilderBusyError, type ModuleDraft, type SchemaEditResult, applyComponentEdit, applyComponentDelete, previewComponentEdit, readComponents, type ComponentDraft } from '../compose/builder.ts';
-import { swapFromIR } from '../db/engine.swap.ts';
-import { loadTypes, loadTypesCacheBusted } from '../db/schema/load.ts';
-import type { ComponentSchema } from '../db/schema/model.ts';
-import { readAppliedSchemas, ensureAppliedTable } from '../db/schema/migrate.ts';
-import { SchemaChangeConflictError } from '../db/ddl.ts';
-import { localeFromAcceptLanguage, type Locale } from '../errors/index.ts';
-import { computeCatalogVersion, hashRequest } from '../compose/catalog-version.ts';
-import { ensureIdempotencyTable, idempotencyLookup, recordIdempotency, pruneIdempotency } from '../compose/builder-idempotency.ts';
+import { type ModuleDraft, type SchemaEditResult } from '../compose/builder.ts';
 import { type FileContext } from './upload.handler.ts';
 import { getStorageProvider } from '../storage/index.ts';
 import { handleAuthRoute } from '../auth/auth.bridge.ts';
@@ -24,15 +16,7 @@ import type { Auth } from '../auth/auth.ts';
 import type { SessionCache } from '../auth/session.cache.ts';
 import type { RbacRegistry } from '../auth/rbac.registry.ts';
 import type { TeamView } from '../auth/team.view.ts';
-import {
-  writeResponse,
-  readBody,
-  corkSend,
-  builderJson,
-  builderErrorFields,
-  builderError,
-  parseBody,
-} from './responders.ts';
+import { writeResponse } from './responders.ts';
 import { createGates } from './auth-gates.ts';
 import type { ServerContext } from './context.ts';
 import { registerTeamRoutes } from './routes/team.ts';
@@ -40,6 +24,8 @@ import { registerKeyRoutes } from './routes/keys.ts';
 import { registerMediaRoutes } from './routes/media.ts';
 import { registerReadRoutes } from './routes/read.ts';
 import { registerDataRoutes } from './routes/data.ts';
+import { registerBuilderRoutes } from './routes/builder.ts';
+import { createApplyCore } from './apply-core.ts';
 
 /**
  * The HTTP server, built directly on uWebSockets.js. uWS is the committed transport (single-instance
@@ -233,10 +219,12 @@ export function createServer(deps: ServerDeps): Server {
   const sql = store.sql;
   // be-04 MEDIA — the storage provider context for the `/_files` asset endpoints.
   const fileCtx: FileContext = { sql: store.sql, provider: getStorageProvider() };
+  // S4/S6 — the schema-write core: owns the catalog version + single-writer mutex; drives the builder routes
+  // and the programmatic srv.applyEdit. Always wired (modulesDir is required).
+  const apply = createApplyCore({ live, sql, dir });
 
-  // The shared context handed to every extracted register*Routes(rctx) module. `apply` (the schema-write
-  // core) is added in the apply-core extraction step; the route families below don't mutate the catalog.
-  const rctx: ServerContext = { route, gates, live, writeCtx: ctx, store, sql, dir, auth, rbac, teamView, fileCtx };
+  // The shared context handed to every extracted register*Routes(rctx) module.
+  const rctx: ServerContext = { route, gates, live, writeCtx: ctx, apply, store, sql, dir, auth, rbac, teamView, fileCtx };
   registerReadRoutes(rctx);
 
   // AUTH (better-auth provider) — mounted under the `/auth/...` prefix BEFORE the `/:type` data routes.
@@ -263,377 +251,7 @@ export function createServer(deps: ServerDeps): Server {
   route.del('/auth/:p', onAuth);
   route.any('/auth/*', onAuth);
 
-  // S4: the files-first Builder apply+swap, exposed on the returned server. `modulesDir` is required, so
-  // the Builder is ALWAYS wired and this is assigned unconditionally below, before the server handle returns.
-  let applyEditFn: NonNullable<Server['applyEdit']>;
-
-  // S6 per-server state: the on-disk catalog version (sha256) + the single-writer mutex flag. NEVER
-  // module-scope (two test servers must not share). Warm both best-effort at construction (createServer
-  // is sync, so cannot await); a defensive lazy recompute covers a request that races the warm.
-  let currentVersion = '';
-  let writerBusy = false;
-  // Ensure the on-demand bookkeeping tables EXACTLY ONCE per server (memoized) — never a fire-and-forget
-  // warm: a `CREATE TABLE IF NOT EXISTS` racing a concurrent one trips pg_type's unique index. Memoizing
-  // collapses concurrent first-callers onto one promise; the ensure helpers also swallow the race defensively.
-  let tablesReady: Promise<void> | undefined;
-  const ensureTables = (): Promise<void> =>
-    (tablesReady ??= (async () => { await ensureAppliedTable(sql); await ensureIdempotencyTable(sql); })());
-  const ensureVersion = async (): Promise<string> => {
-    if (currentVersion === '') currentVersion = await computeCatalogVersion(dir);
-    return currentVersion;
-  };
-  // Read the applied catalog, tolerating a not-yet-created _schema_applied (a GET before any apply).
-  const readApplied = async (): Promise<Awaited<ReturnType<typeof readAppliedSchemas>>> => {
-    await ensureTables();
-    return readAppliedSchemas(sql);
-  };
-
-  // The apply core (no mutex — the caller holds it). Re-loads hooks (a NEW type's hooks.ts is merged;
-  // ESM-cache invariant: an existing type's cached hooks.ts is correct; an out-of-band hooks.ts edit needs
-  // a restart), then swaps. A blocked / no-op result returns without swapping.
-  const swapAfter = async (result: SchemaEditResult): Promise<SchemaEditResult> => {
-    if (!result.ok || result.next === undefined || (result.applied?.length ?? 0) === 0) return result;
-    // Re-load hooks AND component definitions so the rebuilt registry keeps both — without the components a
-    // module that uses one would lose its component field on the swap. (A project with none passes [].)
-    const { hooks: nextHooks, components: nextComponents } = await loadTypes(dir);
-    await swapFromIR(sql, live, result.next, result.applied!, new HookRegistry(nextHooks), nextComponents);
-    return result;
-  };
-  const runEdit = async (draft: ModuleDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult> =>
-    swapAfter(await applySchemaEdit(sql, dir, draft, opts ?? {}));
-  const runDelete = async (name: string): Promise<SchemaEditResult> => swapAfter(await applySchemaDelete(sql, dir, name));
-
-  // Re-import the catalog (cache-busted) and swap the live registry/hooks/relations/components from disk —
-  // NO migrate. Shared by POST /builder/reload and the component routes (a component edit changes no table,
-  // so its only effect is a registry rebuild that picks up the new/edited/removed component file).
-  const reloadFromDisk = async (): Promise<void> => {
-    const { schemas, hooks, components } = await loadTypesCacheBusted(dir, `reload:${process.pid}:${Date.now()}`);
-    await swapFromIR(sql, live, schemas, [], new HookRegistry(hooks), components);
-  };
-
-  // Programmatic entry (srv.applyEdit): serialize via the SAME mutex; a contended call THROWS (it cannot
-  // return a CoreResponse). The HTTP path calls runEdit DIRECTLY from inside its own held mutex (no double-acquire).
-  applyEditFn = async (draft, opts) => {
-    if (writerBusy) throw new BuilderBusyError('builder busy');
-    writerBusy = true;
-    try { return await runEdit(draft, opts); } finally { writerBusy = false; }
-  };
-
-  // The success envelope FIELDS (also the stored idempotency body). `applied`/`blocked` always present.
-  const successFields = (r: SchemaEditResult): Record<string, unknown> =>
-    ({ ok: true, version: currentVersion, applied: r.applied ?? [], blocked: [], live: true, ...(r.schema !== undefined ? { schema: r.schema } : {}) });
-
-  // The shared mutating flow (PUT/DELETE): acquire-FIRST (zero awaits before set) → version precheck →
-  // idempotency lookup/replay → exec → recompute version → record idempotency → envelope. Release in finally.
-  const runMutation = (
-    res: uWS.HttpResponse, aborted: () => boolean,
-    pre: { ifMatch: string; bodyVersion: string | undefined; idemKey: string; requestHash: string },
-    exec: () => Promise<SchemaEditResult>,
-    locale: Locale,
-  ): void => {
-    void (async () => {
-      if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
-      writerBusy = true;
-      try {
-        await ensureTables();
-        // Idempotency replay FIRST (before the version precheck): a lost-response retry resends the
-        // ORIGINAL If-Match, so checking the version first would 412 a request whose result we already have.
-        // A keyed replay is unconditional — it returns the stored outcome regardless of the current version.
-        if (pre.idemKey !== '') {
-          await pruneIdempotency(sql).catch(() => {});
-          const hit = await idempotencyLookup(sql, pre.idemKey);
-          if (hit !== undefined) {
-            if (hit.requestHash !== pre.requestHash) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'idempotency key reused for a different request' }));
-            const etag = hit.status === 200 ? { ETag: String((hit.response as { version?: string }).version ?? '') } : undefined;
-            return corkSend(res, aborted, builderJson(hit.status, hit.response, etag));
-          }
-        }
-        await ensureVersion();
-        const expected = pre.ifMatch !== '' ? pre.ifMatch : pre.bodyVersion;
-        if (expected !== currentVersion) return corkSend(res, aborted, builderJson(412, { ok: false, error: 'stale version', currentVersion }, { ETag: currentVersion }));
-        let r: SchemaEditResult;
-        try {
-          r = await exec();
-        } catch (e) {
-          if (pre.idemKey !== '') {
-            const { status, fields } = builderErrorFields(e, locale);
-            if (status >= 400 && status < 500 && !(e instanceof SchemaChangeConflictError)) await recordIdempotency(sql, pre.idemKey, pre.requestHash, status, fields).catch(() => {});
-          }
-          throw e;
-        }
-        if (!r.ok) { // blocked: requires allowDestructive (deterministic terminal → 409, idempotent)
-          const fields = { ok: false, applied: [], blocked: r.blocked ?? [], error: 'requires allowDestructive' };
-          if (pre.idemKey !== '') await recordIdempotency(sql, pre.idemKey, pre.requestHash, 409, fields).catch(() => {});
-          return corkSend(res, aborted, builderJson(409, fields));
-        }
-        if ((r.applied?.length ?? 0) > 0) currentVersion = await computeCatalogVersion(dir); // skip on no-op
-        const fields = successFields(r);
-        if (pre.idemKey !== '') await recordIdempotency(sql, pre.idemKey, pre.requestHash, 200, fields).catch(() => {});
-        corkSend(res, aborted, builderJson(200, fields, { ETag: currentVersion }));
-      } catch (e) {
-        corkSend(res, aborted, builderError(e, locale)); // SchemaChangeConflictError → 409+Retry-After
-      } finally {
-        writerBusy = false; // runs on EVERY path incl client abort; the 409-busy loser never entered this try
-      }
-    })();
-  };
-
-  // The component-edit concurrency wrapper — mirrors runMutation (busy mutex, idempotency replay, If-Match
-  // version precheck, version bump) but for the migrate-free component path: exec resolves+writes the
-  // component file and swaps the registry, then the catalog version advances (a component edit always
-  // changes the catalog). Success carries the resolved component + the new version.
-  const runComponentMutation = (
-    res: uWS.HttpResponse,
-    aborted: () => boolean,
-    pre: { ifMatch: string; bodyVersion: string | undefined; idemKey: string; requestHash: string },
-    exec: () => Promise<{ component?: ComponentSchema }>,
-    locale: Locale,
-  ): void => {
-    void (async () => {
-      if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
-      writerBusy = true;
-      try {
-        await ensureTables();
-        if (pre.idemKey !== '') {
-          await pruneIdempotency(sql).catch(() => {});
-          const hit = await idempotencyLookup(sql, pre.idemKey);
-          if (hit !== undefined) {
-            if (hit.requestHash !== pre.requestHash) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'idempotency key reused for a different request' }));
-            const etag = hit.status === 200 ? { ETag: String((hit.response as { version?: string }).version ?? '') } : undefined;
-            return corkSend(res, aborted, builderJson(hit.status, hit.response, etag));
-          }
-        }
-        await ensureVersion();
-        const expected = pre.ifMatch !== '' ? pre.ifMatch : pre.bodyVersion;
-        if (expected !== currentVersion) return corkSend(res, aborted, builderJson(412, { ok: false, error: 'stale version', currentVersion }, { ETag: currentVersion }));
-        let r: { component?: ComponentSchema };
-        try {
-          r = await exec();
-        } catch (e) {
-          if (pre.idemKey !== '') {
-            const { status, fields } = builderErrorFields(e, locale);
-            if (status >= 400 && status < 500 && !(e instanceof SchemaChangeConflictError)) await recordIdempotency(sql, pre.idemKey, pre.requestHash, status, fields).catch(() => {});
-          }
-          throw e;
-        }
-        currentVersion = await computeCatalogVersion(dir);
-        const fields = { ok: true as const, ...(r.component !== undefined ? { component: r.component } : {}), version: currentVersion };
-        if (pre.idemKey !== '') await recordIdempotency(sql, pre.idemKey, pre.requestHash, 200, fields).catch(() => {});
-        corkSend(res, aborted, builderJson(200, fields, { ETag: currentVersion }));
-      } catch (e) {
-        corkSend(res, aborted, builderError(e, locale));
-      } finally {
-        writerBusy = false;
-      }
-    })();
-  };
-
-  // ---- BUILDER ROUTE SURFACE (design §1). GET reads are PUBLIC; mutations gated on builder.manage. ----
-
-  // GET list — applied catalog (with ids) + ETag/304.
-  route.get('/builder/modules', (res, req) => {
-    const inm = req.getHeader('if-none-match');
-    let aborted = false;
-    res.onAborted(() => { aborted = true; });
-    void (async () => {
-      try {
-        await ensureVersion();
-        if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
-        const schemas = await readApplied();
-        corkSend(res, () => aborted, builderJson(200, { ok: true, schemas, version: currentVersion }, { ETag: currentVersion }));
-      } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
-    })();
-  });
-
-  // GET one — 404 when absent; else the single schema WITH ids + ETag/304.
-  route.get('/builder/modules/:name', (res, req) => {
-    const name = req.getParameter(0) ?? '';
-    const inm = req.getHeader('if-none-match');
-    let aborted = false;
-    res.onAborted(() => { aborted = true; });
-    void (async () => {
-      try {
-        await ensureVersion();
-        const schema = (await readApplied()).find((s) => s.name === name);
-        if (schema === undefined) return corkSend(res, () => aborted, builderJson(404, { ok: false, error: `module "${name}" does not exist` }));
-        if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
-        corkSend(res, () => aborted, builderJson(200, { ok: true, schema, version: currentVersion }, { ETag: currentVersion }));
-      } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
-    })();
-  });
-
-  // POST preview — dry-run (no write/migrate/swap), no mutex/version. GATED.
-  route.post('/builder/modules/:name/preview', (res, req) => {
-    const name = req.getParameter(0) ?? '';
-    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-    gate(res, req, 'builder.manage', true, (raw, aborted) => {
-      const parsed = parseBody(raw);
-      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-      const body = parsed.body as { allowDestructive?: boolean } & ModuleDraft;
-      if (body.name !== name) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.name must equal the path name' }));
-      void (async () => {
-        let result: CoreResponse;
-        try {
-          const p = await previewSchemaEdit(sql, dir, body, { allowDestructive: body.allowDestructive === true });
-          result = builderJson(200, { ok: p.ok, applied: p.changes, blocked: p.blocked, schema: p.schema, generatedSource: p.generatedSource });
-        } catch (e) { result = builderError(e, locale); }
-        corkSend(res, aborted, result);
-      })();
-    });
-  });
-
-  // PUT upsert — create / update / name-rename. GATED + mutex + If-Match/version + idempotency.
-  route.put('/builder/modules/:name', (res, req) => {
-    const name = req.getParameter(0) ?? '';
-    const ifMatch = req.getHeader('if-match'); // '' when absent (uWS; lowercase key)
-    const idemKey = req.getHeader('idempotency-key');
-    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-    gate(res, req, 'builder.manage', true, (raw, aborted) => {
-      const parsed = parseBody(raw);
-      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-      const body = parsed.body as { allowDestructive?: boolean; version?: string } & ModuleDraft;
-      if (body.name !== name) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.name must equal the path name' }));
-      if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
-      const { allowDestructive, version: _v, ...meaningful } = body;
-      const requestHash = hashRequest({ m: 'PUT', name, body: meaningful });
-      runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash },
-        () => runEdit(body, { allowDestructive: allowDestructive === true }), locale);
-    });
-  });
-
-  // DELETE — drop a whole type (always destructive → require allowDestructive). GATED + same wrap.
-  route.del('/builder/modules/:name', (res, req) => {
-    const name = req.getParameter(0) ?? '';
-    const ifMatch = req.getHeader('if-match');
-    const idemKey = req.getHeader('idempotency-key');
-    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-    gate(res, req, 'builder.manage', true, (raw, aborted) => {
-      const parsed = parseBody(raw);
-      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-      const body = parsed.body as { allowDestructive?: boolean; version?: string };
-      if (body.allowDestructive !== true) return corkSend(res, aborted, builderJson(409, { ok: false, applied: [], blocked: [], error: 'requires allowDestructive' }));
-      if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
-      const requestHash = hashRequest({ m: 'DELETE', name });
-      runMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash }, () => runDelete(name), locale);
-    });
-  });
-
-  // POST reload — operator escape hatch: cache-busted re-import + swap (registry/hooks/relations), NO
-  // migrate; advances the version so a pre-reload PUT carrying the old version fails 412. GATED + mutex.
-  route.post('/builder/reload', (res, req) => {
-    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-    gate(res, req, 'builder.manage', false, (_raw, aborted) => {
-      void (async () => {
-        if (writerBusy) return corkSend(res, aborted, builderJson(409, { ok: false, error: 'builder busy' }, { 'Retry-After': '1' }));
-        writerBusy = true;
-        try {
-          await reloadFromDisk(); // applied=[] → swaps registry/hooks/relations/components, no per-type rebuild
-          currentVersion = await computeCatalogVersion(dir);
-          corkSend(res, aborted, builderJson(200, { ok: true, version: currentVersion }, { ETag: currentVersion }));
-        } catch (e) { corkSend(res, aborted, builderError(e, locale)); }
-        finally { writerBusy = false; }
-      })();
-    });
-  });
-
-  // ---- COMPONENT-DEFINITION ROUTE SURFACE — reusable nested field groups (modules/components/*.ts). GET
-  //      reads are PUBLIC; mutations gated on builder.manage. Components have NO table, so writes never
-  //      migrate — they write the file + swap the registry. They share the catalog version/ETag with modules.
-
-  // GET list components — defined components (with ids) + ETag/304.
-  route.get('/builder/components', (res, req) => {
-    const inm = req.getHeader('if-none-match');
-    let aborted = false;
-    res.onAborted(() => { aborted = true; });
-    void (async () => {
-      try {
-        await ensureVersion();
-        if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
-        const components = await readComponents(dir);
-        corkSend(res, () => aborted, builderJson(200, { ok: true, components, version: currentVersion }, { ETag: currentVersion }));
-      } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
-    })();
-  });
-
-  // GET one component — 404 when absent; else the single component WITH ids + ETag/304.
-  route.get('/builder/components/:name', (res, req) => {
-    const name = req.getParameter(0) ?? '';
-    const inm = req.getHeader('if-none-match');
-    let aborted = false;
-    res.onAborted(() => { aborted = true; });
-    void (async () => {
-      try {
-        await ensureVersion();
-        const component = (await readComponents(dir)).find((c) => c.name === name);
-        if (component === undefined) return corkSend(res, () => aborted, builderJson(404, { ok: false, error: `component "${name}" does not exist` }));
-        if (inm !== '' && inm === currentVersion) return corkSend(res, () => aborted, builderJson(304, {}, { ETag: currentVersion }));
-        corkSend(res, () => aborted, builderJson(200, { ok: true, component, version: currentVersion }, { ETag: currentVersion }));
-      } catch { corkSend(res, () => aborted, builderJson(500, { ok: false, error: 'internal error' })); }
-    })();
-  });
-
-  // POST preview component — dry-run (no write/swap), no mutex/version. GATED.
-  route.post('/builder/components/:name/preview', (res, req) => {
-    const name = req.getParameter(0) ?? '';
-    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-    gate(res, req, 'builder.manage', true, (raw, aborted) => {
-      const parsed = parseBody(raw);
-      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-      const body = parsed.body as ComponentDraft;
-      if (body.name !== name) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.name must equal the path name' }));
-      void (async () => {
-        let result: CoreResponse;
-        try {
-          const p = await previewComponentEdit(dir, body);
-          result = builderJson(200, { ok: true, component: p.component, generatedSource: p.generatedSource });
-        } catch (e) { result = builderError(e, locale); }
-        corkSend(res, aborted, result);
-      })();
-    });
-  });
-
-  // PUT upsert a component — create / update. GATED + mutex + If-Match/version + idempotency. NO migrate.
-  route.put('/builder/components/:name', (res, req) => {
-    const name = req.getParameter(0) ?? '';
-    const ifMatch = req.getHeader('if-match');
-    const idemKey = req.getHeader('idempotency-key');
-    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-    gate(res, req, 'builder.manage', true, (raw, aborted) => {
-      const parsed = parseBody(raw);
-      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-      const body = parsed.body as { version?: string } & ComponentDraft;
-      if (body.name !== name) return corkSend(res, aborted, builderJson(422, { ok: false, error: 'body.name must equal the path name' }));
-      if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
-      const { version: _v, ...meaningful } = body;
-      const requestHash = hashRequest({ m: 'PUT-component', name, body: meaningful });
-      runComponentMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash }, async () => {
-        const component = await applyComponentEdit(dir, body);
-        await reloadFromDisk();
-        return { component };
-      }, locale);
-    });
-  });
-
-  // DELETE a component — blocked (422) while any field references it. GATED + same wrap. NO migrate.
-  route.del('/builder/components/:name', (res, req) => {
-    const name = req.getParameter(0) ?? '';
-    const ifMatch = req.getHeader('if-match');
-    const idemKey = req.getHeader('idempotency-key');
-    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // sync: uWS req is dead after gate's await
-    gate(res, req, 'builder.manage', true, (raw, aborted) => {
-      const parsed = parseBody(raw);
-      if (!parsed.ok) return corkSend(res, aborted, parsed.error);
-      const body = parsed.body as { version?: string };
-      if (ifMatch === '' && body.version === undefined) return corkSend(res, aborted, builderJson(428, { ok: false, error: 'precondition required (If-Match)' }));
-      const requestHash = hashRequest({ m: 'DELETE-component', name });
-      runComponentMutation(res, aborted, { ifMatch, bodyVersion: body.version, idemKey, requestHash }, async () => {
-        await applyComponentDelete(dir, name);
-        await reloadFromDisk();
-        return {};
-      }, locale);
-    });
-  });
-
+  registerBuilderRoutes(rctx);
   registerDataRoutes(rctx);
   registerTeamRoutes(rctx);
   registerKeyRoutes(rctx);
@@ -672,6 +290,6 @@ export function createServer(deps: ServerDeps): Server {
       if (token) uWS.us_listen_socket_close(token as uWS.us_listen_socket);
     },
     // The Builder (applyEdit) is always wired now (modulesDir is required), so always expose it.
-    applyEdit: applyEditFn,
+    applyEdit: apply.applyEdit,
   };
 }
