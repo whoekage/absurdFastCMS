@@ -18,27 +18,19 @@ import { localeFromAcceptLanguage, type Locale } from '../errors/index.ts';
 import { computeCatalogVersion, hashRequest } from '../compose/catalog-version.ts';
 import { ensureIdempotencyTable, idempotencyLookup, recordIdempotency, pruneIdempotency } from '../compose/builder-idempotency.ts';
 import { type FileContext } from './upload.handler.ts';
-import { mediaPopulateTargets, stripMediaPopulate, applyMediaPopulate } from './media.populate.ts';
-import { componentPopulateTargets, applyComponentPopulate } from './component.populate.ts';
 import { getStorageProvider } from '../storage/index.ts';
-import { listTypes, inspectType } from '../store/inspect.ts';
 import { handleAuthRoute } from '../auth/auth.bridge.ts';
 import type { Auth } from '../auth/auth.ts';
 import type { SessionCache } from '../auth/session.cache.ts';
 import type { RbacRegistry } from '../auth/rbac.registry.ts';
 import type { TeamView } from '../auth/team.view.ts';
-import { config } from '../config.ts';
 import {
-  statusLine,
   writeResponse,
-  writeJson,
-  toInt,
   readBody,
   corkSend,
   builderJson,
   builderErrorFields,
   builderError,
-  corkSendNoStore,
   parseBody,
 } from './responders.ts';
 import { createGates } from './auth-gates.ts';
@@ -46,6 +38,7 @@ import type { ServerContext } from './context.ts';
 import { registerTeamRoutes } from './routes/team.ts';
 import { registerKeyRoutes } from './routes/keys.ts';
 import { registerMediaRoutes } from './routes/media.ts';
+import { registerReadRoutes } from './routes/read.ts';
 
 /**
  * The HTTP server, built directly on uWebSockets.js. uWS is the committed transport (single-instance
@@ -210,77 +203,40 @@ export function createServer(deps: ServerDeps): Server {
   // inline route registrations keep calling bare `gate`/`gateTeam`/`gateKeys`/`gateUpload`; `gates` is also
   // threaded into the ServerContext for the extracted route modules.
   const gates = createGates({ sessionCache, rbac, auth, teamView, corsPolicy });
-  const { gate, gateTeam, gateKeys, gateUpload } = gates;
+  const { gate } = gates;
 
-  /**
-   * be-04 MEDIA + be-05 COMPONENT — the OPTIONAL populate-post-step wrapper around a GET read. When the
-   * registry is present and the request asked to populate >=1 MEDIA field and/or >=1 COMPONENT field of the
-   * addressed type, this:
-   *   1. STRIPS the targeted media + component populate names from the query (so the engine's relation-only
-   *      populate parser never 400s on a scalar media / json component field), runs the pure read core,
-   *   2. on a 200, applies the media populate (inline asset record(s)) AND the component populate (resolve
-   *      inline media refs inside the component trees), each over the parsed envelope — corked + onAborted.
-   * Returns true iff it OWNED the response (took the async path); false => the caller runs the normal
-   * SYNCHRONOUS byte-identical read path. With no registry / no media+component field / no such populate
-   * asked, it always returns false => the existing zero-copy read path is byte-identical.
-   */
-  function mediaRead(res: uWS.HttpResponse, method: string, path: string, type: string, query: string, locale: Locale): boolean {
-    const reg = live.registry; // read the LIVE registry per-call so a post-swap type/field is seen
-    if (method.toUpperCase() !== 'GET') return false;
-    const def = reg.get(type);
-    if (def === undefined || (def.mediaFields.size === 0 && def.componentFields.size === 0)) return false;
-    const mediaTargets = mediaPopulateTargets(def, query);
-    const componentTargets = componentPopulateTargets(def, query);
-    if (mediaTargets.size === 0 && componentTargets.size === 0) return false;
+  // WRITES (store + registry are required deps): commit to Postgres, then rebuild ONLY the written
+  // type's RAM storage in place (per-type rebuild + per-type cache invalidation).
+  const ctx: WriteContext = {
+    engine: () => live.engine,
+    registry: () => live.registry,
+    sql: store.sql,
+    rebuild: async (type: string) => {
+      // A DATA write never changes the schema, so re-stream the ALREADY-RESOLVED registry def — no
+      // meta re-query on the hot path (CL20). Only an actual schema mutation (addField/dropField/
+      // changeFieldType) must call registry.rebuildType to re-read content_types/content_type_fields;
+      // that is the future DDL hook, NOT this per-entry-write path. The def is guaranteed present: the
+      // write core resolved it via registry.get(type) before any SQL ran.
+      const def = live.registry.get(type)!;
+      await rebuildType(store.sql, live.engine, def, live.registry);
+    },
+    // Publish clock: real wall-clock by default; tests inject a fixed Date for deterministic fixtures.
+    publishClock,
+    // S4: read hooks through the LIVE cell (a getter, not a by-value capture) so a schema-edit swap that
+    // installs a new type's hooks.ts is seen by the write path immediately. Always present (required dep).
+    get hooks() {
+      return live.hooks;
+    },
+  };
+  const dir = modulesDir;
+  const sql = store.sql;
+  // be-04 MEDIA — the storage provider context for the `/_files` asset endpoints.
+  const fileCtx: FileContext = { sql: store.sql, provider: getStorageProvider() };
 
-    const sql = store.sql;
-    // Strip BOTH the media + component populate names so the engine's relation-only parser never 400s.
-    const stripNames = new Set<string>([...mediaTargets.keys(), ...componentTargets.keys()]);
-    const strippedQuery = stripMediaPopulate(query, stripNames);
-    let aborted = false;
-    res.onAborted(() => {
-      aborted = true;
-    });
-    void (async () => {
-      let result: CoreResponse;
-      try {
-        const base = handleRequest(live.engine, { method, path, query: strippedQuery, locale });
-        // Only a successful read carries a value to resolve; a 400/404/405 passes straight through.
-        if (base.status === 200) {
-          let body = base.body;
-          if (mediaTargets.size > 0) body = (await applyMediaPopulate(sql, body, mediaTargets)).body;
-          if (componentTargets.size > 0) body = (await applyComponentPopulate(sql, live.engine, reg, body, componentTargets)).body;
-          result = { status: 200, contentType: base.contentType, body };
-        } else {
-          result = base;
-        }
-      } catch {
-        result = errorResponse(500, 'internal error');
-      }
-      if (!aborted) res.cork(() => writeResponse(res, result));
-    })();
-    return true;
-  }
-
-  // DEBUG INSPECTOR (dev-only, read-only) — mounted ONLY when DEBUG_INSPECTOR=1 outside production. The
-  // `debug-inspect` segment contains '-', illegal in an name, so it can never shadow a real `/:type`.
-  // Synchronous like the read routes: decode straight off the live engine, emit JSON, never mutate.
-  if (config.debugInspector) {
-    // INDEX: every module + row count.
-    route.get('/debug-inspect', (res) => {
-      writeJson(res, 200, listTypes(live.engine));
-    });
-    // ONE type: per-column storage/stats + relations + a decoded row window (?offset=&limit=).
-    route.get('/debug-inspect/:type', (res, req) => {
-      const type = req.getParameter(0) ?? '';
-      const params = new URLSearchParams(req.getQuery() ?? '');
-      const offset = toInt(params.get('offset'));
-      const limit = toInt(params.get('limit'));
-      const result = inspectType(live.engine, type, { offset, limit } as { offset?: number; limit?: number });
-      if (result === null) writeJson(res, 404, { error: `unknown module "${type}"` });
-      else writeJson(res, 200, result);
-    });
-  }
+  // The shared context handed to every extracted register*Routes(rctx) module. `apply` (the schema-write
+  // core) is added in the apply-core extraction step; the route families below don't mutate the catalog.
+  const rctx: ServerContext = { route, gates, live, writeCtx: ctx, store, sql, dir, auth, rbac, teamView, fileCtx };
+  registerReadRoutes(rctx);
 
   // AUTH (better-auth provider) — mounted under the `/auth/...` prefix BEFORE the `/:type` data routes.
   // CRITICAL uWS ROUTING NOTES (verified against uWS v20.52):
@@ -306,84 +262,10 @@ export function createServer(deps: ServerDeps): Server {
   route.del('/auth/:p', onAuth);
   route.any('/auth/*', onAuth);
 
-  // PUBLIC setup status: does the instance still need its FIRST admin (no super-admin grant exists yet)? The
-  // sign-in screen reads this BEFORE any session exists to choose "Create first admin" vs "Sign in". No auth,
-  // no-store. Reveals only setup-state (standard — Strapi/Directus expose the same `hasAdmin` to the login UI).
-  route.get('/_setup', (res) => {
-    let aborted = false;
-    res.onAborted(() => {
-      aborted = true;
-    });
-    void (async () => {
-      try {
-        const [row] = await store.sql<{ needs: boolean }[]>`
-          SELECT NOT EXISTS (
-            SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE r.name = 'super-admin'
-          ) AS needs`;
-        if (!aborted) corkSendNoStore(res, () => aborted, 200, { needsFirstAdmin: row?.needs ?? true });
-      } catch {
-        if (!aborted) corkSend(res, () => aborted, errorResponse(500, 'internal error'));
-      }
-    })();
-  });
-
-  // LIST: /:type  — read everything off `req` synchronously, then delegate to the core.
-  route.get('/:type', (res, req) => {
-    const method = req.getMethod();
-    const type = req.getParameter(0) ?? '';
-    const query = req.getQuery() ?? '';
-    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // read sync (uWS req)
-    // SYNC handler: no await past this point, so `req` is no longer touched and no onAborted needed —
-    // UNLESS this is a media-populate read (registry present + a media field targeted), which needs an
-    // async batched `files` lookup. mediaRead returns true iff it took the async path (else fall through).
-    if (mediaRead(res, method, `/${type}`, type, query, locale)) return;
-    writeResponse(res, handleRequest(live.engine, { method, path: `/${type}`, query, locale }));
-  });
-
-  // SINGLE: /:type/:id
-  route.get('/:type/:id', (res, req) => {
-    const method = req.getMethod();
-    const type = req.getParameter(0) ?? '';
-    const id = req.getParameter(1) ?? '';
-    const query = req.getQuery() ?? '';
-    const locale = localeFromAcceptLanguage(req.getHeader('accept-language')); // read sync (uWS req)
-    if (mediaRead(res, method, `/${type}/${id}`, type, query, locale)) return;
-    writeResponse(res, handleRequest(live.engine, { method, path: `/${type}/${id}`, query, locale }));
-  });
-
   // S4: the files-first Builder apply+swap, exposed on the returned server. `modulesDir` is required, so
   // the Builder is ALWAYS wired and this is assigned unconditionally below, before the server handle returns.
   let applyEditFn: NonNullable<Server['applyEdit']>;
 
-  // WRITES (store + registry are required deps): commit to Postgres, then rebuild ONLY the written
-  // type's RAM storage in place (per-type rebuild + per-type cache invalidation).
-  const ctx: WriteContext = {
-    engine: () => live.engine,
-    registry: () => live.registry,
-    sql: store.sql,
-    rebuild: async (type: string) => {
-      // A DATA write never changes the schema, so re-stream the ALREADY-RESOLVED registry def — no
-      // meta re-query on the hot path (CL20). Only an actual schema mutation (addField/dropField/
-      // changeFieldType) must call registry.rebuildType to re-read content_types/content_type_fields;
-      // that is the future DDL hook, NOT this per-entry-write path. The def is guaranteed present: the
-      // write core resolved it via registry.get(type) before any SQL ran.
-      const def = live.registry.get(type)!;
-      await rebuildType(store.sql, live.engine, def, live.registry);
-    },
-    // Publish clock: real wall-clock by default; tests inject a fixed Date for deterministic fixtures.
-    publishClock,
-    // S4: read hooks through the LIVE cell (a getter, not a by-value capture) so a schema-edit swap that
-    // installs a new type's hooks.ts is seen by the write path immediately. Always present (required dep).
-    get hooks() {
-      return live.hooks;
-    },
-  };
-  // S4 FILES-FIRST BUILDER — apply a whole-type edit + make it LIVE in-process (no restart). `modulesDir`
-  // is a required dep, so the Builder always wires. applySchemaEdit writes the file + migrates atomically; on success the
-  // engine is rebuilt incrementally from the returned `next` IR and the live cell is swapped. A blocked /
-  // no-op edit does NOT swap; a migrate failure THROWS (last-good keeps serving).
-  const dir = modulesDir;
-  const sql = store.sql;
   // S6 per-server state: the on-disk catalog version (sha256) + the single-writer mutex flag. NEVER
   // module-scope (two test servers must not share). Warm both best-effort at construction (createServer
   // is sync, so cannot await); a defensive lazy recompute covers a request that races the warm.
@@ -820,13 +702,6 @@ export function createServer(deps: ServerDeps): Server {
   route.put('/:type/:id', dataWrite('PUT', 'content.update', true));
   route.del('/:type/:id', dataWrite('DELETE', 'content.delete', true));
 
-  // be-04 MEDIA — asset endpoints (`/_files`) need the storage provider; build the file context here and
-  // thread it via the ServerContext so registerMediaRoutes can serve upload/list/get/delete.
-  const fileCtx: FileContext = { sql: store.sql, provider: getStorageProvider() };
-
-  // The shared context handed to every extracted register*Routes(rctx) module. `apply` (the schema-write
-  // core) is added in the apply-core extraction step; the route families below don't mutate the catalog.
-  const rctx: ServerContext = { route, gates, live, writeCtx: ctx, store, sql, dir, auth, rbac, teamView, fileCtx };
   registerTeamRoutes(rctx);
   registerKeyRoutes(rctx);
   registerMediaRoutes(rctx);
