@@ -43,9 +43,9 @@ export interface FieldOptions {
   component?: string;
   components?: string[];
   target?: string;
-  /** lower bound — char-length (string/email/uid) or VALUE; STRING for biginteger/decimal. */
+  /** lower bound — char-length (string/email/uid) or VALUE; STRING for biginteger/decimal; ISO/`$now` token for date/datetime. */
   min?: number | string;
-  /** upper VALUE bound; STRING for biginteger/decimal. Strings use `length` for their char max. */
+  /** upper VALUE bound; STRING for biginteger/decimal; ISO/`$now` token for date/datetime. Strings use `length` for their char max. */
   max?: number | string;
   /** admin editor layout width: 'full' (default) or 'half'. */
   editorWidth?: 'full' | 'half';

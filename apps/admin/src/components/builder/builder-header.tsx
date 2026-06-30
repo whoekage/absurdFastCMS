@@ -1,120 +1,139 @@
-import type { ReactNode } from 'react';
-import { Link, useNavigate } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
-import { Boxes, ChevronRight, ChevronDown, Moon, Sun, Plus, Check } from 'lucide-react';
-import { useTheme } from '@/lib/theme';
-import { listModules } from '@/lib/builder-client';
-import { builderKeys } from '@/lib/module-draft';
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-} from '@/components/ui/dropdown-menu';
+import { Link } from "@tanstack/react-router";
+import { ChevronLeft, ChevronRight, Moon, Redo2, Sun, Undo2 } from "lucide-react";
+import type { ReactNode } from "react";
+import { useTheme } from "@/lib/theme";
 
 interface BuilderHeaderProps {
-  mode: 'create' | 'edit';
-  /** Machine name (empty on a brand-new module). */
+  mode: "create" | "edit";
+  /** Machine name (empty on create). */
   name: string;
   label?: string | undefined;
-  /** Slot for the Review CTA / undo-redo (wired in later stages). */
+  /** Whether the form has unsaved changes (drives amber status dot). */
+  dirty?: boolean;
+  busy?: boolean;
+  /** Slot for the Review CTA (edit mode only). */
   right?: ReactNode;
 }
 
-/** A short mono glyph for the module chip (e.g. "Ar" for "article"). */
+/** Short 2-char mono glyph for the module chip ("Article" → "Ar"). */
 function glyphOf(s: string): string {
-  const base = s.trim().slice(0, 2) || 'M';
-  return base.charAt(0).toUpperCase() + base.slice(1);
+  const clean = s.replace(/[^a-zA-Z0-9]/g, "");
+  const two = clean.slice(0, 2) || s.slice(0, 2) || "M";
+  return two.charAt(0).toUpperCase() + (two[1] ?? "").toLowerCase();
 }
 
 /**
- * The full-screen builder's 56px top bar (brand · Modules breadcrumb · a module-SWITCHER dropdown ·
- * collection-type pill on edit · spacer · `right` slot · theme toggle). The switcher lists every module
- * (alpha-sorted, deterministic) + "New module"; navigation rides the router so the editor's
- * unsaved-changes blocker intercepts it. Replaces the app sidebar while building.
+ * Compact per-screen builder header (56px). Create mode: simple breadcrumb. Edit mode: back button +
+ * module glyph chip + name + api ID + undo/redo + draft status dot + Review CTA slot + theme toggle.
  */
-export function BuilderHeader({ mode, name, label, right }: BuilderHeaderProps) {
+export function BuilderHeader({ mode, name, label, dirty = false, busy = false, right }: BuilderHeaderProps) {
   const { resolvedTheme, setTheme } = useTheme();
-  const navigate = useNavigate();
-  const display = label || name || 'Untitled';
-  const query = useQuery({ queryKey: builderKeys.list(), queryFn: ({ signal }) => listModules(signal) });
-  const modules = [...(query.data?.schemas ?? [])].sort((a, b) => (a.label ?? a.name).localeCompare(b.label ?? b.name));
+  const display = label?.trim() || name || "Untitled";
+  const apiId = name ? `api::${name}.${name}` : "";
 
   return (
     <header
-      className="flex h-14 flex-shrink-0 items-center gap-3.5 border-b px-[18px]"
-      style={{ background: 'color-mix(in srgb, hsl(var(--background)) 86%, transparent)', backdropFilter: 'blur(12px)' }}
+      className="flex h-14 flex-shrink-0 items-center gap-3 border-b px-[22px]"
+      style={{ background: "hsl(var(--background))" }}
     >
-      <div
-        className="flex h-7 w-7 items-center justify-center rounded-[9px] text-white shadow-card"
-        style={{ background: 'linear-gradient(150deg, hsl(var(--primary)), var(--violet))' }}
-      >
-        <Boxes className="h-4 w-4" />
-      </div>
-
-      <Link to="/modules" className="text-[13px] text-muted-foreground transition-colors hover:text-foreground">
-        Modules
-      </Link>
-      <ChevronRight className="h-3.5 w-3.5" style={{ color: 'var(--faint)' }} />
-
-      {/* module switcher */}
-      <DropdownMenu>
-        <DropdownMenuTrigger className="flex items-center gap-2 rounded-lg px-1.5 py-1 outline-none transition-colors hover:bg-accent">
-          <span
-            className="flex h-[18px] min-w-[18px] items-center justify-center rounded-md px-1 font-mono text-[10px] font-semibold"
-            style={{ background: 'color-mix(in srgb, hsl(var(--primary)) 13%, transparent)', color: 'hsl(var(--primary))' }}
+      {mode === "create" ? (
+        /* ── Create: "← modules / new" breadcrumb ── */
+        <div className="flex items-center gap-2">
+          <Link
+            to="/modules"
+            className="flex items-center gap-1.5 font-mono text-[12px] text-muted-foreground transition-colors hover:text-foreground"
           >
-            {glyphOf(name || display)}
+            <ChevronLeft className="h-[14px] w-[14px]" />
+            modules
+          </Link>
+          <ChevronRight className="h-3 w-3 text-muted-foreground/40" />
+          <span className="font-display text-[15px] font-semibold">new</span>
+        </div>
+      ) : (
+        /* ── Edit: back + glyph chip + name + api ID + undo/redo + status + CTA ── */
+        <>
+          <Link
+            to="/modules"
+            className="flex h-[30px] w-[30px] flex-shrink-0 items-center justify-center rounded-[8px] border bg-card text-muted-foreground transition-colors hover:text-foreground"
+            aria-label="Back to modules"
+          >
+            <ChevronLeft className="h-[15px] w-[15px]" />
+          </Link>
+
+          <span
+            className="flex h-[26px] w-[26px] flex-shrink-0 items-center justify-center rounded-[7px] font-mono text-[11px] font-semibold"
+            style={{
+              background: "color-mix(in srgb, hsl(var(--primary)) 15%, transparent)",
+              color: "hsl(var(--primary))",
+            }}
+          >
+            {glyphOf(display)}
           </span>
-          <span className="font-display text-[15px] font-semibold">{display}</span>
-          <ChevronDown className="h-3.5 w-3.5" style={{ color: 'var(--faint)' }} />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-[220px]">
-          {modules.map((m) => (
-            <DropdownMenuItem
-              key={m.name}
-              onSelect={() => void navigate({ to: '/modules/$name', params: { name: m.name } })}
-              className="flex items-center gap-2"
+
+          <div className="flex items-baseline gap-[10px]">
+            <span className="font-display text-[20px] font-semibold tracking-[-0.02em] leading-none">
+              {display}
+            </span>
+            {apiId && (
+              <span className="font-mono text-[11.5px] text-muted-foreground">{apiId}</span>
+            )}
+          </div>
+
+          <div className="flex-1" />
+
+          {/* Undo / Redo — no history yet, rendered as disabled affordance */}
+          <div className="flex items-center gap-[1px]">
+            <button
+              type="button"
+              disabled
+              aria-label="Undo"
+              className="flex h-[29px] w-[29px] items-center justify-center rounded-[7px] text-muted-foreground opacity-40"
+            >
+              <Undo2 className="h-[14px] w-[14px]" />
+            </button>
+            <button
+              type="button"
+              disabled
+              aria-label="Redo"
+              className="flex h-[29px] w-[29px] items-center justify-center rounded-[7px] text-muted-foreground opacity-25"
+            >
+              <Redo2 className="h-[14px] w-[14px]" />
+            </button>
+          </div>
+
+          {/* Draft status indicator */}
+          {dirty && (
+            <span
+              className="flex items-center gap-1.5 font-mono text-[11px]"
+              style={{ color: "var(--amber, #c77d1a)" }}
             >
               <span
-                className="flex h-[18px] min-w-[18px] items-center justify-center rounded-md px-1 font-mono text-[10px] font-semibold"
-                style={{ background: 'color-mix(in srgb, hsl(var(--primary)) 13%, transparent)', color: 'hsl(var(--primary))' }}
-              >
-                {glyphOf(m.name)}
-              </span>
-              <span className="flex-1 truncate">{m.label ?? m.name}</span>
-              {m.name === name && <Check className="h-3.5 w-3.5 text-primary" />}
-            </DropdownMenuItem>
-          ))}
-          {modules.length > 0 && <DropdownMenuSeparator />}
-          <DropdownMenuItem onSelect={() => void navigate({ to: '/modules/new' })} className="flex items-center gap-2 text-primary">
-            <Plus className="h-3.5 w-3.5" />
-            New module
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+                className="h-[6px] w-[6px] rounded-full"
+                style={{ background: "var(--amber, #c77d1a)" }}
+              />
+              {busy ? "applying…" : "draft"}
+            </span>
+          )}
 
-      {mode === 'edit' && (
-        <span
-          className="rounded-full px-2.5 py-0.5 font-mono text-[11px]"
-          style={{ background: 'color-mix(in srgb, hsl(var(--muted)) 70%, transparent)', color: 'hsl(var(--muted-foreground))' }}
-        >
-          Collection type
-        </span>
+          {/* Review CTA slot (passed by the route / ModuleForm) */}
+          {right}
+        </>
       )}
 
       <div className="flex-1" />
 
-      {right}
-
+      {/* Theme toggle */}
       <button
         type="button"
         aria-label="Toggle theme"
-        onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
-        className="flex h-[34px] w-[34px] items-center justify-center rounded-lg border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+        className="flex h-[30px] w-[30px] flex-shrink-0 items-center justify-center rounded-[8px] border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >
-        {resolvedTheme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+        {resolvedTheme === "dark" ? (
+          <Sun className="h-[15px] w-[15px]" />
+        ) : (
+          <Moon className="h-[15px] w-[15px]" />
+        )}
       </button>
     </header>
   );

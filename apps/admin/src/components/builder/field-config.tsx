@@ -102,6 +102,19 @@ export function FieldConfig({ draft, i18n, siblingNames, onChange, onDelete, onD
         </div>
       )}
 
+      {meta.dateBounds && (
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>Earliest</label>
+            <input className={MONO_INPUT} value={draft.min} onChange={(e) => set({ min: e.target.value })} placeholder="$now(-1 year)" />
+          </div>
+          <div>
+            <label className={LABEL}>Latest</label>
+            <input className={MONO_INPUT} value={draft.max} onChange={(e) => set({ max: e.target.value })} placeholder="$now" />
+          </div>
+        </div>
+      )}
+
       {meta.precisionScale && (
         <div className="mt-3 grid grid-cols-2 gap-3">
           <div>

@@ -20,6 +20,14 @@ export const builderKeys = {
   detail: (name: string) => ['builder', 'detail', name] as const,
 };
 
+// A date/datetime bound: an absolute ISO-8601 date/datetime OR a relative `$now(±N unit)` token. Mirrors
+// the api catalog's grammar so the builder pre-validates for UX (the server validates authoritatively).
+const NOW_TOKEN_RE = /^\$now(?:\(\s*[+-]\d+\s+(?:second|minute|hour|day|week|month|year)s?\s*\))?$/;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+function isValidDateBound(s: string): boolean {
+  return NOW_TOKEN_RE.test(s) || (ISO_DATE_RE.test(s) && !Number.isNaN(Date.parse(s)));
+}
+
 // Postgres identifier rule the API enforces: starts with a letter/underscore, then word/$ chars, ≤63 bytes.
 // We pre-validate for UX; the server validates authoritatively.
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_$]*$/;
@@ -196,6 +204,10 @@ function validateFieldDraft(draft: FieldDraft): string | null {
       if (!Number.isInteger(s) || s < 0) return 'Scale must be a non-negative integer';
     }
   }
+  if (meta.dateBounds) {
+    if (draft.min.trim() !== '' && !isValidDateBound(draft.min.trim())) return 'Earliest must be an ISO date or a $now(…) token';
+    if (draft.max.trim() !== '' && !isValidDateBound(draft.max.trim())) return 'Latest must be an ISO date or a $now(…) token';
+  }
   return null;
 }
 
@@ -221,6 +233,11 @@ function draftOptions(draft: FieldDraft): FieldOptions {
     if (draft.uniqueItems) options.uniqueItems = true;
     if (draft.minItems.trim() !== '') options.minItems = Number(draft.minItems);
     if (draft.maxItems.trim() !== '') options.maxItems = Number(draft.maxItems);
+  }
+  if (meta.dateBounds) {
+    // date/datetime bounds stay STRINGS verbatim (absolute ISO or a `$now` token resolved at write time).
+    if (draft.min.trim() !== '') options.min = draft.min.trim();
+    if (draft.max.trim() !== '') options.max = draft.max.trim();
   }
   if (meta.precisionScale) {
     if (draft.precision.trim() !== '') options.precision = Number(draft.precision);
@@ -287,6 +304,10 @@ export function fieldSummary(draft: FieldDraft): string {
   if (meta.numericBounds) {
     if (draft.min.trim() !== '') bits.push(`min ${draft.min.trim()}`);
     if (draft.max.trim() !== '') bits.push(`max ${draft.max.trim()}`);
+  }
+  if (meta.dateBounds) {
+    if (draft.min.trim() !== '') bits.push(`from ${draft.min.trim()}`);
+    if (draft.max.trim() !== '') bits.push(`to ${draft.max.trim()}`);
   }
   if (meta.multiple) bits.push(draft.multiple ? 'multiple' : 'single');
   if (draft.defaultValue.trim() !== '') bits.push(`default ${draft.defaultValue.trim()}`);
@@ -483,6 +504,8 @@ export interface ModuleFormState {
   name: string;
   /** Editable human display name; falls back to `name` in the UI when blank. */
   label: string;
+  /** UI-only: collection (many entries) vs single (one entry). Backend wiring deferred. */
+  kind: 'collection' | 'single';
   draftAndPublish: boolean;
   i18n: boolean;
   fields: FieldDraft[];
@@ -493,9 +516,18 @@ export interface ModuleFormState {
   relationBaseline: Record<string, string>;
 }
 
+/** Slugify a display label into a valid api_id: lowercase, underscores, no leading/trailing _. */
+export function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, '')
+    .replace(/[\s-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
 /** A blank create-form state — starts with NO fields (the empty-state prompt drives the first add). */
 export function emptyModuleForm(): ModuleFormState {
-  return { name: '', label: '', draftAndPublish: false, i18n: false, fields: [], relations: [], baseline: {}, relationBaseline: {} };
+  return { name: '', label: '', kind: 'collection', draftAndPublish: false, i18n: false, fields: [], relations: [], baseline: {}, relationBaseline: {} };
 }
 
 /** Seed an edit-form state from a loaded module schema (preserves ids; round-trips non-authorable fields). */
@@ -506,6 +538,7 @@ export function moduleToForm(schema: ModuleSchema): ModuleFormState {
     id: schema.id,
     name: schema.name,
     label: schema.label ?? '',
+    kind: 'collection',
     draftAndPublish: schema.options?.draftAndPublish ?? false,
     i18n: schema.options?.i18n ?? false,
     fields,

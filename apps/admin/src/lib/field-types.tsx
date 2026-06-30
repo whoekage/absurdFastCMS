@@ -544,6 +544,8 @@ export interface CmsTypeOptionMeta {
   unique: boolean;
   /** `array` item guards (uniqueItems / minItems / maxItems) apply. */
   arrayItems: boolean;
+  /** date/datetime min/max bounds (absolute ISO or a `$now(±N unit)` token) apply. */
+  dateBounds: boolean;
 }
 
 const NO_OPTIONS: CmsTypeOptionMeta = {
@@ -554,6 +556,7 @@ const NO_OPTIONS: CmsTypeOptionMeta = {
   numericBounds: false,
   unique: false,
   arrayItems: false,
+  dateBounds: false,
 };
 
 const optionMeta: Record<CmsType, CmsTypeOptionMeta> = {
@@ -567,8 +570,8 @@ const optionMeta: Record<CmsType, CmsTypeOptionMeta> = {
   float: { ...NO_OPTIONS, numericBounds: true, unique: true },
   decimal: { ...NO_OPTIONS, precisionScale: true, numericBounds: true, unique: true },
   boolean: NO_OPTIONS,
-  date: { ...NO_OPTIONS, unique: true },
-  datetime: { ...NO_OPTIONS, unique: true },
+  date: { ...NO_OPTIONS, unique: true, dateBounds: true },
+  datetime: { ...NO_OPTIONS, unique: true, dateBounds: true },
   time: NO_OPTIONS,
   json: NO_OPTIONS,
   array: { ...NO_OPTIONS, arrayItems: true },
