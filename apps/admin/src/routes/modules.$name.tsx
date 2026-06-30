@@ -41,6 +41,7 @@ function EditModulePage() {
             version={query.data.version}
             allModuleNames={query.data.schemas.map((s) => s.name).filter((id) => id !== name)}
             moduleLabels={Object.fromEntries(query.data.schemas.map((s) => [s.name, s.label ?? s.name]))}
+            moduleFields={Object.fromEntries(query.data.schemas.map((s) => [s.name, s.fields.map((f) => f.name)]))}
             onSaved={() => void navigate({ to: '/modules' })}
           />
           <DeleteModuleCard name={name} version={query.data.version} />

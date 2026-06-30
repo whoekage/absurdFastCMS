@@ -22,7 +22,7 @@ import {
 import { moduleKeys } from '@/lib/modules';
 import { FieldCard } from '@/components/builder/field-card';
 import { TypePicker } from '@/components/builder/type-picker';
-import { RelationRowsEditor } from '@/components/relation-rows-editor';
+import { RelationsEditor } from '@/components/builder/relations-editor';
 import { DiffPreview, hasForbidden } from '@/components/builder/diff-preview';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -39,6 +39,8 @@ interface ModuleFormProps {
   allModuleNames: string[];
   /** name → human label for every existing module, so relation targets can show the label. */
   moduleLabels: Record<string, string>;
+  /** name → its field names for every existing module (relation display-field chips). */
+  moduleFields: Record<string, string[]>;
   /** Called after a successful apply with the save result (route navigates / refreshes). */
   onSaved: (result: SaveResult) => void;
 }
@@ -49,7 +51,7 @@ interface ModuleFormProps {
  *   migrate + live-swap). Destructive changes are gated behind an explicit ack; FORBIDDEN ones can't apply.
  * Optimistic concurrency rides the catalog `version` (If-Match); a 412 means someone else edited.
  */
-export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabels, onSaved }: ModuleFormProps) {
+export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabels, moduleFields, onSaved }: ModuleFormProps) {
   const queryClient = useQueryClient();
   const [state, setState] = useState<ModuleFormState>(initial);
   const [phase, setPhase] = useState<'editing' | 'reviewing'>('editing');
@@ -69,6 +71,7 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
     ...moduleLabels,
     ...(state.name.trim() ? { [state.name.trim()]: state.label.trim() || state.name.trim() } : {}),
   };
+  const moduleDisplayName = state.label.trim() || state.name.trim() || 'Untitled';
 
   const patch = (p: Partial<ModuleFormState>) => setState((s) => ({ ...s, ...p }));
   const setFieldAt = (key: string, next: FieldDraft) =>
@@ -304,11 +307,17 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
         )}
       </div>
 
-      <RelationRowsEditor
+      <RelationsEditor
         relations={state.relations}
+        relationBaseline={state.relationBaseline}
         onChange={(relations) => patch({ relations })}
+        moduleName={moduleDisplayName}
         targets={targets}
         targetLabels={targetLabels}
+        targetFields={{
+          ...moduleFields,
+          ...(state.name.trim() ? { [state.name.trim()]: liveAuthorable.map((f) => f.name).filter((n) => n.trim() !== '') } : {}),
+        }}
       />
 
       {error && <p className="text-sm text-destructive">{error}</p>}

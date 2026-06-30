@@ -308,11 +308,15 @@ export interface RelationDraft {
   kind: RelationKind;
   target: string;
   inverseField: string;
+  /** Which target field the relation picker shows/searches ('' = the target's default). */
+  displayField: string;
+  /** Soft-delete marker for a LOADED relation (drops the join on apply; restorable). */
+  deleted: boolean;
 }
 
 /** A fresh relation draft (targeting the given module by default, or empty). */
 export function emptyRelationDraft(target = ''): RelationDraft {
-  return { key: nextKey('rel'), field: '', kind: 'manyToOne', target, inverseField: '' };
+  return { key: nextKey('rel'), field: '', kind: 'manyToOne', target, inverseField: '', displayField: '', deleted: false };
 }
 
 /** Seed a relation draft from a loaded {@link RelationSchema}. Preserves `id`. */
@@ -324,7 +328,104 @@ function relationFromSchema(rel: RelationSchema): RelationDraft {
     kind: rel.kind,
     target: rel.target,
     inverseField: rel.inverseField ?? '',
+    displayField: rel.displayField ?? '',
+    deleted: false,
   };
+}
+
+// ── 6-way cardinality (the design's friendly picker over our 4 kinds × inverse-present) ──────────
+
+/** The six relation shapes the picker offers (Strapi parity). */
+export type Cardinality = 'oneWay' | 'oneToOne' | 'oneToMany' | 'manyToOne' | 'manyToMany' | 'manyWay';
+
+/** One cardinality card: end markers (1 / ∞), one-way flag, and the plain-English verbs. */
+export interface CardinalityCard {
+  key: Cardinality;
+  label: string;
+  aMark: '1' | '∞';
+  bMark: '1' | '∞';
+  oneWay: boolean;
+  /** "Each <Module> <verb> <target>". */
+  verb: string;
+  /** Reverse-direction verb ("each <target> <inv> <Module>"); '' when one-way. */
+  inv: string;
+}
+
+/** The picker catalog, in display order (mirrors the Lua design's `_CARDS()`). */
+export const CARDINALITY_CARDS: readonly CardinalityCard[] = [
+  { key: 'oneWay', label: 'has one', aMark: '1', bMark: '1', oneWay: true, verb: 'has one', inv: '' },
+  { key: 'oneToOne', label: 'one ↔ one', aMark: '1', bMark: '1', oneWay: false, verb: 'has and belongs to one', inv: 'belongs to one' },
+  { key: 'oneToMany', label: 'one → many', aMark: '1', bMark: '∞', oneWay: false, verb: 'has many', inv: 'belongs to one' },
+  { key: 'manyToOne', label: 'many → one', aMark: '∞', bMark: '1', oneWay: false, verb: 'belongs to one', inv: 'has many' },
+  { key: 'manyToMany', label: 'many ↔ many', aMark: '∞', bMark: '∞', oneWay: false, verb: 'has and belongs to many', inv: 'has and belongs to many' },
+  { key: 'manyWay', label: 'has many', aMark: '1', bMark: '∞', oneWay: true, verb: 'has many', inv: '' },
+];
+
+const CARD_BY_KEY = new Map(CARDINALITY_CARDS.map((c) => [c.key, c]));
+
+/** The card metadata for a cardinality key (falls back to the first card). */
+export function cardinalityCard(key: Cardinality): CardinalityCard {
+  return CARD_BY_KEY.get(key) ?? CARDINALITY_CARDS[0]!;
+}
+
+/** Derive the friendly cardinality from a draft's (kind, inverse-present). */
+export function draftCardinality(d: RelationDraft): Cardinality {
+  const hasInverse = d.inverseField.trim() !== '';
+  switch (d.kind) {
+    case 'oneToOne':
+      return hasInverse ? 'oneToOne' : 'oneWay';
+    case 'oneToMany':
+      return hasInverse ? 'oneToMany' : 'manyWay';
+    case 'manyToOne':
+      return 'manyToOne';
+    case 'manyToMany':
+      return 'manyToMany';
+  }
+}
+
+/** The (kind, inverse) patch a chosen cardinality implies. One-way kinds clear the inverse field. */
+export function cardinalityPatch(card: Cardinality): Partial<RelationDraft> {
+  switch (card) {
+    case 'oneWay':
+      return { kind: 'oneToOne', inverseField: '' };
+    case 'manyWay':
+      return { kind: 'oneToMany', inverseField: '' };
+    case 'oneToOne':
+      return { kind: 'oneToOne' };
+    case 'oneToMany':
+      return { kind: 'oneToMany' };
+    case 'manyToOne':
+      return { kind: 'manyToOne' };
+    case 'manyToMany':
+      return { kind: 'manyToMany' };
+  }
+}
+
+/** Naive English pluralizer for the relation sentence (mirrors the design). */
+export function pluralize(s: string): string {
+  if (/s$/.test(s)) return s;
+  if (/[^aeiou]y$/i.test(s)) return `${s.slice(0, -1)}ies`;
+  return `${s}s`;
+}
+
+/** A comparable snapshot of a relation's wire shape (for the status badge). */
+function comparableRelation(rel: Omit<RelationSchema, 'id'> & { id?: string }): string {
+  return JSON.stringify({ field: rel.field, kind: rel.kind, target: rel.target, inverseField: rel.inverseField ?? '', displayField: rel.displayField ?? '' });
+}
+
+function relationBaselineFrom(drafts: RelationDraft[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const d of drafts) if (d.id !== undefined) out[d.id] = comparableRelation(draftToRelation(d));
+  return out;
+}
+
+/** Derive a relation's status badge from the baseline (new / deleted / modified / clean). */
+export function relationStatus(draft: RelationDraft, baseline: Record<string, string>): FieldStatus {
+  if (draft.deleted) return 'deleted';
+  if (draft.id === undefined) return 'new';
+  const base = baseline[draft.id];
+  if (base === undefined) return 'new';
+  return comparableRelation(draftToRelation(draft)) === base ? 'clean' : 'modified';
 }
 
 /** Validate a relation draft against the available module moduleNames; returns an error or null. */
@@ -344,12 +445,14 @@ function validateRelationDraft(draft: RelationDraft, targets: readonly string[])
 /** Lower a relation draft to the wire shape. */
 function draftToRelation(draft: RelationDraft): Omit<RelationSchema, 'id'> & { id?: string } {
   const inverse = draft.inverseField.trim();
+  const display = draft.displayField.trim();
   return {
     ...(draft.id !== undefined ? { id: draft.id } : {}),
     field: draft.field.trim(),
     kind: draft.kind,
     target: draft.target,
     ...(inverse !== '' ? { inverseField: inverse } : {}),
+    ...(display !== '' ? { displayField: display } : {}),
   };
 }
 
@@ -368,16 +471,19 @@ export interface ModuleFormState {
   relations: RelationDraft[];
   /** fieldId → comparable snapshot at load (for client-side status badges). Empty on create. */
   baseline: Record<string, string>;
+  /** relationId → comparable snapshot at load (relation status badges). Empty on create. */
+  relationBaseline: Record<string, string>;
 }
 
 /** A blank create-form state — starts with NO fields (the empty-state prompt drives the first add). */
 export function emptyModuleForm(): ModuleFormState {
-  return { name: '', label: '', draftAndPublish: false, i18n: false, fields: [], relations: [], baseline: {} };
+  return { name: '', label: '', draftAndPublish: false, i18n: false, fields: [], relations: [], baseline: {}, relationBaseline: {} };
 }
 
 /** Seed an edit-form state from a loaded module schema (preserves ids; round-trips non-authorable fields). */
 export function moduleToForm(schema: ModuleSchema): ModuleFormState {
   const fields = schema.fields.map(draftFromField);
+  const relations = (schema.relations ?? []).map(relationFromSchema);
   return {
     id: schema.id,
     name: schema.name,
@@ -385,8 +491,9 @@ export function moduleToForm(schema: ModuleSchema): ModuleFormState {
     draftAndPublish: schema.options?.draftAndPublish ?? false,
     i18n: schema.options?.i18n ?? false,
     fields,
-    relations: (schema.relations ?? []).map(relationFromSchema),
+    relations,
     baseline: baselineFrom(fields),
+    relationBaseline: relationBaselineFrom(relations),
   };
 }
 
@@ -401,7 +508,9 @@ export function formToModuleDraft(state: ModuleFormState): ModuleDraft {
   const label = state.label.trim();
   if (label.length > 0) draft.label = label;
   if (state.id !== undefined) draft.id = state.id;
-  if (state.relations.length > 0) draft.relations = state.relations.map(draftToRelation);
+  // Soft-deleted relations are omitted so the server diff drops their join table.
+  const liveRelations = state.relations.filter((r) => !r.deleted);
+  if (liveRelations.length > 0) draft.relations = liveRelations.map(draftToRelation);
   return draft;
 }
 
@@ -431,7 +540,7 @@ export function validateModuleForm(state: ModuleFormState, allModuleNames: reado
   }
   // Relations may target this module (self-ref) plus any existing module.
   const targets = [...new Set([state.name.trim(), ...allModuleNames])].filter((t) => t !== '');
-  for (const r of state.relations) {
+  for (const r of state.relations.filter((rel) => !rel.deleted)) {
     const err = validateRelationDraft(r, targets);
     if (err) return err;
     const name = r.field.trim().toLowerCase();
