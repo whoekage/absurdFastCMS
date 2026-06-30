@@ -1,8 +1,21 @@
+import type { DragEvent } from 'react';
 import { GripVertical, ChevronDown, Columns2 } from 'lucide-react';
 import { type FieldDraft, type FieldStatus, fieldSummary } from '@/lib/module-draft';
 import { typeMetaFor, TONE_VAR } from '@/lib/field-types';
 import { FieldStatusBadge } from './field-status-badge';
 import { FieldConfig } from './field-config';
+
+/** Native drag-reorder wiring (the grip handle arms the row; the list owns the order state). */
+interface FieldDrag {
+  draggable: boolean;
+  isDragging: boolean;
+  isOver: boolean;
+  onHandlePointerDown: () => void;
+  onDragStart: (e: DragEvent) => void;
+  onDragOver: (e: DragEvent) => void;
+  onDrop: () => void;
+  onDragEnd: () => void;
+}
 
 interface FieldCardProps {
   draft: FieldDraft;
@@ -18,6 +31,8 @@ interface FieldCardProps {
   onDelete: () => void;
   /** Un-delete a soft-deleted field. */
   onRestore: () => void;
+  /** Drag-reorder wiring (omitted ⇒ not reorderable, e.g. while collapsed-all or a deleted row). */
+  drag?: FieldDrag;
 }
 
 /**
@@ -25,7 +40,7 @@ interface FieldCardProps {
  * type pill, half-width hint, caret) that expands to the inline {@link FieldConfig}. A soft-deleted
  * field shows a strike-through and a restore strip instead of expanding. Pixel-matches the Lua design.
  */
-export function FieldCard({ draft, status, i18n, siblingNames, expanded, onToggle, onChange, onDelete, onRestore }: FieldCardProps) {
+export function FieldCard({ draft, status, i18n, siblingNames, expanded, onToggle, onChange, onDelete, onRestore, drag }: FieldCardProps) {
   const meta = typeMetaFor(draft.type);
   const tone = TONE_VAR[meta.tone];
   const deleted = status === 'deleted';
@@ -38,7 +53,21 @@ export function FieldCard({ draft, status, i18n, siblingNames, expanded, onToggl
       : 'hsl(var(--border))';
 
   return (
-    <div className="overflow-hidden rounded-[11px] border bg-card shadow-card transition-[border-color]" style={{ borderColor }}>
+    <div
+      className="relative overflow-hidden rounded-[11px] border bg-card shadow-card transition-[border-color,opacity]"
+      style={{ borderColor, opacity: drag?.isDragging ? 0.4 : 1 }}
+      draggable={drag?.draggable ?? false}
+      onDragStart={drag?.onDragStart}
+      onDragOver={drag?.onDragOver}
+      onDrop={drag?.onDrop}
+      onDragEnd={drag?.onDragEnd}
+    >
+      {drag?.isOver && (
+        <span
+          className="absolute left-2 right-2 top-[-2px] z-[3] h-[3px] rounded-[3px]"
+          style={{ background: 'hsl(var(--primary))', boxShadow: '0 0 0 3px color-mix(in srgb, hsl(var(--primary)) 22%, transparent)' }}
+        />
+      )}
       <div
         onClick={() => !deleted && onToggle()}
         className="flex items-center gap-2.5 px-[13px] py-[11px] transition-colors hover:bg-[var(--fill)]"
@@ -47,7 +76,9 @@ export function FieldCard({ draft, status, i18n, siblingNames, expanded, onToggl
         <span
           className="flex flex-shrink-0 cursor-grab text-[var(--faint)] hover:text-muted-foreground"
           title="Drag to reorder"
+          style={{ touchAction: 'none' }}
           onClick={(e) => e.stopPropagation()}
+          onPointerDown={drag?.onHandlePointerDown}
         >
           <GripVertical className="h-[15px] w-[15px]" />
         </span>
