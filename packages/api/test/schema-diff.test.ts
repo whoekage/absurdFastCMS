@@ -162,6 +162,20 @@ test('setTypeOption: ON additive (safe), OFF destructive', () => {
   assert.equal(off.risk, 'destructive');
 });
 
+test('setTypeOption single: SAFE both directions (column-free metadata)', () => {
+  const singleOn = schema('ct_a', 'article', base.fields, { single: true });
+  const on = only(diff([base], [singleOn]));
+  assert.equal(on.kind, 'setTypeOption');
+  assert.equal((on as Extract<Change, { kind: 'setTypeOption' }>).option, 'single');
+  assert.equal(on.risk, 'safe');
+
+  // OFF (single → collection) is also safe — no column is ever dropped.
+  const off = only(diff([singleOn], [base]));
+  assert.equal(off.kind, 'setTypeOption');
+  assert.equal((off as Extract<Change, { kind: 'setTypeOption' }>).option, 'single');
+  assert.equal(off.risk, 'safe');
+});
+
 test('riskyChanges + forbiddenChanges select the right subset', () => {
   const cs = diff([base], []); // a dropType (destructive)
   assert.equal(riskyChanges(cs).length, 1);

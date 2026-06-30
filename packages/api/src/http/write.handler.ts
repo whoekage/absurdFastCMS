@@ -380,6 +380,11 @@ export async function handleWrite(ctx: WriteContext, req: WriteRequest): Promise
     }
 
     if (method === 'POST') {
+      // Single type: exactly one entry. A plain create starts a new document, so reject once one exists
+      // (adding a locale variant to that document goes through the variant sub-route above, not here).
+      if (def.single && ctx.engine().rowCount(type) > 0) {
+        return errorResponse(409, `single type "${type}" already has an entry`);
+      }
       const { data, relationOps } = validateBody(def, body, 'create', ctx.registry());
       // i18n: a plain create starts a NEW document (fresh document_id via nextval) in the DEFAULT_LOCALE
       // — the (NOT NULL) `locale` column is server-set here (the body can't carry it). A new locale of an

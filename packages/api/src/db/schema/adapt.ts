@@ -78,6 +78,7 @@ export function schemaToRows(schema: Schema): { ct: ModuleRow; fieldRows: FieldR
     updated_at: epoch,
     draft_publish: schema.options?.draftAndPublish ?? false,
     i18n: schema.options?.i18n ?? false,
+    single: schema.options?.single ?? false,
   };
   const fieldRows: FieldRow[] = resolved.map((rf, i) => ({
     id: i,

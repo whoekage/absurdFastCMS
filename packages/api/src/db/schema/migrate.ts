@@ -263,6 +263,9 @@ async function applyOne(tx: Sql, c: Change): Promise<void> {
       // WIRE-ONLY: the file order drives the registry projection; there is no physical column position.
       return;
     case 'setTypeOption':
+      // `single` is column-free metadata: no DDL. `reconcileApplied` still persists the new flag into
+      // `_schema_applied`, and the engine swap re-reads it via the rebuilt registry.
+      if (c.option === 'single') return;
       throw new MigrationUnsupportedError(
         `toggling "${c.option}" (draft&publish / i18n) on the existing type "${c.name}" is deferred to a later slice`,
       );

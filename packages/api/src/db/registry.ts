@@ -258,6 +258,12 @@ export interface ModuleDef {
    * be-02b document_id loader-skip stays in force).
    */
   i18n: boolean;
+  /**
+   * Single type (per-type). When true the module holds exactly ONE entry: writes are guarded so a second
+   * create is rejected, and the admin opens the single entry directly (no list). Behavioral only — it
+   * synthesizes NO field and adds NO column, so the read arena is BYTE-IDENTICAL to a collection.
+   */
+  single: boolean;
 }
 
 /** Map a positive number out of a jsonb `params` object, or undefined (presence check; 0 is valid). */
@@ -620,6 +626,7 @@ function buildDef(ct: ModuleRow, fieldRows: FieldRow[], relationRows: RelationRo
     componentFields,
     draftPublish: ct.draft_publish,
     i18n: ct.i18n,
+    single: ct.single,
   };
 }
 

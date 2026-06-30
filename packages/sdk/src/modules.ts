@@ -52,7 +52,7 @@ export interface ModuleSchema {
   /** Editable human display name; `label ?? name` is what the admin shows. */
   label?: string;
   collectionName?: string;
-  options?: { draftAndPublish?: boolean; i18n?: boolean };
+  options?: { draftAndPublish?: boolean; i18n?: boolean; single?: boolean };
   fields: SchemaField[];
   relations?: SchemaRelation[];
 }
@@ -113,6 +113,7 @@ function projectFields(schema: ModuleSchema): FieldDefinition[] {
     if (o.precision !== undefined) def.precision = o.precision;
     if (o.default !== undefined) def.default = o.default;
     if (f.type === 'media') def.multiple = o.multiple ?? false;
+    if (o.private === true) def.private = true;
     if ((f.type === 'component' || f.type === 'component-repeatable') && o.component !== undefined) def.component = o.component;
     if (f.type === 'dynamiczone' && o.components !== undefined) def.components = o.components;
     if (i18n) def.localized = f.localized ?? true;
@@ -155,6 +156,7 @@ export function projectSchemas(schemas: ModuleSchema[]): ModuleDefinition[] {
     if (schema.label !== undefined) def.label = schema.label;
     if (schema.options?.draftAndPublish === true) def.draftPublish = true;
     if (schema.options?.i18n === true) def.i18n = true;
+    if (schema.options?.single === true) def.single = true;
     return def;
   });
 }

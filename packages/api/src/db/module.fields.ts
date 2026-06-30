@@ -31,6 +31,8 @@ export interface ModuleRow {
   draft_publish: boolean;
   /** i18n opt-in: true => the ct_ table has a `locale` system column + UNIQUE(document_id, locale). */
   i18n: boolean;
+  /** Single type: exactly one entry. Behavioral only — adds NO physical column. */
+  single: boolean;
 }
 
 /** A `content_type_fields` row shape (snake_case as stored). */

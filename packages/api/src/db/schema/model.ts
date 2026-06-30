@@ -116,6 +116,7 @@ export const schemaZ = z
       .object({
         draftAndPublish: z.boolean().optional(),
         i18n: z.boolean().optional(),
+        single: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -172,7 +173,7 @@ export interface Schema {
   /** Editable human display name; `label ?? name` is what the admin shows. */
   label?: string;
   collectionName?: string;
-  options?: { draftAndPublish?: boolean; i18n?: boolean };
+  options?: { draftAndPublish?: boolean; i18n?: boolean; single?: boolean };
   fields: FieldSchema[];
   relations?: RelationSchema[];
 }

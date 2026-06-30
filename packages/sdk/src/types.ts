@@ -178,6 +178,13 @@ export interface FieldDefinition {
    */
   multiple?: boolean;
   /**
+   * Write-only: present and `true` ONLY for a `private` field (a conditional wire key). The field is
+   * stripped from EVERY read response (list/detail/populate) and the server rejects it in
+   * `fields=`/`filter[…]`/`sort=`. The admin reads it to render a write-only widget and to exclude the
+   * field from sortable columns, the filter builder, and the projection it sends.
+   */
+  private?: boolean;
+  /**
    * be-05: a `component` / `component-repeatable` field's referenced component-type api_id. PROJECTED
    * only for those kinds (a conditional wire key; every other field omits it). The admin reads it to
    * render the nested single/repeatable component editor.
@@ -250,6 +257,12 @@ export interface ModuleDefinition {
    * `createVariant` adds a new locale of an existing document.
    */
   i18n?: boolean;
+  /**
+   * Single type opt-in. Present and `true` ONLY for a type that holds exactly one entry (a conditional
+   * wire key — a collection type omits it). When true, a second plain create is rejected (409) and the
+   * admin opens the one entry directly instead of a list.
+   */
+  single?: boolean;
 }
 
 // === 1.6 — wire-format note ====================================================================

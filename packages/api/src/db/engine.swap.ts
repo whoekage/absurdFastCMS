@@ -47,9 +47,10 @@ export async function swapFromIR(
   // The new registry, built PURELY from the in-memory IR (no DB, no files). A throw here touches nothing.
   const nextReg = Registry.fromSchemas(next, nextComponents);
 
-  // Partition the touched moduleNames by the kind of engine op each needs. `setTypeOption` is intentionally
-  // absent: migrate always throws MigrationUnsupportedError for it, so it can never reach a committed
-  // change-set (applySchemaEdit throws before any swap runs).
+  // Partition the touched moduleNames by the kind of engine op each needs. A `setTypeOption` for
+  // draftAndPublish/i18n can't reach here (migrate throws first); a `setTypeOption` for `single` CAN (it's a
+  // no-op DDL) and is intentionally NOT partitioned — it changes no column, so it needs no per-type storage
+  // op. The wholesale `live.registry = nextReg` below picks up the new `single` flag.
   const creates = new Set<string>();
   const drops = new Set<string>();
   const changes = new Set<string>();
@@ -61,7 +62,7 @@ export async function swapFromIR(
       case 'addField': case 'dropField': case 'renameField': case 'retypeField':
       case 'setFieldNullable': case 'reorderFields': case 'addRelation': case 'dropRelation':
         changes.add(c.name); break;
-      // setTypeOption: unreachable (see above) — deliberately not handled.
+      // setTypeOption(single): no column delta → no per-type op; the registry-ref swap below applies it.
     }
   }
   // A created or dropped type is registered/dropped wholesale, never also "changed".

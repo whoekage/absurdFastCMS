@@ -64,8 +64,12 @@ export interface AddType extends BaseChange { readonly kind: 'addType'; readonly
 export interface DropType extends BaseChange { readonly kind: 'dropType'; }
 /** Same id, changed name → `ALTER TABLE ct_<from> RENAME TO ct_<to>` (lossless). */
 export interface RenameType extends BaseChange { readonly kind: 'renameType'; readonly fromName: string; readonly toName: string; }
-/** Toggle a per-type structural flag. ON = additive (safe); OFF = drops the system column (destructive). */
-export interface SetTypeOption extends BaseChange { readonly kind: 'setTypeOption'; readonly option: 'draftAndPublish' | 'i18n'; readonly from: boolean; readonly to: boolean; }
+/**
+ * Toggle a per-type structural flag. For `draftAndPublish`/`i18n`: ON = additive (safe); OFF = drops the
+ * system column (destructive). `single` adds NO column, so its toggle is SAFE in both directions — it is
+ * still emitted (not silent) so the engine re-swaps and the flag goes live without a manual reload.
+ */
+export interface SetTypeOption extends BaseChange { readonly kind: 'setTypeOption'; readonly option: 'draftAndPublish' | 'i18n' | 'single'; readonly from: boolean; readonly to: boolean; }
 /** A new field (new id) → `ADD COLUMN`. data-dependent iff NOT NULL with no default (existing rows). */
 export interface AddField extends BaseChange { readonly kind: 'addField'; readonly field: FieldSchema; readonly sort: number; }
 /** Drop a field (DESTRUCTIVE). */
@@ -221,6 +225,15 @@ function diffMatchedType(typeId: string, p: Schema, n: Schema, alters: Change[],
     if (from !== to) {
       const change: SetTypeOption = { kind: 'setTypeOption', typeId, name, risk: typeOptionRisk(to), option, from, to };
       (to ? alters : drops).push(change);
+    }
+  }
+  // `single` is column-free metadata — SAFE both ways, always an `alter` (never a drop). Emitting it (vs.
+  // staying silent like `label`) forces the live engine swap so the new flag takes effect immediately.
+  {
+    const from = p.options?.single ?? false;
+    const to = n.options?.single ?? false;
+    if (from !== to) {
+      alters.push({ kind: 'setTypeOption', typeId, name, risk: 'safe', option: 'single', from, to });
     }
   }
 
