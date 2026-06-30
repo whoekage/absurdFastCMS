@@ -132,3 +132,36 @@ test('DELETE of a relation-TARGET type → 422 (inbound relation); GET still 200
   assert.match((await r.json()).error, /post\.author/);
   assert.equal((await fetch(`${srv.base}/writer`)).status, 200); // still serving
 });
+
+test('PUT create a SINGLE type → GET reflects options.single; live type enforces one entry (409)', async () => {
+  const r = await put('homepage', { name: 'homepage', options: { single: true }, fields: [{ name: 'hero', type: 'string', options: { nullable: true } }] });
+  assert.equal(r.status, 200);
+
+  // The applied catalog round-trips the flag.
+  const one = await (await fetch(`${srv.base}/builder/modules/homepage`)).json();
+  assert.equal(one.schema.options.single, true);
+
+  // The live engine swap applied it: the first content create succeeds, the second is rejected.
+  const first = await fetch(`${srv.base}/homepage`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ hero: 'Welcome' }) });
+  assert.equal(first.status, 201);
+  const second = await fetch(`${srv.base}/homepage`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ hero: 'Second' }) });
+  assert.equal(second.status, 409);
+});
+
+test('toggling collection → single with >1 rows is blocked (422)', async () => {
+  const created = await (await put('note', { name: 'note', fields: [{ name: 'text', type: 'string', options: { nullable: true } }] })).json();
+  for (const text of ['a', 'b']) {
+    const c = await fetch(`${srv.base}/note`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ text }) });
+    assert.equal(c.status, 201);
+  }
+  // Flip to single while 2 rows exist — ids preserved so the ONLY diff is the (safe) single toggle, which the
+  // row-count preflight then rejects → 422 (and nothing applied).
+  const flip = await put('note', {
+    id: created.schema.id,
+    name: 'note',
+    options: { single: true },
+    fields: [{ id: created.schema.fields[0].id, name: 'text', type: 'string', options: { nullable: true } }],
+  });
+  assert.equal(flip.status, 422);
+  assert.match((await flip.json()).error, /single type/);
+});
