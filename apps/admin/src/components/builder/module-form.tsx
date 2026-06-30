@@ -23,6 +23,10 @@ import { moduleKeys } from '@/lib/modules';
 import { FieldCard } from '@/components/builder/field-card';
 import { TypePicker } from '@/components/builder/type-picker';
 import { RelationsEditor } from '@/components/builder/relations-editor';
+import { ModeSwitcher, type BuilderMode } from '@/components/builder/mode-switcher';
+import { PreviewMode } from '@/components/builder/preview-mode';
+import { CodeMode } from '@/components/builder/code-mode';
+import { generateSchemaSourceMirror } from '@/lib/schema-codegen-mirror';
 import { DiffPreview, hasForbidden } from '@/components/builder/diff-preview';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -62,6 +66,8 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
   /** Which field card is expanded (by key), and whether the type picker is open. */
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  /** Canvas mode: the fields/relations editor, the entry-form preview, or the schema.ts code. */
+  const [canvasMode, setCanvasMode] = useState<BuilderMode>('build');
 
   const isEdit = mode === 'edit';
   // Relation targets: every module plus this one (self-ref); on create the name isn't saved yet.
@@ -72,6 +78,10 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
     ...(state.name.trim() ? { [state.name.trim()]: state.label.trim() || state.name.trim() } : {}),
   };
   const moduleDisplayName = state.label.trim() || state.name.trim() || 'Untitled';
+  const moduleGlyph = (() => {
+    const two = moduleDisplayName.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2) || '?';
+    return two.charAt(0).toUpperCase() + two.slice(1);
+  })();
 
   const patch = (p: Partial<ModuleFormState>) => setState((s) => ({ ...s, ...p }));
   const setFieldAt = (key: string, next: FieldDraft) =>
@@ -179,7 +189,30 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
     );
   }
 
+  // Preview / Code canvas modes render from the live draft; Review stays in Build mode.
+  if (canvasMode !== 'build') {
+    const liveRelations = state.relations.filter((r) => !r.deleted);
+    return (
+      <>
+        {canvasMode === 'preview' ? (
+          <PreviewMode
+            moduleName={moduleDisplayName}
+            moduleGlyph={moduleGlyph}
+            fields={liveAuthorable}
+            relations={liveRelations}
+            i18n={state.i18n}
+            draftAndPublish={state.draftAndPublish}
+          />
+        ) : (
+          <CodeMode source={generateSchemaSourceMirror(formToModuleDraft(state))} filename={`${state.name.trim() || 'untitled'}/schema.ts`} />
+        )}
+        <ModeSwitcher mode={canvasMode} onChange={setCanvasMode} />
+      </>
+    );
+  }
+
   return (
+    <>
     <form
       className="space-y-6"
       onSubmit={(e) => {
@@ -329,6 +362,8 @@ export function ModuleForm({ mode, initial, version, allModuleNames, moduleLabel
         </Button>
       </div>
     </form>
+      <ModeSwitcher mode={canvasMode} onChange={setCanvasMode} />
+    </>
   );
 }
 
