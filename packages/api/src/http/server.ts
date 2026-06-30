@@ -31,34 +31,24 @@ import { createApplyCore } from './apply-core.ts';
  * The HTTP server, built directly on uWebSockets.js. uWS is the committed transport (single-instance
  * deploy target, throughput-first) — there is no transport-abstraction layer by design, and none is wanted.
  *
- * What IS abstracted is the routing CORE, not the transport: this module reads the request triple
- * `{ method, path, query }` off the uWS `req`, calls the framework-agnostic {@link handleRequest} /
- * {@link handleWrite} cores, and writes their `{ status, contentType, body }` onto the uWS `res`. All
- * routing / validation / status codes / late-materialized response Buffers live in ONE place (the cores),
- * so this file adds zero behavior — only uWS plumbing. That split keeps uWS contained to this one file
- * (and {@link auth.bridge.ts}) and lets the cores be unit-tested without a socket; it is NOT a seam for
- * swapping uWS out.
+ * This module is the thin ASSEMBLER: {@link createServer} builds the deps (the `live` swap cell, the auth
+ * gates, the write context, the schema-write {@link createApplyCore apply core}, the file context), packs
+ * them into ONE {@link ServerContext} (`rctx`), and hands it to each `register*Routes(rctx)` module:
+ *   - {@link registerReadRoutes ./routes/read.ts}   — GET /:type[/:id], /_setup, debug-inspect, media populate
+ *   - {@link registerBuilderRoutes ./routes/builder.ts} — the Visual Builder module + component routes
+ *   - {@link registerDataRoutes ./routes/data.ts}   — gated POST/PUT/DELETE writes + publish + i18n variant
+ *   - {@link registerTeamRoutes ./routes/team.ts}, {@link registerKeyRoutes ./routes/keys.ts}, {@link registerMediaRoutes ./routes/media.ts}
+ * The pure uWS plumbing (status lines, body read, cork, the {@link CoreResponse} writer) lives in
+ * {@link writeResponse ./responders.ts}. Only the auth proxy + the `any('/*')` 404/405 fallback + the admin
+ * SPA mount stay inline here. The whole point of the split: each route family is editable in isolation, and
+ * the cores (handleRequest / handleWrite) stay framework-agnostic and unit-testable without a socket.
  *
- * READS are SYNCHRONOUS — read getMethod()/getParameter()/getQuery() into locals at the top, call
- * the pure core, write the result; `req` is never touched after, so no onAborted is needed.
- *
- * WRITES (POST/PUT/DELETE — always wired now that every {@link ServerDeps} is required) are ASYNCHRONOUS — they
- * read the request body and hit Postgres. uWS makes that delicate, handled in {@link readBody}/{@link corkSend}:
- *  - `req` is STACK-ALLOCATED and invalid after the handler yields — so the `:type`/`:id` params are
- *    read SYNCHRONOUSLY before the first await / before onData fires.
- *  - the body arrives via res.onData(chunk, isLast); each `chunk` ArrayBuffer is only valid DURING the
- *    callback, so it is COPIED (`ab.slice(0)`) before being buffered.
- *  - res.onAborted(...) tracks a client disconnect; after the await we must NOT write to a dead res.
- *  - the response is written inside res.cork(...) so the status/header/end are coalesced into one send.
- *  - an oversized body is rejected (413) without buffering the whole thing.
- *
- * Other uWS notes: getQuery() omits the leading '?' (core tolerates either); getParameter(0) is
- * `:type`, getParameter(1) is `:id`; writeStatus takes a FULL status line ('200 OK', ...); the body is
- * sent as a correctly-BOUNDED `Uint8Array(buffer, byteOffset, byteLength)` view because the engine's
- * Buffers are subarray views into the shared OutputArena ArrayBuffer.
- *
- * Routing: get('/:type'), get('/:type/:id'); when writes are enabled post('/:type'), put('/:type/:id'),
- * del('/:type/:id'); and any('/*') last so the core decides 404/405 for everything else.
+ * uWS notes that every route module relies on: READS are SYNCHRONOUS (read getMethod/getParameter/getQuery
+ * into locals, call the pure core, write the result — `req` is invalid after the handler yields). WRITES
+ * buffer the body via res.onData (each chunk ArrayBuffer is COPIED, valid only during the callback),
+ * track client disconnect via res.onAborted, and write inside res.cork(...). getQuery() omits the leading
+ * '?'; getParameter(0)=`:type`, (1)=`:id`; writeStatus takes a FULL status line; the body is sent as a
+ * BOUNDED `Uint8Array(buffer, byteOffset, byteLength)` view into the engine's shared OutputArena.
  */
 
 /** A uWS listen-socket token (opaque) returned by listen(), passed back to close(). */
@@ -76,23 +66,6 @@ export interface Server {
    * Throws on a migrate failure (last-good keeps serving); a blocked/no-op edit returns without swapping.
    */
   applyEdit?(draft: ModuleDraft, opts?: { allowDestructive?: boolean }): Promise<SchemaEditResult>;
-}
-
-/**
- * be-09b — the data WRITE routes (POST/PUT/DELETE /:type[/:id]), the D&P action sub-route, and the i18n
- * variant-create are now registered INLINE inside {@link createServer} so each can be wrapped by the
- * per-route RBAC gate (the gate must close over `sessionCache`/`rbac`). The shared async dispatch shape
- * (413/400/500 handling + corkSend) is preserved verbatim at each gated registration site.
- */
-
-/** Which template a builder route is on — drives which getParameter slots to read synchronously. */
-interface CtRouteOpts {
-  /** Read getParameter(0) as `:name` (false for the `/modules` collection). */
-  hasName: boolean;
-  /** The literal segment after `:name` (`'fields'`), or undefined. */
-  sub?: string;
-  /** Read getParameter(1) as a field `:name` (the `.../fields/:name` template). */
-  hasFieldName?: boolean;
 }
 
 /**
@@ -186,11 +159,9 @@ export function createServer(deps: ServerDeps): Server {
   // capture, so a reassignment of `live.engine` is seen everywhere.
   const live: { engine: Engine; registry: Registry; hooks: HookRegistry } = { engine, registry, hooks };
 
-  // be-09b/be-09c — the auth GATE primitives (extracted to ./auth-gates.ts). Destructured here so the
-  // inline route registrations keep calling bare `gate`/`gateTeam`/`gateKeys`/`gateUpload`; `gates` is also
-  // threaded into the ServerContext for the extracted route modules.
+  // be-09b/be-09c — the auth GATE primitives (extracted to ./auth-gates.ts), threaded into the
+  // ServerContext so each register*Routes module applies the same 401/403 split.
   const gates = createGates({ sessionCache, rbac, auth, teamView, corsPolicy });
-  const { gate } = gates;
 
   // WRITES (store + registry are required deps): commit to Postgres, then rebuild ONLY the written
   // type's RAM storage in place (per-type rebuild + per-type cache invalidation).

@@ -85,9 +85,9 @@ export interface Gates {
 }
 
 /**
- * The bundle handed to every `register*Routes(rctx)` module. `apply` (the schema-write core that owns
- * the version/mutex cell) is added in the apply-core extraction step; route families that don't mutate
- * the catalog never reference it.
+ * The bundle handed to every `register*Routes(rctx)` module. `apply` is the schema-write core that owns
+ * the version/mutex cell (builder routes drive it; other families ignore it). `writeCtx` is the data-write
+ * context; `live` is the swap cell; `gates` are the auth primitives. One object, built once in createServer.
  */
 export interface ServerContext {
   route: RouteTable;
